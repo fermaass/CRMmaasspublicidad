@@ -4,6 +4,13 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const label = (k) => state.meta.labels[k] || k;
 const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 const can = (...roles) => state.me && roles.includes(state.me.role);
+// Colores con poco contraste para texto blanco: llevan texto oscuro.
+const DARK_TEXT = new Set(['cotizando']);
+const colorVar = (key) => `--c: var(--${key})`;
+const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
+// Paleta fija para productos y canales (validada para daltonismo); más de 8 se agrupan en "Otros".
+const CAT = ['#6161ff', '#ff7a00', '#00a39b', '#e2445c', '#caa000', '#9d50dd', '#037f4c', '#ff5ac4'];
+const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -148,12 +155,14 @@ function cardHtml(l) {
   return `<div class="lead-card" draggable="${canEditLead(l)}" data-id="${l.id}">
     <div class="name">${esc(l.name || l.phone || l.email)}</div>
     <div class="meta">${esc([l.phone, l.email].filter(Boolean).join(' · '))}</div>
-    <div class="meta">
+    <div class="tags">
       <span class="tag ${l.source}">${esc(label(l.source))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
       ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
     </div>
-    <div class="meta">${l.assigned_name ? esc(l.assigned_name) : '<em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
+    <div class="meta">${l.assigned_name
+      ? `<span class="avatar" aria-hidden="true">${esc(initials(l.assigned_name))}</span>${esc(l.assigned_name)}`
+      : '<span class="avatar none" aria-hidden="true">?</span><em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
   </div>`;
 }
 
@@ -166,7 +175,7 @@ function renderBoard() {
   board.innerHTML = state.meta.statuses.map((s) => {
     const items = state.leads.filter((l) => l.status === s);
     return `<div class="column" data-status="${s}">
-      <h3 style="border-color: var(--${s})"><span>${esc(label(s))}</span><span class="muted">${items.length}</span></h3>
+      <h3 class="col-head ${textClass(s)}" style="${colorVar(s)}"><span>${esc(label(s))}</span><span class="count">${items.length}</span></h3>
       ${items.map(cardHtml).join('')}
     </div>`;
   }).join('');
@@ -205,7 +214,7 @@ async function changeStatus(lead, status) {
 function renderList() {
   const rows = state.leads.map((l) => `<tr data-id="${l.id}">
     <td><strong>${esc(l.name || '—')}</strong><br><span class="muted">${esc(l.phone || '')} ${esc(l.email || '')}</span></td>
-    <td><span class="tag status" style="background: var(--${l.status})">${esc(label(l.status))}</span></td>
+    <td class="status-cell"><span class="${textClass(l.status)}" style="${colorVar(l.status)}">${esc(label(l.status))}</span></td>
     <td><span class="tag ${l.profile}">${esc(label(l.profile))}</span></td>
     <td><span class="tag ${l.source}">${esc(label(l.source))}</span><br><span class="muted">${esc([l.channel_name, l.campaign].filter(Boolean).join(' · '))}</span></td>
     <td>${esc(l.product_name || '—')}</td>
@@ -213,52 +222,191 @@ function renderList() {
     <td class="muted">${fmtDate(l.created_at)}</td>
   </tr>`).join('');
   $('#view-list').innerHTML = `<p class="muted">${state.leads.length} leads</p>
-    <table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / canal / campaña</th><th>Producto</th><th>Vendedor</th><th>Recibido</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="6" class="muted">Sin resultados</td></tr>'}</tbody></table>`;
+    <div class="table-wrap"><table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / canal / campaña</th><th>Producto</th><th>Vendedor</th><th>Recibido</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" class="muted">Sin resultados</td></tr>'}</tbody></table></div>`;
   $('#view-list').querySelectorAll('tbody tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openLead(tr.dataset.id)));
 }
 
 async function renderStats() {
   const s = await api(`/api/stats?${filterQuery()}`);
-  const bars = (rows, lbl = (k) => k) => {
-    const max = Math.max(1, ...rows.map((r) => r.n));
-    return rows.map((r) => `<div class="bar"><span title="${esc(lbl(r.key))}">${esc(lbl(r.key))}</span>
-      <span class="track"><span class="fill" style="display:block;width:${(r.n / max) * 100}%"></span></span><span>${r.n}</span></div>`).join('')
-      || '<p class="muted">Sin datos</p>';
-  };
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const sold = n(s.byStatus, 'vendido');
   const fit = n(s.byProfile, 'cumple');
-  const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
-  const ordered = state.meta.statuses.map((k) => ({ key: k, n: n(s.byStatus, k) }));
+  const quoting = n(s.byStatus, 'cotizando');
+  const stages = state.meta.statuses.map((k) => ({ key: k, n: n(s.byStatus, k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
+  const profiles = state.meta.profiles.map((k) => ({ key: k, n: n(s.byProfile, k), label: label(k), color: `var(--${k})` }));
+  const sources = state.meta.sources.map((k) => ({ key: k, n: n(s.bySource, k), label: label(k), color: `var(--${k})` }));
 
-  $('#view-stats').innerHTML = `<div class="stats">
-    <div class="card"><h3>Leads</h3><div class="kpi">${s.total}</div></div>
-    <div class="card"><h3>Cumplen perfil</h3><div class="kpi">${fit}</div><span class="muted">${pct(fit, s.total)} del total</span></div>
-    <div class="card"><h3>Vendidos</h3><div class="kpi">${sold}</div><span class="muted">${pct(sold, s.total)} del total · ${pct(sold, fit)} de los que cumplen perfil</span></div>
-    <div class="card"><h3>Por estado</h3>${bars(ordered, label)}</div>
-    <div class="card"><h3>Por perfil</h3>${bars(s.byProfile, label)}</div>
-    <div class="card"><h3>Por origen</h3>${bars(s.bySource)}</div>
-    <div class="card wide"><h3>Por vendedor</h3>
-      <table><thead><tr><th>Vendedor</th><th>Leads</th><th>Cotizando</th><th>Vendidos</th></tr></thead><tbody>
-      ${s.bySeller.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cotizando}</td><td>${r.vendidos}</td></tr>`).join('')}
-      </tbody></table></div>
-    ${itemTable('Por producto', 'Producto', s.byProduct)}
-    ${itemTable('Por canal de percepción', 'Se enteró por', s.byChannel)}
-    <div class="card wide"><h3>Por campaña</h3>
-      <table><thead><tr><th>Campaña</th><th>Leads</th><th>Cumplen</th><th>Vendidos</th></tr></thead><tbody>
-      ${s.byCampaign.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cumple}</td><td>${r.vendidos}</td></tr>`).join('')}
-      </tbody></table></div>
+  const kpi = (title, value, sub, color) => `<div class="kpi-tile" style="--c:${color}">
+    <div class="label"><span class="dot"></span>${esc(title)}</div>
+    <div class="value" data-count="${value}">0</div><div class="sub">${esc(sub)}</div></div>`;
+
+  $('#view-stats').innerHTML = `<div class="dash">
+    <div class="kpis">
+      ${kpi('Leads', s.total, 'con los filtros actuales', 'var(--accent)')}
+      ${kpi('Cumplen perfil', fit, `${pct(fit, s.total)}% del total`, 'var(--nuevo_perfil)')}
+      ${kpi('Cotizando', quoting, `${pct(quoting, s.total)}% del total`, 'var(--cotizando)')}
+      ${kpi('Vendidos', sold, `${pct(sold, fit)}% de los que cumplen perfil`, 'var(--vendido)')}
+    </div>
+    <div class="card chart-card"><h3>Embudo <small>cómo se reparten los leads por etapa</small></h3>
+      ${battery(stages, s.total, true)}${legend(stages, s.total)}</div>
+    <div class="card chart-card span-8"><h3>Leads recibidos <small>últimos 30 días</small></h3>${areaChart(s.byDay)}</div>
+    <div class="card chart-card span-4"><h3>Por origen</h3>${donut(sources, s.total)}</div>
+    <div class="card chart-card span-6"><h3>Por producto <small>etapa de cada lead</small></h3>${stageRows(s.productStages)}</div>
+    <div class="card chart-card span-6"><h3>Por vendedor <small>etapa de cada lead</small></h3>${stageRows(s.sellerStages)}</div>
+    <div class="card chart-card span-6"><h3>¿Cómo se enteraron? <small>canal de percepción</small></h3>${categoryBars(s.byChannel)}</div>
+    <div class="card chart-card span-6"><h3>Perfil</h3>${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
+    <div class="card chart-card"><h3>Por campaña</h3><div class="table-wrap">
+      <table><thead><tr><th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Vendidos</th></tr></thead><tbody>
+      ${s.byCampaign.map((r) => `<tr><td>${esc(r.key)}</td><td class="num">${r.n}</td><td class="num">${r.cumple}</td><td class="num">${r.vendidos}</td></tr>`).join('')}
+      </tbody></table></div></div>
   </div>`;
+  animateIn($('#view-stats'));
 }
 
-function itemTable(title, col, rows) {
-  return `<div class="card wide"><h3>${esc(title)}</h3>
-    <table><thead><tr><th>${esc(col)}</th><th>Leads</th><th>Cumplen</th><th>Vendidos</th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cumple}</td><td>${r.vendidos}</td></tr>`).join('')
-      || '<tr><td colspan="4" class="muted">Sin datos</td></tr>'}
-    </tbody></table></div>`;
+// Barra tipo "batería": segmentos proporcionales con 2px de separación.
+function battery(parts, total, big = false) {
+  const segs = parts.filter((p) => p.n > 0).map((p) => {
+    const w = total ? (p.n / total) * 100 : 0;
+    const txt = big && w >= 7 ? `${Math.round(w)}%` : '';
+    return `<div class="seg ${p.dark ? 'dark-text' : ''}" style="--w:${w}%; --c:${p.color}"
+      data-tip="${esc(`${p.label}\n${p.n} leads · ${Math.round(w)}%`)}">${txt}</div>`;
+  }).join('');
+  return `<div class="battery ${big ? '' : 'thin'}" role="img" aria-label="${esc(parts.map((p) => `${p.label}: ${p.n}`).join(', '))}">${segs}</div>`;
 }
+
+function legend(parts, total) {
+  return `<div class="legend">${parts.map((p) => `<span style="--c:${p.color}"><i></i>${esc(p.label)} <b>${p.n}</b>
+    <span class="muted">${total ? Math.round((p.n / total) * 100) : 0}%</span></span>`).join('')}</div>`;
+}
+
+// Filas de batería por producto / vendedor, cada una repartida por etapa.
+function stageRows(rows) {
+  const groups = new Map();
+  rows.forEach((r) => {
+    const g = groups.get(r.key) || { key: r.key, total: 0, counts: {} };
+    g.counts[r.status] = r.n; g.total += r.n; groups.set(r.key, g);
+  });
+  const list = [...groups.values()].sort((a, b) => b.total - a.total);
+  if (!list.length) return '<p class="muted">Sin datos</p>';
+  const stageParts = (g) => state.meta.statuses.map((k) => ({ key: k, n: g.counts[k] || 0, label: `${g.key} · ${label(k)}`, color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
+  return `<div class="brows">${list.map((g) => `<div class="brow"><span class="k" title="${esc(g.key)}">${esc(g.key)}</span>
+    ${battery(stageParts(g), g.total)}<span class="n">${g.total}</span></div>`).join('')}</div>
+    <div class="legend">${state.meta.statuses.map((k) => `<span style="--c:var(--${k})"><i></i>${esc(label(k))}</span>`).join('')}</div>`;
+}
+
+// Barras horizontales por categoría; el color sigue al elemento de la lista, no a su posición.
+function categoryBars(rows) {
+  if (!rows.length) return '<p class="muted">Sin datos</p>';
+  const colorOf = (key) => {
+    const idx = state.catalog.canal.findIndex((c) => c.name === key);
+    return idx >= 0 && idx < CAT.length ? CAT[idx] : 'var(--empty)';
+  };
+  const max = Math.max(...rows.map((r) => r.n));
+  return `<div class="brows">${rows.map((r) => `<div class="brow"><span class="k" title="${esc(r.key)}">${esc(r.key)}</span>
+    <div class="battery thin" style="background:transparent"><div class="seg" style="--w:${(r.n / max) * 100}%; --c:${colorOf(r.key)}; border-radius:4px"
+      data-tip="${esc(`${r.key}\n${r.n} leads · ${r.cumple} cumplen perfil · ${r.vendidos} vendidos`)}"></div></div>
+    <span class="n">${r.n}</span></div>`).join('')}</div>`;
+}
+
+function donut(parts, total) {
+  const r = 58; const C = 2 * Math.PI * r; const gap = total > 0 && parts.filter((p) => p.n).length > 1 ? 3 : 0;
+  let offset = 0;
+  const segs = parts.filter((p) => p.n > 0).map((p) => {
+    const len = (p.n / total) * C;
+    const seg = `<circle class="seg" r="${r}" cx="75" cy="75" style="stroke:${p.color}" stroke-dasharray="0 ${C}"
+      data-dash="${Math.max(len - gap, 0.5)} ${C}" stroke-dashoffset="${-offset}" transform="rotate(-90 75 75)"
+      data-tip="${esc(`${p.label}\n${p.n} leads · ${Math.round((p.n / total) * 100)}%`)}"></circle>`;
+    offset += len;
+    return seg;
+  }).join('');
+  return `<div class="donut-wrap"><svg class="donut" viewBox="0 0 150 150" role="img" aria-label="${esc(parts.map((p) => `${p.label}: ${p.n}`).join(', '))}">
+    <circle r="${r}" cx="75" cy="75" fill="none" stroke="#eef0f5" stroke-width="18"></circle>${segs}
+    <text x="75" y="72" text-anchor="middle" font-size="26" font-weight="600">${total}</text>
+    <text x="75" y="92" text-anchor="middle" font-size="11" style="fill:var(--muted)">leads</text></svg>
+    ${legend(parts, total)}</div>`;
+}
+
+function areaChart(byDay) {
+  const days = [];
+  const counts = Object.fromEntries(byDay.map((d) => [d.day, d.n]));
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400e3).toISOString().slice(0, 10);
+    days.push({ day: d, n: counts[d] || 0 });
+  }
+  const W = 600; const H = 170; const L = 28; const B = 22; const T = 8;
+  const max = Math.max(4, ...days.map((d) => d.n));
+  const step = Math.ceil(max / 4);
+  const top = step * 4;
+  const x = (i) => L + (i / (days.length - 1)) * (W - L - 6);
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+  const pts = days.map((d, i) => `${x(i).toFixed(1)},${y(d.n).toFixed(1)}`);
+  const line = `M${pts.join(' L')}`;
+  const fill = `${line} L${x(days.length - 1)},${y(0)} L${x(0)},${y(0)} Z`;
+  const fmt = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+  const grid = [0, 1, 2, 3, 4].map((k) => `<line x1="${L}" x2="${W}" y1="${y(k * step)}" y2="${y(k * step)}"></line>
+    <text x="${L - 6}" y="${y(k * step) + 4}" text-anchor="end">${k * step}</text>`).join('');
+  const xl = [0, 10, 20, 29].map((i) => `<text class="xlab" x="${x(i)}" y="${H - 4}" text-anchor="${i === 0 ? 'start' : i === 29 ? 'end' : 'middle'}">${fmt(days[i].day)}</text>`).join('');
+  const len = days.reduce((t, d, i) => (i ? t + Math.hypot(x(i) - x(i - 1), y(d.n) - y(days[i - 1].n)) : 0), 0);
+  setTimeout(() => wireArea(days, x, y, fmt), 0);
+  return `<div class="area"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Leads por día en los últimos 30 días">
+    <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6161ff" stop-opacity=".28"></stop>
+      <stop offset="1" stop-color="#6161ff" stop-opacity="0"></stop></linearGradient></defs>
+    <g class="grid">${grid}</g>${xl}
+    <path class="fill" d="${fill}"></path><path class="line" d="${line}" style="--len:${Math.ceil(len)}"></path>
+    <line class="cross hidden" y1="${T}" y2="${H - B}"></line><circle class="pt hidden" r="5"></circle>
+    <rect class="hit" x="${L}" y="0" width="${W - L}" height="${H}" fill="transparent"></rect></svg></div>`;
+}
+
+function wireArea(days, x, y, fmt) {
+  const svg = $('#view-stats .area svg');
+  if (!svg) return;
+  const hit = $('.hit', svg); const cross = $('.cross', svg); const pt = $('.pt', svg);
+  hit.addEventListener('mousemove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const vx = ((e.clientX - box.left) / box.width) * 600;
+    let i = 0; let best = Infinity;
+    days.forEach((d, k) => { const dist = Math.abs(x(k) - vx); if (dist < best) { best = dist; i = k; } });
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.classList.remove('hidden');
+    pt.setAttribute('cx', x(i)); pt.setAttribute('cy', y(days[i].n)); pt.classList.remove('hidden');
+    hit.dataset.tip = `${fmt(days[i].day)}\n${days[i].n} ${days[i].n === 1 ? 'lead' : 'leads'}`;
+  });
+  hit.addEventListener('mouseleave', () => { cross.classList.add('hidden'); pt.classList.add('hidden'); });
+}
+
+// Arranca animaciones: barras que crecen, dona que se dibuja, números que cuentan.
+function animateIn(root) {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    root.classList.add('ready');
+    root.querySelectorAll('circle.seg[data-dash]').forEach((c) => c.setAttribute('stroke-dasharray', c.dataset.dash));
+  }));
+  root.querySelectorAll('[data-count]').forEach((el) => {
+    const target = Number(el.dataset.count);
+    if (reduce || !target) { el.textContent = target; return; }
+    const t0 = performance.now();
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / 700);
+      el.textContent = Math.round(target * (1 - (1 - k) ** 3));
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// Tooltip único para todo lo que tenga data-tip.
+document.addEventListener('mousemove', (e) => {
+  const tip = $('#tip');
+  const el = e.target.closest?.('[data-tip]');
+  if (!el) { tip.classList.add('hidden'); return; }
+  tip.textContent = el.dataset.tip;
+  tip.classList.remove('hidden');
+  const pad = 14;
+  const left = Math.min(e.clientX + pad, window.innerWidth - tip.offsetWidth - 8);
+  const topPos = e.clientY - tip.offsetHeight - pad < 0 ? e.clientY + pad : e.clientY - tip.offsetHeight - pad;
+  tip.style.left = `${left}px`; tip.style.top = `${topPos}px`;
+});
 
 // ---------- Detalle de lead ----------
 function openDrawer(html) {
@@ -284,7 +432,7 @@ async function openLead(id) {
 
     <form id="lead-form">
       <div class="row">
-        <label>Estado <select name="status" ${ro}>${state.meta.statuses.map((s) => `<option value="${s}" ${s === l.status ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
+        <label>Estado <select name="status" class="status-select ${textClass(l.status)}" style="${colorVar(l.status)}" ${ro}>${state.meta.statuses.map((s) => `<option value="${s}" ${s === l.status ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
         <label>Perfil <select name="profile" ${ro}>${state.meta.profiles.map((p) => `<option value="${p}" ${p === l.profile ? 'selected' : ''}>${esc(label(p))}</option>`).join('')}</select></label>
       </div>
       <label class="${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">Motivo declinado <input name="decline_reason" value="${esc(l.decline_reason)}" ${ro}></label>
@@ -322,7 +470,11 @@ async function openLead(id) {
   `);
 
   const form = $('#lead-form');
-  form.status.addEventListener('change', () => $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado'));
+  form.status.addEventListener('change', () => {
+    $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
+    form.status.setAttribute('style', colorVar(form.status.value));
+    form.status.classList.toggle('dark-text', DARK_TEXT.has(form.status.value));
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'name', 'phone', 'email', 'campaign', 'product_id', 'channel_id'].map((k) => [k, form[k].value]));

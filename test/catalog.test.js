@@ -71,6 +71,8 @@ test('lead con producto y canal; filtros, resumen y CSV', async () => {
   const stats = (await req('/api/stats', { cookie: gerente })).json;
   assert.equal(stats.byProduct.find((x) => x.key === 'Pantalla LED').n, 2);
   assert.equal(stats.byChannel.find((x) => x.key === 'Facebook').n, 1);
+  assert.deepEqual(stats.productStages.find((x) => x.key === 'Pantalla LED'), { key: 'Pantalla LED', status: 'nuevo', n: 2 });
+  assert.equal(stats.byDay.reduce((t, d) => t + d.n, 0), 2);
 
   const csv = await req('/api/leads.csv', { cookie: gerente });
   assert.match(csv.text, /Se enteró por,Producto/);

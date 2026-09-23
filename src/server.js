@@ -349,8 +349,18 @@ function createApp({ db, config }) {
     const byItem = (col, empty) => db.prepare(`SELECT COALESCE(c.name, '${empty}') AS key, COUNT(*) AS n,
         SUM(l.profile = 'cumple') AS cumple, SUM(l.status = 'vendido') AS vendidos
       FROM leads l LEFT JOIN catalog_items c ON c.id = ${col} ${sql} GROUP BY ${col} ORDER BY n DESC`).all(...params);
+    // Cruces etapa × dimensión para las barras de batería del Resumen.
+    const byStage = (keyExpr, join) => db.prepare(`SELECT ${keyExpr} AS key, l.status AS status, COUNT(*) AS n
+      FROM leads l ${join} ${sql} GROUP BY 1, 2`).all(...params);
+    const since = new Date(Date.now() - 29 * 86400e3).toISOString().slice(0, 10);
+    const byDay = db.prepare(`SELECT substr(l.created_at, 1, 10) AS day, COUNT(*) AS n FROM leads l
+      ${sql ? `${sql} AND` : 'WHERE'} l.created_at >= ? GROUP BY 1 ORDER BY 1`).all(...params, since);
     const total = db.prepare(`SELECT COUNT(*) AS n FROM leads l ${sql}`).get(...params).n;
     res.json({
+      byDay,
+      productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
+      channelStages: byStage("COALESCE(c.name, 'Sin dato')", 'LEFT JOIN catalog_items c ON c.id = l.channel_id'),
+      sellerStages: byStage("COALESCE(u.name, 'Sin asignar')", 'LEFT JOIN users u ON u.id = l.assigned_to'),
       total, byStatus: group('l.status'), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
       byChannel: byItem('l.channel_id', 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
     });
