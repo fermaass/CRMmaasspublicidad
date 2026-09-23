@@ -10,6 +10,12 @@ Cada lead guarda la fecha en que pasó por cada paso: **recibido → contestó �
 - El **Resumen** muestra el embudo, la conversión por campaña y la eficiencia por vendedor (cuántos recibe, cuántos le contestan, cuántos perfila, cotiza y cierra, y el tiempo promedio desde la asignación hasta que el cliente contesta).
 - Todo se puede filtrar por periodo (este mes, mes pasado, 30/90 días, este año) y por campaña.
 
+## Campañas y su eficiencia
+
+En **Configuración → Campañas** marketing da de alta sus campañas con la **inversión** de cada una. El vendedor solo puede elegir campañas de esa lista al capturar un lead. Si llega por formulario una campaña que no está (por ejemplo un `utm_campaign` nuevo), se agrega sola para que marketing le ponga su inversión. Renombrar una campaña actualiza sus leads.
+
+Al marcar un lead como **vendido** se puede capturar el **monto de venta** (opcional). Con eso, el Resumen muestra por campaña: costo por lead, costo por cotización, costo por cierre, ventas y **retorno** (ventas ÷ inversión). La campaña más eficiente es la de mayor retorno; si no hay montos capturados, la de menor costo por cierre. La inversión es el total de la campaña, así que los costos son exactos con el filtro "Todo el tiempo".
+
 ## Listas: productos y canales de percepción
 
 En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.

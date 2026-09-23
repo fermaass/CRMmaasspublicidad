@@ -39,7 +39,7 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
   await patch(ids[0], { contacted: true }, ana);
   await patch(ids[0], { profile: 'cumple' }, ana);
   await patch(ids[0], { status: 'cotizando' }, ana);
-  await patch(ids[0], { status: 'vendido' }, ana);
+  await patch(ids[0], { status: 'vendido', sale_amount: '$45,000' }, ana);
   // L1: cotiza (sin marcar contacto) y luego se declina: sigue contando como contactado y cotizado
   await patch(ids[1], { profile: 'cumple' }, ana);
   await patch(ids[1], { status: 'cotizando' }, ana);
@@ -49,7 +49,7 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
   // L3: nada; L4: sin asignar
 
   const s = (await req('/api/stats', { cookie: gerente })).json;
-  assert.deepEqual(s.funnel, { recibidos: 5, contactados: 3, perfilados: 2, cotizados: 2, cerrados: 1, declinados: 1 });
+  assert.deepEqual(s.funnel, { recibidos: 5, contactados: 3, perfilados: 2, cotizados: 2, cerrados: 1, declinados: 1, ingresos: 45000 });
 
   const fb = s.campaignFunnel.find((c) => c.key === 'FB-Sep');
   assert.equal(fb.recibidos, 3); assert.equal(fb.cotizados, 2); assert.equal(fb.cerrados, 1);
@@ -62,7 +62,8 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
 
   // Filtro por campaña y lista de campañas
   assert.equal((await req('/api/stats?campaign=Google', { cookie: gerente })).json.funnel.recibidos, 2);
-  assert.deepEqual((await req('/api/campaigns', { cookie: gerente })).json, ['FB-Sep', 'Google']);
+  // Las campañas que llegan por formulario se agregan solas a la lista
+  assert.deepEqual((await req('/api/catalog', { cookie: gerente })).json.campana.map((c) => c.name), ['FB-Sep', 'Google']);
 
   // El historial registra el contacto; se puede desmarcar si no ha cotizado
   const l2 = (await req(`/api/leads/${ids[2]}`, { cookie: gerente })).json;
@@ -72,4 +73,32 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
   assert.equal((await req(`/api/leads/${ids[2]}`, { cookie: gerente })).json.contacted_at, null);
   await patch(ids[1], { contacted: false }, ana);
   assert.ok((await req(`/api/leads/${ids[1]}`, { cookie: gerente })).json.contacted_at, 'si ya cotizó no se desmarca');
+});
+
+test('campañas de la lista: el vendedor solo elige, marketing pone inversión y se mide el costo', async () => {
+  const cat = () => req('/api/catalog', { cookie: gerente }).then((r) => r.json.campana);
+  const fb = (await cat()).find((c) => c.name === 'FB-Sep');
+
+  // El vendedor no puede inventar campañas; sí elegir una de la lista (sin importar mayúsculas)
+  assert.equal((await req('/api/leads', { method: 'POST', cookie: ana, body: { source: 'whatsapp', phone: '5599999999', campaign: 'Inventada' } })).status, 400);
+  assert.equal((await req('/api/catalog', { method: 'POST', cookie: ana, body: { kind: 'campana', name: 'X' } })).status, 403);
+  const r = await req('/api/leads', { method: 'POST', cookie: ana, body: { source: 'whatsapp', phone: '5599999999', campaign: 'fb-sep' } });
+  assert.equal(r.status, 201, r.text);
+  assert.equal((await req(`/api/leads/${r.json.id}`, { cookie: ana })).json.campaign, 'FB-Sep');
+
+  // Marketing captura inversión y los costos salen en el resumen
+  assert.equal((await req(`/api/catalog/${fb.id}`, { method: 'PATCH', cookie: gerente, body: { budget: 'abc' } })).status, 400);
+  await req(`/api/catalog/${fb.id}`, { method: 'PATCH', cookie: gerente, body: { budget: '12,000' } });
+  const row = (await req('/api/stats', { cookie: gerente })).json.campaignFunnel.find((c) => c.key === 'FB-Sep');
+  assert.equal(row.inversion, 12000);
+  assert.equal(row.recibidos, 4);
+  assert.equal(row.ingresos, 45000);
+
+  // Renombrar la campaña actualiza sus leads
+  await req(`/api/catalog/${fb.id}`, { method: 'PATCH', cookie: gerente, body: { name: 'Facebook Septiembre' } });
+  assert.equal((await req('/api/leads?campaign=Facebook%20Septiembre', { cookie: gerente })).json.length, 4);
+
+  const csv = await req('/api/leads.csv', { cookie: gerente });
+  assert.match(csv.text, /Monto de venta/);
+  assert.match(csv.text, /45000/);
 });

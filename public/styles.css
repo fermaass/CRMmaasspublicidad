@@ -184,6 +184,10 @@ td.status-cell span.dark-text { color: var(--text); }
 .conv { display: inline-block; min-width: 52px; text-align: center; padding: 3px 8px; border-radius: 12px; background: var(--accent-soft);
   color: var(--accent-strong); font-weight: 700; font-variant-numeric: tabular-nums; }
 .conv.top { background: var(--f-cerrados); color: #fff; }
+.conv.good { background: #dcf3e7; color: #037f4c; }
+.conv.bad { background: #ffe3ec; color: #c21e56; }
+.items .budget { flex: none; font-variant-numeric: tabular-nums; font-weight: 600; margin-right: 6px; }
+.items .budget.missing { color: var(--muted); font-weight: 400; font-style: italic; }
 .small-note { font-size: 12px; margin: 8px 0 0; }
 
 /* Pasos en la ficha del lead */

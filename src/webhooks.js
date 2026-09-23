@@ -1,5 +1,5 @@
 const express = require('express');
-const { ingestLead } = require('./leads');
+const { ingestLead, campaignName } = require('./leads');
 const { getSetting } = require('./db');
 
 const pick = (body, ...keys) => {
@@ -52,7 +52,8 @@ function webhooksRouter(db) {
         phone: pick(body, 'telefono', 'teléfono', 'phone', 'phone_number', 'whatsapp'),
         email: pick(body, 'email', 'correo'),
         message,
-        campaign: pick(body, 'campana', 'campaña', 'campaign', 'utm_campaign'),
+        // Una campaña nueva (p. ej. un utm_campaign) se agrega sola a la lista para que marketing le ponga su inversión.
+        campaign: campaignName(db, pick(body, 'campana', 'campaña', 'campaign', 'utm_campaign'), { create: true }),
       });
       const redirect = pick(body, 'redirect');
       if (redirect && /^https?:\/\//.test(redirect)) return res.redirect(303, redirect);

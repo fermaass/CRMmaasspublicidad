@@ -4,7 +4,7 @@ const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
 } = require('./db');
 const auth = require('./auth');
-const { ingestLead, addEvent, resolveStatusProfile, now } = require('./leads');
+const { ingestLead, addEvent, resolveStatusProfile, now, campaignName } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
 
 const EDITORS = ['gerente', 'marketing'];
@@ -86,14 +86,17 @@ function createApp({ db, config }) {
     res.json({ ok: true });
   });
 
-  // ---------- Listas: canales de percepción y productos ----------
-  app.get('/api/campaigns', auth.requireUser, (req, res) => {
-    res.json(db.prepare(`SELECT DISTINCT campaign FROM leads WHERE campaign IS NOT NULL ORDER BY campaign COLLATE NOCASE`)
-      .all().map((r) => r.campaign));
-  });
+  // ---------- Listas: canales de percepción, productos y campañas ----------
+  const money = (v) => {
+    if (v === undefined) return undefined;
+    if (v === null || v === '') return null;
+    const n = Number(String(v).replace(/[$,\s]/g, ''));
+    if (!Number.isFinite(n) || n < 0) throw new Error('Monto inválido');
+    return Math.round(n * 100) / 100;
+  };
 
   app.get('/api/catalog', auth.requireUser, (req, res) => {
-    const items = db.prepare('SELECT id, kind, name, active FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
+    const items = db.prepare('SELECT id, kind, name, active, budget FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
     res.json(Object.fromEntries(CATALOG_KINDS.map((k) => [k, items.filter((i) => i.kind === k)])));
   });
 
@@ -107,7 +110,10 @@ function createApp({ db, config }) {
       db.prepare('UPDATE catalog_items SET active = 1 WHERE id = ?').run(existing.id);
       return res.json({ id: existing.id });
     }
-    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name) VALUES (?, ?)').run(kind, name.slice(0, 120));
+    let budget = null;
+    try { budget = kind === 'campana' ? money(req.body?.budget) ?? null : null; } catch (err) { return res.status(400).json({ error: err.message }); }
+    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name, budget) VALUES (?, ?, ?)')
+      .run(kind, name.slice(0, 120), budget);
     res.status(201).json({ id: Number(lastInsertRowid) });
   });
 
@@ -118,11 +124,16 @@ function createApp({ db, config }) {
     const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : item.name;
     if (!name) return res.status(400).json({ error: 'Escribe un nombre' });
     const active = req.body?.active !== undefined ? (req.body.active ? 1 : 0) : item.active;
+    let budget;
+    try { budget = item.kind === 'campana' ? money(req.body?.budget) : undefined; } catch (err) { return res.status(400).json({ error: err.message }); }
     try {
-      db.prepare('UPDATE catalog_items SET name = ?, active = ? WHERE id = ?').run(name, active, item.id);
+      db.prepare('UPDATE catalog_items SET name = ?, active = ?, budget = ? WHERE id = ?')
+        .run(name, active, budget === undefined ? item.budget : budget, item.id);
     } catch {
       return res.status(409).json({ error: 'Ya hay otro elemento con ese nombre' });
     }
+    // Los leads guardan la campaña por nombre: al renombrarla se actualizan.
+    if (item.kind === 'campana' && name !== item.name) db.prepare('UPDATE leads SET campaign = ? WHERE campaign = ?').run(name, item.name);
     res.json({ ok: true });
   });
 
@@ -226,7 +237,7 @@ function createApp({ db, config }) {
     const rows = db.prepare(`${leadSelect} ${sql} ORDER BY l.created_at DESC`).all(...params);
     const cols = [['id', 'ID'], ['name', 'Nombre'], ['phone', 'Teléfono'], ['email', 'Email'], ['source', 'Origen'],
       ['campaign', 'Campaña'], ['channel_name', 'Se enteró por'], ['product_name', 'Producto'], ['status', 'Estado'], ['profile', 'Perfil'], ['decline_reason', 'Motivo declinado'],
-      ['assigned_name', 'Vendedor'], ['created_at', 'Fecha']];
+      ['assigned_name', 'Vendedor'], ['sale_amount', 'Monto de venta'], ['created_at', 'Fecha']];
     const esc = (v) => {
       const s = v == null ? '' : String(v);
       return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -251,6 +262,7 @@ function createApp({ db, config }) {
       // Si el contacto ya existía, ingestLead lo registra en su historial en vez de duplicarlo.
       const result = ingestLead(db, {
         ...b, userId: req.user.id, channel_id: catalogId('canal', b.channel_id), product_id: catalogId('producto', b.product_id),
+        campaign: campaignName(db, b.campaign),
       });
       if (!result.created) {
         const owner = db.prepare('SELECT l.assigned_to, u.name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?')
@@ -275,8 +287,10 @@ function createApp({ db, config }) {
     if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
     const b = req.body || {};
 
-    let next; let channelId; let productId;
+    let next; let channelId; let productId; let campaign; let saleAmount;
     try {
+      campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
+      saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
       next = resolveStatusProfile(lead, { status: b.status, profile: b.profile });
       channelId = catalogId('canal', b.channel_id) ?? (b.channel_id === undefined ? lead.channel_id : null);
       productId = catalogId('producto', b.product_id) ?? (b.product_id === undefined ? lead.product_id : null);
@@ -315,10 +329,15 @@ function createApp({ db, config }) {
 
     db.prepare(`UPDATE leads SET name = ?, phone = ?, phone_key = ?, email = ?, campaign = ?, status = ?, profile = ?,
       decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, assigned_at = ?, contacted_at = ?,
-      profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, updated_at = ? WHERE id = ?`)
-      .run(field('name'), phone, phoneKey(phone), field('email'), field('campaign'), next.status, next.profile,
+      profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, sale_amount = ?, updated_at = ? WHERE id = ?`)
+      .run(field('name'), phone, phoneKey(phone), field('email'), campaign, next.status, next.profile,
         declineReason, assigned, channelId, productId, m.assigned_at, m.contacted_at,
-        m.profiled_at, m.quoted_at, m.won_at, m.declined_at, ts, lead.id);
+        m.profiled_at, m.quoted_at, m.won_at, m.declined_at, saleAmount, ts, lead.id);
+
+    if (campaign !== lead.campaign) addEvent(db, lead.id, req.user.id, 'perfil', `Campaña: ${campaign || 'ninguna'}`);
+    if (saleAmount !== lead.sale_amount && saleAmount != null) {
+      addEvent(db, lead.id, req.user.id, 'estado', `Monto de venta: $${saleAmount.toLocaleString('es-MX')}`);
+    }
 
     if (m.contacted_at && !lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'El cliente contestó');
     if (!m.contacted_at && lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'Se desmarcó "El cliente contestó"');
@@ -392,10 +411,13 @@ function createApp({ db, config }) {
       COALESCE(SUM(COALESCE(l.profiled_at, l.quoted_at, l.won_at) IS NOT NULL), 0) AS perfilados,
       COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados,
       COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
-      COALESCE(SUM(l.status = 'declinado'), 0) AS declinados`;
+      COALESCE(SUM(l.status = 'declinado'), 0) AS declinados,
+      COALESCE(SUM(l.sale_amount), 0) AS ingresos`;
     const funnel = db.prepare(`SELECT ${funnelCols} FROM leads l ${sql}`).get(...params);
-    const campaignFunnel = db.prepare(`SELECT COALESCE(l.campaign, 'Sin campaña') AS key, ${funnelCols}
-      FROM leads l ${sql} GROUP BY 1 ORDER BY cerrados DESC, recibidos DESC`).all(...params);
+    // Por campaña, con su inversión para sacar costo por lead, por cotización y por cierre.
+    const campaignFunnel = db.prepare(`SELECT COALESCE(l.campaign, 'Sin campaña') AS key, MAX(cp.budget) AS inversion, ${funnelCols}
+      FROM leads l LEFT JOIN catalog_items cp ON cp.kind = 'campana' AND cp.name = l.campaign
+      ${sql} GROUP BY 1 ORDER BY cerrados DESC, recibidos DESC`).all(...params);
     // Eficiencia por vendedor: lo que recibe, cuántos contestan, cotiza y cierra, y horas promedio hasta que el cliente contesta.
     const sellerFunnel = db.prepare(`SELECT l.assigned_to AS id, COALESCE(u.name, 'Sin asignar') AS key, ${funnelCols},
       AVG(CASE WHEN l.contacted_at IS NOT NULL

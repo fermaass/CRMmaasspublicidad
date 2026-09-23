@@ -10,6 +10,13 @@ const colorVar = (key) => `--c: var(--${key})`;
 const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
 // Paleta fija para productos y canales (validada para daltonismo); más de 8 se agrupan en "Otros".
 const CAT = ['#6161ff', '#ff7a00', '#00a39b', '#e2445c', '#caa000', '#9d50dd', '#037f4c', '#ff5ac4'];
+const money = (v) => (v == null ? '—' : Number(v).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }));
+// Opciones de campaña (se guardan por nombre); incluye la actual aunque ya no esté activa.
+function campaignOptions(current, emptyLabel) {
+  const items = state.catalog.campana.filter((c) => c.active || c.name === current);
+  return `<option value="">${esc(emptyLabel)}</option>`
+    + items.map((c) => `<option value="${esc(c.name)}" ${c.name === current ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+}
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 async function api(path, opts = {}) {
@@ -87,7 +94,7 @@ async function start() {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
-  [state.users, state.catalog, state.campaigns] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/campaigns')]);
+  [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
   fillFilters();
   setView(state.view);
 }
@@ -104,7 +111,7 @@ function fillFilters() {
   opts('#f-assigned', state.users.filter((u) => u.active).map((u) => [u.id, u.name]));
   opts('#f-product', state.catalog.producto.map((i) => [i.id, i.name]));
   opts('#f-channel', state.catalog.canal.map((i) => [i.id, i.name]));
-  opts('#f-campaign', (state.campaigns || []).map((c) => [c, c]));
+  opts('#f-campaign', state.catalog.campana.map((c) => [c.name, c.name]));
 }
 
 // Opciones de un <select> de la lista; incluye el valor actual aunque ya no esté activo.
@@ -216,6 +223,12 @@ async function changeStatus(lead, status) {
     if (reason === null) return;
     body.decline_reason = reason;
   }
+  if (status === 'vendido') {
+    const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional, sirve para medir el retorno de cada campaña)',
+      { input: true, placeholder: 'Ej. 45000', okLabel: 'Marcar vendido' });
+    if (amount === null) return;
+    if (amount) body.sale_amount = amount;
+  }
   try {
     await api(`/api/leads/${lead.id}`, { method: 'PATCH', body });
   } catch (err) { toast(err.message, 'error'); }
@@ -258,6 +271,8 @@ async function renderStats() {
       ${kpi('Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
       ${kpi('Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
       ${kpi('Conversión', pct(f.cerrados, f.recibidos), 'de cada 100 recibidos se cierran', 'var(--accent)', '%')}
+      ${f.ingresos ? `<div class="kpi-tile" style="--c:var(--f-cerrados)"><div class="label"><span class="dot"></span>Ventas</div>
+        <div class="value">${money(f.ingresos)}</div><div class="sub">de ${f.cerrados} cierres</div></div>` : ''}
     </div>
     <div class="card chart-card span-8"><h3>Embudo de conversión <small>cuántos llegan a cada paso</small></h3>${funnelChart(f)}</div>
     <div class="card chart-card span-4"><h3>Dónde están hoy <small>etapa actual</small></h3>
@@ -265,6 +280,7 @@ async function renderStats() {
       <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
     <div class="card chart-card"><h3>Eficiencia por vendedor <small>de lo que recibe cada uno, cuánto avanza</small></h3>${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card"><h3>Conversión por campaña <small>de dónde salen los cierres</small></h3>${campaignTable(s.campaignFunnel)}</div>
+    <div class="card chart-card"><h3>Eficiencia de campañas <small>cuánto cuesta y cuánto regresa cada una</small></h3>${campaignEfficiency(s.campaignFunnel)}</div>
     <div class="card chart-card span-8"><h3>Leads recibidos <small>últimos 30 días</small></h3>${areaChart(s.byDay)}</div>
     <div class="card chart-card span-4"><h3>Por origen</h3>${donut(sources, s.total)}</div>
     <div class="card chart-card span-6"><h3>Por producto <small>etapa de cada lead</small></h3>${stageRows(s.productStages)}</div>
@@ -340,6 +356,42 @@ function campaignTable(rows) {
       ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
       ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
       <td><span class="conv">${pctOf(r.cerrados, r.recibidos)}%</span></td></tr>`).join('')}</tbody></table></div>`;
+}
+
+// Costo por lead, por cotización y por cierre, y retorno (ventas ÷ inversión). Menor costo = más eficiente.
+function campaignEfficiency(rows) {
+  const withBudget = rows.filter((r) => r.inversion > 0);
+  if (!withBudget.length) {
+    return `<p class="muted">Todavía no hay inversión capturada. En <strong>Configuración → Campañas</strong> marketing pone cuánto se invirtió en cada una
+      y aquí aparece el costo por lead, por cotización y por cierre.</p>`;
+  }
+  const per = (r, k) => (r[k] ? r.inversion / r[k] : null);
+  // Si hay ventas capturadas manda el retorno (ventas ÷ inversión); si no, el costo por cierre más bajo.
+  const roasOf = (r) => (r.ingresos ? r.ingresos / r.inversion : null);
+  const bySales = withBudget.some((r) => r.ingresos);
+  const ranked = [...withBudget].sort((a, b) => (bySales
+    ? (roasOf(b) ?? -1) - (roasOf(a) ?? -1)
+    : (per(a, 'cerrados') ?? Infinity) - (per(b, 'cerrados') ?? Infinity)));
+  const best = ranked.find((r) => (bySales ? r.ingresos : r.cerrados));
+  const maxCpl = Math.max(...withBudget.map((r) => per(r, 'recibidos') || 0));
+  const periodNote = $('#f-period').value ? '<p class="muted small-note">Ojo: la inversión es el total de cada campaña y los leads son solo los del periodo elegido; para costos exactos usa "Todo el tiempo".</p>' : '';
+  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+    <th>Campaña</th><th>Inversión</th><th>Costo por lead</th><th>Costo por cotización</th><th>Costo por cierre</th><th>Ventas</th><th>Retorno</th>
+  </tr></thead><tbody>${ranked.map((r) => {
+    const roas = roasOf(r);
+    const cpl = per(r, 'recibidos');
+    return `<tr>
+      <td><strong>${esc(r.key)}</strong>${r === best ? ' <span class="conv top">más eficiente</span>' : ''}</td>
+      <td class="num">${money(r.inversion)}</td>
+      <td class="rate"><div class="num">${money(cpl)}</div><div class="mini"><i style="--w:${maxCpl ? (cpl / maxCpl) * 100 : 0}%; --c:var(--f-recibidos)"></i></div></td>
+      <td class="num">${money(per(r, 'cotizados'))}</td>
+      <td class="num"><b>${r.cerrados ? money(per(r, 'cerrados')) : 'sin cierres'}</b></td>
+      <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td>
+      <td>${roas == null ? '—' : `<span class="conv ${roas >= 1 ? 'good' : 'bad'}" data-tip="${esc(`Por cada $1 invertido regresaron $${roas.toFixed(2)}`)}">${roas.toFixed(1)}x</span>`}</td>
+    </tr>`;
+  }).join('')}</tbody></table></div>
+  <p class="muted small-note">Retorno = ventas ÷ inversión: 3x significa que por cada peso invertido se vendieron tres. Las ventas se toman del monto capturado al marcar un lead como vendido.</p>
+  ${periodNote}`;
 }
 
 // Barra tipo "batería": segmentos proporcionales con 2px de separación.
@@ -530,6 +582,8 @@ async function openLead(id) {
         <label>Estado <select name="status" class="status-select ${textClass(l.status)}" style="${colorVar(l.status)}" ${ro}>${state.meta.statuses.map((s) => `<option value="${s}" ${s === l.status ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
         <label>Perfil <select name="profile" ${ro}>${state.meta.profiles.map((p) => `<option value="${p}" ${p === l.profile ? 'selected' : ''}>${esc(label(p))}</option>`).join('')}</select></label>
       </div>
+      <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
+        <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
       <label class="${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">Motivo declinado <input name="decline_reason" value="${esc(l.decline_reason)}" ${ro}></label>
       <label>Vendedor
         <select name="assigned_to" ${can('gerente', 'marketing') ? '' : 'disabled'}>
@@ -543,7 +597,7 @@ async function openLead(id) {
       </div>
       <div class="row">
         <label>Email <input name="email" value="${esc(l.email)}" ${ro}></label>
-        <label>Campaña <input name="campaign" value="${esc(l.campaign)}" ${ro}></label>
+        <label>Campaña <select name="campaign" ${ro}>${campaignOptions(l.campaign, 'Sin campaña')}</select></label>
       </div>
       <div class="row">
         <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
@@ -574,12 +628,13 @@ async function openLead(id) {
   const form = $('#lead-form');
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
+    $('#sale-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
     form.status.setAttribute('style', colorVar(form.status.value));
     form.status.classList.toggle('dark-text', DARK_TEXT.has(form.status.value));
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'name', 'phone', 'email', 'campaign', 'product_id', 'channel_id'].map((k) => [k, form[k].value]));
+    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'sale_amount', 'name', 'phone', 'email', 'campaign', 'product_id', 'channel_id'].map((k) => [k, form[k].value]));
     if (can('gerente', 'marketing')) body.assigned_to = form.assigned_to.value || null;
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body });
@@ -617,7 +672,7 @@ function openNewLead() {
       <label>Email <input name="email" type="email"></label>
       <label>Producto de interés <select name="product_id">${catalogOptions('producto', null, 'Sin definir')}</select></label>
       <label>¿Cómo se enteró de nosotros? <select name="channel_id">${catalogOptions('canal', null, 'Sin dato')}</select></label>
-      <label>Campaña <input name="campaign"></label>
+      <label>Campaña <select name="campaign">${campaignOptions(null, 'Sin campaña')}</select></label>
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
       <p class="error" id="new-error"></p>
       <button type="submit">Crear</button>
@@ -726,6 +781,7 @@ async function renderSettings() {
 </form>`;
 
   $('#view-settings').innerHTML = `<div class="settings">
+    ${campaignEditor()}
     <div class="lists">
       ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
       ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
@@ -772,11 +828,50 @@ async function renderSettings() {
       await reloadCatalog();
     });
   });
+  $('#campaign-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const name = f.elements.name.value.trim();
+    if (!name) return;
+    try {
+      await api('/api/catalog', { method: 'POST', body: { kind: 'campana', name, budget: f.elements.budget.value } });
+      await reloadCatalog();
+      toast(`Campaña "${name}" agregada`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('#view-settings').querySelectorAll('[data-budget]').forEach((b) => b.addEventListener('click', async () => {
+    const value = await ask('Inversión total de la campaña (MXN). Déjalo vacío para quitarla.', { input: true, placeholder: 'Ej. 15000', okLabel: 'Guardar' });
+    if (value === null) return;
+    try { await api(`/api/catalog/${b.dataset.budget}`, { method: 'PATCH', body: { budget: value } }); await reloadCatalog(); } catch (err) { toast(err.message, 'error'); }
+  }));
   $('#regen').addEventListener('click', async () => {
     if (!await ask('El formulario de tu página dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?', { okLabel: 'Cambiar clave', danger: true })) return;
     await api('/api/settings', { method: 'PATCH', body: { regenerate_form_key: true } });
     renderSettings();
   });
+}
+
+function campaignEditor() {
+  const items = state.catalog.campana;
+  return `<div class="card">
+    <h3>Campañas</h3>
+    <p class="muted">Las que el vendedor puede elegir en cada lead. Con la inversión, el Resumen calcula cuánto cuesta cada lead, cada cotización y cada cierre.
+      Si llega una campaña nueva desde un formulario o anuncio, se agrega sola aquí.</p>
+    <form id="campaign-form" class="list-form">
+      <input name="name" placeholder="Ej. FB Espectaculares Octubre" aria-label="Nombre de la campaña" maxlength="120">
+      <input name="budget" inputmode="decimal" placeholder="Inversión (MXN)" aria-label="Inversión" style="max-width:170px">
+      <button type="submit">Agregar</button>
+    </form>
+    <ul class="items">
+      ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
+        <span>${esc(i.name)}${i.active ? '' : ' <small>(quitada)</small>'}</span>
+        <span class="budget ${i.budget == null ? 'missing' : ''}">${i.budget == null ? 'Sin inversión' : money(i.budget)}</span>
+        <button type="button" class="ghost small" data-budget="${i.id}">Inversión</button>
+        <button type="button" class="ghost small" data-rename>Renombrar</button>
+        <button type="button" class="ghost small" data-toggle>${i.active ? 'Quitar' : 'Volver a usar'}</button>
+      </li>`).join('') || '<li class="muted">Todavía no hay campañas. Agrega la primera arriba.</li>'}
+    </ul>
+  </div>`;
 }
 
 function listEditor(kind, title, help, placeholder) {

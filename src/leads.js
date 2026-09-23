@@ -19,6 +19,17 @@ function findExisting(db, { phone, email }) {
   return null;
 }
 
+// Nombre de campaña tal como está en la lista (sin importar mayúsculas). Si no existe y se permite, se agrega.
+function campaignName(db, value, { create = false } = {}) {
+  const name = value == null ? '' : String(value).trim().slice(0, 120);
+  if (!name) return null;
+  const found = db.prepare("SELECT name FROM catalog_items WHERE kind = 'campana' AND name = ? COLLATE NOCASE").get(name);
+  if (found) return found.name;
+  if (!create) throw new Error('Esa campaña no está en la lista');
+  db.prepare("INSERT INTO catalog_items (kind, name) VALUES ('campana', ?)").run(name);
+  return name;
+}
+
 /**
  * Alta de un lead (formulario o captura manual). Si el contacto ya existe no se duplica:
  * se registra el nuevo mensaje en su historial y, si estaba declinado o vendido, se reabre como nuevo
@@ -78,4 +89,4 @@ function resolveStatusProfile(current, changes) {
   return { status, profile };
 }
 
-module.exports = { ingestLead, addEvent, resolveStatusProfile, now };
+module.exports = { ingestLead, campaignName, addEvent, resolveStatusProfile, now };

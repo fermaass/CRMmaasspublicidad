@@ -14,10 +14,21 @@ const LABELS = {
   formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro',
 };
 
-const CATALOG_KINDS = ['canal', 'producto'];
+const CATALOG_KINDS = ['canal', 'producto', 'campana'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
+
+function catalogDDL(table) {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK (kind IN (${CATALOG_KINDS.map((k) => `'${k}'`).join(',')})),
+      name TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      budget REAL, -- inversión total (solo campañas)
+      UNIQUE (kind, name)
+    );`;
+}
 
 function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -77,19 +88,25 @@ function openDb(dbPath) {
       value TEXT
     );
 
-    -- Listas que se administran desde Configuración: canales de percepción y productos.
-    CREATE TABLE IF NOT EXISTS catalog_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL CHECK (kind IN (${CATALOG_KINDS.map((k) => `'${k}'`).join(',')})),
-      name TEXT NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1,
-      UNIQUE (kind, name)
-    );
+    -- Listas que se administran desde Configuración: canales de percepción, productos y campañas.
+    ${catalogDDL('catalog_items')}
   `);
+
+  // Bases creadas antes de existir las campañas: se rehace la tabla para aceptar el nuevo tipo.
+  const catSql = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'catalog_items'").get().sql;
+  if (!catSql.includes("'campana'")) {
+    db.exec(`PRAGMA foreign_keys = OFF;
+      ${catalogDDL('catalog_new')}
+      INSERT INTO catalog_new (id, kind, name, active) SELECT id, kind, name, active FROM catalog_items;
+      DROP TABLE catalog_items;
+      ALTER TABLE catalog_new RENAME TO catalog_items;
+      PRAGMA foreign_keys = ON;`);
+  }
 
   const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
+  if (!leadCols.includes('sale_amount')) db.exec('ALTER TABLE leads ADD COLUMN sale_amount REAL');
   // Hitos del embudo: la fecha en que el lead pasó por cada paso. No se borran aunque el lead retroceda o se decline.
   if (!leadCols.includes('won_at')) {
     for (const col of MILESTONES) db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
@@ -102,6 +119,11 @@ function openDb(dbPath) {
       UPDATE leads SET declined_at = updated_at WHERE status = 'declinado';
     `);
   }
+
+  // Toda campaña usada en algún lead aparece en la lista de campañas.
+  db.exec(`INSERT OR IGNORE INTO catalog_items (kind, name)
+    SELECT DISTINCT 'campana', campaign FROM leads WHERE campaign IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM catalog_items c WHERE c.kind = 'campana' AND c.name = leads.campaign COLLATE NOCASE)`);
 
   if (!db.prepare("SELECT 1 FROM catalog_items WHERE kind = 'canal'").get()) {
     const add = db.prepare("INSERT INTO catalog_items (kind, name) VALUES ('canal', ?)");
