@@ -411,3 +411,19 @@ details.months summary { cursor: pointer; color: var(--accent); font-size: 13px;
 .month-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 8px; }
 .month-grid label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; text-transform: capitalize; }
 code { background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; font-size: 12px; word-break: break-all; }
+
+/* ---------- Asignación ---------- */
+.assign { display: grid; gap: 14px; max-width: 1100px; }
+.load-row { display: grid; grid-template-columns: minmax(150px, 220px) 1fr auto auto; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.load-row .k { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.load-row .n { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.load-extra { white-space: nowrap; font-size: 13px; }
+.load-bar { gap: 2px; }
+.assign-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 700px) {
+  .load-row { grid-template-columns: 1fr auto; }
+  .load-row .load-bar { grid-column: 1 / -1; grid-row: 2; }
+  .load-extra { grid-column: 1 / -1; }
+}
+.load-rows { gap: 0; }
+#view-assign .small-select { max-width: 240px; }

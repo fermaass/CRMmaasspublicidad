@@ -205,7 +205,7 @@ function ensureSettings(db, config = {}) {
   const initial = {
     form_api_key: config.formApiKey,
   };
-  if (config.autoAssign === false) setSetting(db, 'auto_assign', '0');
+  if (config.autoAssign === true) setSetting(db, 'auto_assign', '1');
   for (const [key, fromEnv] of Object.entries(initial)) {
     if (fromEnv) setSetting(db, key, fromEnv);
     else if (!getSetting(db, key)) setSetting(db, key, random());

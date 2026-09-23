@@ -6,9 +6,15 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads de
 
 Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, ordenado por urgencia: volver a contactar a quien lo pospuso, seguimiento de cotizaciones, siguiente paso con quien ya contestó y toques de la cadencia. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. El vendedor ve además los leads sin dueño para tomarlos.
 
-## Reparto automático
+## Asignación de leads
 
-Cada lead que llega por formulario o que captura marketing o el gerente se asigna por turnos al siguiente vendedor activo. Si lo captura un vendedor, se queda con él. Se apaga en **Configuración → Reparto de leads**.
+Quien gestiona el CRM (gerente o marketing) decide qué vendedor le da seguimiento a cada lead:
+
+- Al capturar un lead con **+ Lead** elige al vendedor. Viene preseleccionado el que tiene menos carga.
+- En la pestaña **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana. Abajo están los leads sin dueño, del más viejo al más nuevo, cada uno con su selector y el botón Asignar. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga en ese momento.
+- La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
+
+Si un vendedor captura un lead, se queda con él. En **Configuración → Reparto de leads** se puede encender la asignación automática: cada lead que llegue sin vendedor se asigna solo al de menor carga. De fábrica está apagada.
 
 ## Embudo de conversión y eficiencia por vendedor
 

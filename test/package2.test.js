@@ -4,7 +4,7 @@ const { openDb } = require('../src/db');
 const { createApp, seedAdmin } = require('../src/server');
 const F = require('../public/followup.js');
 
-const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k' };
+const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k', autoAssign: true };
 let server; let base; let db; let gerente; const sellers = {};
 
 async function req(path, { method = 'GET', body, cookie } = {}) {
@@ -34,7 +34,7 @@ before(async () => {
 });
 after(() => server.close());
 
-test('reparto automático por turnos y se puede apagar', async () => {
+test('reparto automático al de menor carga y se puede apagar', async () => {
   const a = (await form({ nombre: 'A', telefono: '5530000001' })).json.id;
   const b = (await form({ nombre: 'B', telefono: '5530000002' })).json.id;
   const c = (await form({ nombre: 'C', telefono: '5530000003' })).json.id;

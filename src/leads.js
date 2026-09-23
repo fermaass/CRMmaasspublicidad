@@ -1,4 +1,4 @@
-const { phoneKey, STATUSES, PROFILES, LABELS, getSetting, setSetting } = require('./db');
+const { phoneKey, STATUSES, PROFILES, LABELS, FOLLOWUP, getSetting } = require('./db');
 
 const now = () => new Date().toISOString();
 
@@ -76,21 +76,59 @@ function ingestLead(db, data) {
   return { id, created: true };
 }
 
-// Reparto automático por turnos entre los vendedores activos, para que ningún lead espere sin dueño.
-// Se puede apagar desde Configuración. Devuelve el nombre del vendedor asignado o null.
+const ACTIVE = "('nuevo', 'nuevo_perfil', 'cotizando')";
+
+// Carga de cada vendedor activo: leads en curso, pendientes vencidos y cuántos recibió en los últimos 7 días.
+function workload(db) {
+  const sellers = db.prepare(`SELECT u.id, u.name,
+      COUNT(CASE WHEN l.status IN ${ACTIVE} THEN 1 END) AS activos,
+      COUNT(CASE WHEN l.status IN ('nuevo', 'nuevo_perfil') THEN 1 END) AS por_cotizar,
+      COUNT(CASE WHEN l.status = 'cotizando' THEN 1 END) AS cotizando,
+      COUNT(CASE WHEN l.assigned_at >= ? THEN 1 END) AS asignados_semana
+    FROM users u LEFT JOIN leads l ON l.assigned_to = u.id
+    WHERE u.role = 'vendedor' AND u.active = 1 GROUP BY u.id ORDER BY u.name`).all(new Date(Date.now() - 7 * FOLLOWUP.DAY).toISOString());
+  const vencidos = {};
+  for (const l of db.prepare(`SELECT * FROM leads WHERE assigned_to IS NOT NULL AND status IN ${ACTIVE}`).all()) {
+    const a = FOLLOWUP.nextAction(l);
+    if (a && FOLLOWUP.dayDiff(a.due) < 0) vencidos[l.assigned_to] = (vencidos[l.assigned_to] || 0) + 1;
+  }
+  sellers.forEach((s) => { s.vencidos = vencidos[s.id] || 0; });
+  return sellers;
+}
+
+// A quién le toca: el vendedor con menos leads en curso; si empatan, el que recibió menos esta semana.
+function suggestSeller(db) {
+  return [...workload(db)].sort((a, b) => a.activos - b.activos || a.asignados_semana - b.asignados_semana || a.id - b.id)[0] || null;
+}
+
+function assignTo(db, leadId, seller, userId, how) {
+  const ts = now();
+  db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(seller.id, ts, ts, leadId);
+  addEvent(db, leadId, userId, 'asignacion', `${how} a ${seller.name}`);
+}
+
+// Asignación automática al vendedor con menos carga. Está apagada salvo que se encienda en Configuración.
 function autoAssign(db, leadId) {
-  if (getSetting(db, 'auto_assign') === '0') return null;
+  if (getSetting(db, 'auto_assign') !== '1') return null;
   const lead = db.prepare('SELECT l.assigned_to, u.active FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?').get(leadId);
   if (!lead || (lead.assigned_to && lead.active)) return null;
-  const sellers = db.prepare("SELECT id, name FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY id").all();
-  if (!sellers.length) return null;
-  const last = Number(getSetting(db, 'rr_last') || 0);
-  const next = sellers.find((u) => u.id > last) || sellers[0];
-  const ts = now();
-  db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(next.id, ts, ts, leadId);
-  setSetting(db, 'rr_last', String(next.id));
-  addEvent(db, leadId, null, 'asignacion', `Asignado automáticamente a ${next.name}`);
+  const next = suggestSeller(db);
+  if (!next) return null;
+  assignTo(db, leadId, next, null, 'Asignado automáticamente');
   return next.name;
+}
+
+// Reparte todos los leads en curso sin dueño, uno por uno, siempre al de menor carga.
+function balanceUnassigned(db, userId) {
+  const ids = db.prepare(`SELECT id FROM leads WHERE assigned_to IS NULL AND status IN ${ACTIVE} ORDER BY created_at`).all();
+  let n = 0;
+  for (const { id } of ids) {
+    const next = suggestSeller(db);
+    if (!next) break;
+    assignTo(db, id, next, userId, 'Asignado por carga pareja');
+    n++;
+  }
+  return n;
 }
 
 /**
@@ -111,4 +149,4 @@ function resolveStatusProfile(current, changes) {
   return { status, profile };
 }
 
-module.exports = { ingestLead, campaignName, autoAssign, addEvent, resolveStatusProfile, now };
+module.exports = { ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };

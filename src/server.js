@@ -5,7 +5,7 @@ const {
   MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP,
 } = require('./db');
 const auth = require('./auth');
-const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign } = require('./leads');
+const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
 
 const EDITORS = ['gerente', 'marketing'];
@@ -83,7 +83,7 @@ function createApp({ db, config }) {
     res.json({
       form_url: `${base}/webhooks/form`,
       form_api_key: getSetting(db, 'form_api_key'),
-      auto_assign: getSetting(db, 'auto_assign') !== '0',
+      auto_assign: getSetting(db, 'auto_assign') === '1',
     });
   });
 
@@ -294,6 +294,12 @@ function createApp({ db, config }) {
     const b = req.body || {};
     try {
       if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
+      // Gerente y marketing pueden elegir quién le da seguimiento al capturarlo.
+      let seller = null;
+      if (b.assigned_to && EDITORS.includes(req.user.role)) {
+        seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(Number(b.assigned_to));
+        if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
+      }
       // Si el contacto ya existía, ingestLead lo registra en su historial en vez de duplicarlo.
       const result = ingestLead(db, {
         ...b, userId: req.user.id, channel_id: catalogId('canal', b.channel_id), product_id: catalogId('producto', b.product_id),
@@ -305,16 +311,33 @@ function createApp({ db, config }) {
         if (req.user.role === 'vendedor' && owner.assigned_to && owner.assigned_to !== req.user.id) {
           return res.status(409).json({ error: `Este contacto ya lo atiende ${owner.name}. Se dejó registrado en su historial.` });
         }
-        autoAssign(db, result.id);
+        if (seller && !owner.assigned_to) assignLead(result.id, seller, req.user.id);
+        else autoAssign(db, result.id);
         return res.json({ id: result.id, existing: true });
       }
       if (req.user.role === 'vendedor') {
         db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
-      } else autoAssign(db, result.id);
+      } else if (seller) assignLead(result.id, seller, req.user.id);
+      else autoAssign(db, result.id);
       res.status(201).json({ id: result.id });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  function assignLead(id, seller, userId) {
+    const ts = now();
+    db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(seller.id, ts, ts, id);
+    addEvent(db, id, userId, 'asignacion', `Asignado a ${seller.name}`);
+  }
+
+  // Carga por vendedor y a quién le toca el siguiente lead.
+  app.get('/api/workload', auth.requireRole(...EDITORS), (req, res) => {
+    const unassigned = db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n;
+    res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned });
+  });
+  app.post('/api/leads/balance', auth.requireRole(...EDITORS), (req, res) => {
+    res.json({ assigned: balanceUnassigned(db, req.user.id) });
   });
 
   app.patch('/api/leads/:id', auth.requireUser, (req, res) => {

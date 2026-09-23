@@ -46,7 +46,7 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
 const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', list: 'Lista de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', list: 'Lista de leads', assign: 'Asignación de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -241,7 +241,7 @@ function setView(view) {
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
   if (!['board', 'list'].includes(view)) $('#board-alert').classList.add('hidden');
@@ -253,6 +253,7 @@ async function refresh() {
   if (state.view === 'users') return renderUsers();
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
+  if (state.view === 'assign') return renderAssign();
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
@@ -377,6 +378,7 @@ function renderToday() {
       <span class="alert-pill ${late ? 'late' : 'ok'}">${late ? `${late} ${late === 1 ? 'vencido' : 'vencidos'}` : 'Nada vencido'}</span>
       <span class="alert-pill today">${items.length - late} para hoy</span>
       ${upcoming ? `<span class="muted">${upcoming} más en los próximos 2 días</span>` : ''}
+      ${free.length && can('gerente', 'marketing') ? `<button type="button" class="ghost small" id="today-assign">${free.length} sin asignar · Asignar</button>` : ''}
       <span class="spacer"></span>
       ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
@@ -387,6 +389,7 @@ function renderToday() {
 
   const view = $('#view-today');
   $('#today-new')?.addEventListener('click', openNewLead);
+  $('#today-assign')?.addEventListener('click', () => setView('assign'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('[data-take]').forEach((b) => b.addEventListener('click', async () => {
     try { await api(`/api/leads/${b.dataset.take}/take`, { method: 'POST' }); toast('Lead tomado', 'ok'); refresh(); } catch (err) { toast(err.message, 'error'); }
@@ -1104,7 +1107,16 @@ async function openLead(id) {
   });
 }
 
-function openNewLead() {
+async function openNewLead() {
+  let pick = '';
+  if (can('gerente', 'marketing')) {
+    const w = await api('/api/workload');
+    const sug = w.sellers.find((u) => u.id === w.suggested);
+    pick = w.sellers.length ? `<label>¿Quién le da seguimiento? <select name="assigned_to">
+        ${w.sellers.map((u) => `<option value="${u.id}" ${u.id === w.suggested ? 'selected' : ''}>${esc(u.name)} · ${u.activos} en curso</option>`).join('')}
+        <option value="">Sin asignar por ahora</option></select></label>
+      ${sug ? `<p class="muted small-note" style="margin-top:-6px">Sugerido: ${esc(sug.name)}, es quien tiene menos leads en curso.</p>` : ''}` : '';
+  }
   openDrawer(`
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>Nuevo lead</h2>
@@ -1116,6 +1128,7 @@ function openNewLead() {
       </fieldset>
       <label>¿De dónde viene? <select name="origin">${originOptions(null, null)}</select></label>
       <label>Producto de interés <select name="product_id">${catalogOptions('producto', null, 'Sin definir')}</select></label>
+      ${pick}
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
       <details class="lead-data"><summary>Más datos</summary><label>Email <input name="email" type="email"></label></details>
       <p class="error" id="new-error"></p>
@@ -1135,6 +1148,70 @@ function openNewLead() {
       }
     } catch (err) { $('#new-error').textContent = err.message; }
   });
+}
+
+// ---------- Asignación: carga por vendedor y leads sin dueño ----------
+async function renderAssign() {
+  const ACTIVE = ['nuevo', 'nuevo_perfil', 'cotizando'];
+  const [w, all] = await Promise.all([api('/api/workload'), api('/api/leads?assigned=none')]);
+  const open = all.filter((l) => ACTIVE.includes(l.status)).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const max = Math.max(1, ...w.sellers.map((u) => u.activos));
+  const sug = w.sellers.find((u) => u.id === w.suggested);
+  const load = w.sellers.length ? `<div class="brows load-rows">${w.sellers.map((u) => `<div class="load-row">
+      <span class="k"><span class="avatar" aria-hidden="true">${esc(initials(u.name))}</span><strong>${esc(u.name)}</strong>
+        ${u.id === w.suggested ? '<span class="conv top">le toca</span>' : ''}</span>
+      <div class="battery thin load-bar" role="img" aria-label="${esc(`${u.name}: ${u.por_cotizar} por cotizar, ${u.cotizando} cotizando`)}">
+        ${u.por_cotizar ? `<div class="seg" style="--w:${(u.por_cotizar / max) * 100}%; --c:var(--nuevo)" data-tip="${esc(`${u.por_cotizar} por cotizar`)}"></div>` : ''}
+        ${u.cotizando ? `<div class="seg dark-text" style="--w:${(u.cotizando / max) * 100}%; --c:var(--cotizando)" data-tip="${esc(`${u.cotizando} cotizando`)}"></div>` : ''}
+      </div>
+      <span class="n"><b>${u.activos}</b> <span class="muted">en curso</span></span>
+      <span class="load-extra">${u.vencidos ? `<span class="conv bad">${u.vencidos} ${u.vencidos === 1 ? 'vencido' : 'vencidos'}</span>` : '<span class="muted">al día</span>'}
+        <span class="muted">· ${u.asignados_semana} esta semana</span></span>
+    </div>`).join('')}</div>
+    <div class="legend"><span style="--c:var(--nuevo)"><i></i>Por cotizar</span><span style="--c:var(--cotizando)"><i></i>Cotizando</span></div>`
+    : '<p class="muted">No hay vendedores activos. Dalos de alta en <strong>Usuarios</strong>.</p>';
+  const options = (sel) => w.sellers.map((u) => `<option value="${u.id}" ${u.id === sel ? 'selected' : ''}>${esc(u.name)} · ${u.activos} en curso</option>`).join('');
+  const rows = open.map((l) => `<div class="today-row" data-id="${l.id}">
+      <div class="today-main">
+        <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
+        <span class="muted">${esc(label(l.source))}${l.campaign ? ` · ${esc(l.campaign)}` : ''}${l.product_name ? ` · ${esc(l.product_name)}` : ''}</span>
+        <span class="muted">${timeAgo(l.created_at)}</span>
+      </div>
+      ${w.sellers.length ? `<div class="today-actions"><select class="small-select" data-seller aria-label="Vendedor">${options(w.suggested)}</select>
+        <button type="button" class="small" data-assign>Asignar</button></div>` : ''}
+    </div>`).join('');
+
+  $('#view-assign').innerHTML = `<div class="assign">
+    <section class="card">${cardTitle('users', 'var(--f-contactados)', 'Carga por vendedor', 'leads en curso de cada uno: nuevos, perfilados y cotizando')}
+      ${load}
+      ${sug ? `<p class="muted small-note">Sugerencia: el siguiente lead a <strong>${esc(sug.name)}</strong>, que tiene menos leads en curso${w.sellers.filter((u) => u.activos === sug.activos).length > 1 ? ' (y recibió menos esta semana)' : ''}. Tú decides; la sugerencia solo viene preseleccionada.</p>` : ''}
+    </section>
+    <section class="card">
+      <div class="assign-head">${cardTitle('inbox', 'var(--accent)', `Sin asignar (${open.length})`, 'del más viejo al más nuevo')}
+        ${open.length > 1 && w.sellers.length ? '<button type="button" class="ghost" id="balance">Repartir todos parejo</button>' : ''}</div>
+      ${rows || `<div class="empty-today">${icon('check', 28)}<h3>Todo asignado</h3><p class="muted">Cada lead en curso ya tiene quién le dé seguimiento.</p></div>`}
+    </section>
+  </div>`;
+
+  const view = $('#view-assign');
+  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  view.querySelectorAll('.today-row[data-id]').forEach((r) => $('[data-assign]', r)?.addEventListener('click', async () => {
+    const sel = $('[data-seller]', r);
+    try {
+      await api(`/api/leads/${r.dataset.id}`, { method: 'PATCH', body: { assigned_to: Number(sel.value) } });
+      toast(`Asignado a ${sel.selectedOptions[0].textContent.split(' · ')[0]}`, 'ok');
+      renderAssign();
+    } catch (err) { toast(err.message, 'error'); }
+  }));
+  $('#balance')?.addEventListener('click', async () => {
+    if (!await ask(`Se van a repartir ${open.length} leads, cada uno al vendedor con menos carga en ese momento. ¿Continuar?`, { okLabel: 'Repartir' })) return;
+    try {
+      const r = await api('/api/leads/balance', { method: 'POST' });
+      toast(`${r.assigned} leads repartidos`, 'ok');
+      renderAssign();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  animateIn(view);
 }
 
 // ---------- Usuarios ----------
@@ -1244,9 +1321,9 @@ async function renderSettings() {
     <div class="card">
       ${cardTitle('users', 'var(--f-contactados)', 'Reparto de leads')}
       <label class="switch-row"><input type="checkbox" id="auto-assign" ${s.auto_assign ? 'checked' : ''}>
-        <span><strong>Repartir leads automáticamente por turnos</strong><br>
-        <span class="muted">Cada lead que llega por formulario o que captura marketing se asigna al siguiente vendedor activo, para que ninguno espere sin dueño.
-        Apágalo si prefieres asignarlos a mano.</span></span></label>
+        <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
+        <span class="muted">Apagado, quien gestiona el CRM asigna cada lead a mano desde <strong>Asignación</strong> o al capturarlo, con la sugerencia de a quién le toca.
+        Encendido, cada lead que llega sin vendedor se asigna solo al que tiene menos leads en curso.</span></span></label>
     </div>
     ${campaignEditor()}
     <div class="lists">
@@ -1313,7 +1390,7 @@ async function renderSettings() {
   $('#auto-assign').addEventListener('change', async (e) => {
     try {
       await api('/api/settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
-      toast(e.target.checked ? 'Reparto automático encendido' : 'Reparto automático apagado', 'ok');
+      toast(e.target.checked ? 'Asignación automática encendida' : 'Asignación manual', 'ok');
     } catch (err) { toast(err.message, 'error'); e.target.checked = !e.target.checked; }
   });
   $('#view-settings').querySelectorAll('[data-camp-channel]').forEach((sel) => sel.addEventListener('change', async () => {
@@ -1420,6 +1497,6 @@ async function reloadCatalog() {
   }
   // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
   setInterval(() => {
-    if ($('#drawer').classList.contains('hidden') && !['users', 'settings'].includes(state.view)) refresh();
+    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign'].includes(state.view)) refresh();
   }, 30000);
 })();
