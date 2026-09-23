@@ -362,12 +362,13 @@ function renderToday() {
     .filter((x) => x.a && x.a.days > 0 && x.a.days <= 2 && x.a.kind !== 'recontacto').length;
   const free = state.leads.filter((l) => !l.assigned_to && ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status));
   const late = items.filter((x) => x.a.days < 0 && x.a.kind !== 'recontacto').length;
-  const groups = [
-    ['recontacto', 'Volver a contactar', 'Leads que pospusieron y ya llegó su fecha'],
-    ['cotizacion', 'Seguimiento de cotizaciones', 'Cotizaciones enviadas que esperan respuesta'],
-    ['seguimiento', 'Respondieron: siguiente paso', 'Ya contestaron; toca perfilar o enviar cotización'],
-    ['cadencia', 'Toques de la cadencia', 'Aún no contestan: 5 toques en 12 días'],
-  ];
+  // Mismas etapas, orden y colores que el Tablero: un lead en Nuevo aparece aquí bajo Nuevo.
+  const STAGE_HELP = {
+    nuevo: 'Toques de la cadencia (5 en 12 días) o perfilar a quien ya contestó',
+    nuevo_perfil: 'Cumplen perfil: toca enviar la cotización',
+    cotizando: 'Seguimiento de la cotización a los 2, 5 y 10 días',
+    declinado: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
+  };
   const canTouch = (l) => canEditLead(l);
   const row = ({ l, a }) => {
     const outcomes = state.meta.touches.byStatus[l.status] || [];
@@ -388,12 +389,16 @@ function renderToday() {
         </div>`}
     </div>`;
   };
-  const sections = groups.map(([kind, title, help]) => {
-    const list = items.filter((x) => x.a.kind === kind);
-    if (!list.length) return '';
-    return `<section class="card today-group">${cardTitle(kind === 'cotizacion' ? 'file' : kind === 'recontacto' ? 'calendar' : 'phone',
-      kind === 'cotizacion' ? 'var(--f-cotizados)' : kind === 'recontacto' ? 'var(--nuevo_perfil)' : kind === 'seguimiento' ? 'var(--f-contactados)' : 'var(--f-recibidos)',
-      `${title} (${list.length})`, help)}${list.map(row).join('')}</section>`;
+  const sections = state.meta.statuses.filter((st) => STAGE_HELP[st]).map((st) => {
+    const list = items.filter((x) => x.l.status === st);
+    const onBoard = state.leads.filter(mine).filter((l) => l.status === st).length;
+    if (st === 'declinado' && !list.length) return '';
+    return `<section class="card today-group">
+      <h3 class="col-head today-head ${textClass(st)}" style="${colorVar(st)}"><span>${esc(label(st))}</span>
+        <span class="count">${list.length} hoy${st === 'declinado' ? '' : ` · ${onBoard} en el tablero`}</span></h3>
+      <p class="muted small-note today-help">${STAGE_HELP[st]}</p>
+      ${list.length ? list.map(row).join('') : '<p class="muted today-none">Nada pendiente hoy en esta etapa.</p>'}
+    </section>`;
   }).join('');
   $('#view-today').innerHTML = `
     <div class="today-summary">
@@ -404,7 +409,7 @@ function renderToday() {
       <span class="spacer"></span>
       ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
-    ${sections || `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
+    ${items.length ? sections : `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
 
   const view = $('#view-today');
   $('#today-new')?.addEventListener('click', openNewLead);

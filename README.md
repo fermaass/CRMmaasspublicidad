@@ -4,7 +4,7 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads de
 
 ## Mi día
 
-Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, ordenado por urgencia: volver a contactar a quien lo pospuso, seguimiento de cotizaciones, siguiente paso con quien ya contestó y toques de la cadencia. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
+Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero** (Nuevo, Nuevo – cumple perfil, Cotizando y Declinado para los que toca volver a contactar), así que un lead en Nuevo del tablero aparece bajo Nuevo. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
 
 ## Asignación de leads
 

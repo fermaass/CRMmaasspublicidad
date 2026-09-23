@@ -445,3 +445,8 @@ button:disabled { opacity: .45; cursor: default; }
 .wa-form textarea { width: 100%; }
 .wa-form button { justify-self: start; }
 .small { font-size: 12px; }
+
+/* Mi día con las etapas del Tablero */
+.today-group .today-head { margin: -20px -20px 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; font-size: 15px; }
+.today-help { margin: 10px 0 4px; }
+.today-none { margin: 8px 0 0; font-size: 13px; }
