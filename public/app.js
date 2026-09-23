@@ -275,11 +275,16 @@ function cardHtml(l) {
   const owner = l.assigned_name
     ? `<span class="avatar" title="${esc(l.assigned_name)}">${esc(initials(l.assigned_name))}</span>`
     : '<span class="avatar none" title="Sin asignar">?</span>';
-  return `<div class="lead-card compact" draggable="${canEditLead(l)}" data-id="${l.id}">
+  return `<div class="lead-card compact ${answeredInNew(l) ? 'answered' : ''}" draggable="${canEditLead(l)}" data-id="${l.id}">
     <div class="card-top"><span class="name">${esc(l.name || l.phone || l.email)}</span>${owner}</div>
+    ${answeredInNew(l) ? ANSWERED_PILL : ''}
     <div class="card-bottom">${cardAction(l)}<span class="ago">${timeAgo(l.updated_at)}</span></div>
   </div>`;
 }
+
+// En Nuevo conviven dos casos que piden cosas distintas: aún no contesta (seguir la cadencia) o ya contestó y falta perfilarlo.
+const answeredInNew = (l) => l.status === 'nuevo' && Boolean(l.contacted_at);
+const ANSWERED_PILL = '<span class="answered-pill">Ya contestó · falta perfilar</span>';
 
 // Lo único que el vendedor necesita saber de un vistazo, según la etapa.
 function cardAction(l) {
@@ -375,6 +380,7 @@ function renderToday() {
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
+        ${answeredInNew(l) ? ANSWERED_PILL : ''}
         <span class="touch-badge ${whenClass(a.days)}">${esc(a.label)} · ${a.kind === 'recontacto' && a.days < 0 ? `desde el ${shortDate(a.due)}` : whenText(a.days)}</span>
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
@@ -433,7 +439,7 @@ async function registerTouch(l, channel, outcome) {
     if (amount) body.quote_amount = amount;
   }
   if (outcome === 'rechazo') {
-    const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== state.meta.noAnswer), okLabel: 'Declinar' });
+    const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== state.meta.noAnswer && r !== state.meta.ghosted), okLabel: 'Declinar' });
     if (reason === null) return false;
     body.decline_reason = reason;
     if (reason === state.meta.postponed) {
@@ -448,7 +454,8 @@ async function registerTouch(l, channel, outcome) {
   }
   try {
     const r = await api(`/api/leads/${l.id}/touches`, { method: 'POST', body });
-    toast(r.auto_declined ? 'Quinto toque sin respuesta: el lead pasó a Declinado' : `Toque ${r.n} registrado`, r.auto_declined ? '' : 'ok');
+    const why = r.reason === state.meta.ghosted ? `${state.meta.silentMax} seguimientos seguidos sin respuesta` : 'Quinto toque sin respuesta';
+    toast(r.auto_declined ? `${why}: el lead pasó a Declinado (${r.reason}). Su perfil se conserva para remarketing.` : `Toque ${r.n} registrado`, r.auto_declined ? '' : 'ok');
     refresh();
     return true;
   } catch (err) { toast(err.message, 'error'); return false; }

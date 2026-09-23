@@ -2,6 +2,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { openDb } = require('../src/db');
 const { createApp, seedAdmin } = require('../src/server');
+const F = require('../public/followup.js');
 
 const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k', autoAssign: false };
 let server; let base; let gerente; let ana; let anaId;
@@ -111,4 +112,32 @@ test('cadencia: un lead asignado hace días sin tocar cuenta como toque vencido'
   srv.close();
   assert.equal(s.touches.overdue, 1);
   assert.equal(s.sellerFunnel[0].toques_vencidos, 1);
+});
+
+test('si ya contestó y deja de responder 3 seguimientos seguidos, se declina como "Dejó de contestar"', async () => {
+  const id = await newLead('5510000099');
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  await touch(id, 'cumple');
+  await touch(id, 'cotizado');
+  // Una respuesta a la mitad reinicia la cuenta
+  assert.equal((await touch(id, 'sin_respuesta')).json.auto_declined, false);
+  await touch(id, 'seguimiento');
+  assert.equal((await touch(id, 'sin_respuesta')).json.auto_declined, false);
+  const before = await lead(id);
+  assert.equal(before.silent_streak, 1);
+  assert.equal((await touch(id, 'sin_respuesta')).json.auto_declined, false);
+  assert.match(F.nextAction(await lead(id)).label, /último intento/);
+  const third = await touch(id, 'sin_respuesta');
+  assert.equal(third.json.auto_declined, true);
+  assert.equal(third.json.reason, 'Dejó de contestar');
+  const l = await lead(id);
+  assert.equal(l.status, 'declinado');
+  assert.equal(l.profile, 'cumple', 'el perfil se conserva para remarketing');
+  assert.ok(l.quoted_at, 'el hito de cotización no se borra');
+  // Entra en la audiencia de "cumplían perfil y no compraron"
+  const s = (await req('/api/stats', { cookie: gerente })).json;
+  assert.ok(s.touches.declineReasons.some((r) => r.key === 'Dejó de contestar'));
+  // Al reactivarlo la cuenta vuelve a cero
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { status: 'nuevo_perfil' } });
+  assert.equal((await lead(id)).silent_streak, 0);
 });

@@ -450,3 +450,9 @@ button:disabled { opacity: .45; cursor: default; }
 .today-group .today-head { margin: -20px -20px 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; font-size: 15px; }
 .today-help { margin: 10px 0 4px; }
 .today-none { margin: 8px 0 0; font-size: 13px; }
+
+/* Nuevo que ya contestó: se distingue del que aún no contesta */
+.lead-card.answered { border-left: 4px solid var(--f-contactados); }
+.answered-pill { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px; background: #d9f4f1; color: #00736d;
+  font-size: 11px; font-weight: 700; }
+.today-main .answered-pill { margin-top: 0; }

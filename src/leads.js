@@ -54,6 +54,7 @@ function ingestLead(db, data) {
         channel_id = COALESCE(channel_id, ?), product_id = COALESCE(?, product_id),
         utm_source = COALESCE(?, utm_source), utm_medium = COALESCE(?, utm_medium), utm_content = COALESCE(?, utm_content),
         recontact_at = CASE WHEN ? THEN NULL ELSE recontact_at END,
+        silent_streak = 0, -- volvió a escribir: ya no está "callado"
         status = ?, updated_at = ? WHERE id = ?`)
       .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.campaign, lead.channel_id, lead.product_id,
         lead.utm_source, lead.utm_medium, lead.utm_content, reopen ? 1 : 0,

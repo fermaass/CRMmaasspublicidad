@@ -2,7 +2,7 @@ const path = require('node:path');
 const express = require('express');
 const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
 } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
@@ -89,7 +89,7 @@ function createApp({ db, config }) {
 
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
     touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
-    declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER }));
+    declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
   app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
@@ -467,6 +467,8 @@ function createApp({ db, config }) {
         declineReason, assigned, channelId, productId, m.assigned_at, m.contacted_at,
         m.profiled_at, m.quoted_at, m.won_at, m.declined_at, saleAmount, responseTouch, quoteTouch,
         quoteAmount, recontactAt, ts, lead.id);
+    // Cambio de etapa a mano (o reactivación): la cuenta de seguimientos sin respuesta empieza de nuevo.
+    if (next.status !== lead.status) db.prepare('UPDATE leads SET silent_streak = 0 WHERE id = ?').run(lead.id);
 
     if (quoteAmount !== lead.quote_amount && quoteAmount != null) {
       addEvent(db, lead.id, user.id, 'estado', `Monto cotizado: $${quoteAmount.toLocaleString('es-MX')}`);
@@ -533,19 +535,23 @@ function createApp({ db, config }) {
     }
     const n = (lead.touch_count || 0) + 1;
     // Cinco toques sin que el cliente haya respondido nunca: se declina solo.
-    const autoDecline = outcome === 'sin_respuesta' && !lead.contacted_at && n === MAX_TOUCHES;
-    if (autoDecline) Object.assign(changes, { status: 'declinado', decline_reason: NO_ANSWER });
+    const neverAnswered = outcome === 'sin_respuesta' && !lead.contacted_at && n === MAX_TOUCHES;
+    // Ya había contestado y lleva SILENT_MAX seguimientos seguidos sin respuesta: también se declina solo.
+    const streak = outcome === 'sin_respuesta' ? (lead.silent_streak || 0) + 1 : 0;
+    const wentSilent = outcome === 'sin_respuesta' && Boolean(lead.contacted_at) && streak >= FOLLOWUP.SILENT_MAX;
+    const autoDecline = neverAnswered || wentSilent;
+    if (autoDecline) Object.assign(changes, { status: 'declinado', decline_reason: neverAnswered ? NO_ANSWER : GHOSTED });
 
     const ts = now();
     db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(lead.id, n, req.user.id, channel, outcome, ts);
-    db.prepare('UPDATE leads SET touch_count = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
-      .run(n, ts, ts, ts, lead.id);
+    db.prepare('UPDATE leads SET touch_count = ?, silent_streak = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
+      .run(n, streak, ts, ts, ts, lead.id);
     addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
 
     const err = updateLead(req.user, getLead(req, lead.id), changes);
     if (err) return res.status(err.status).json({ error: err.error });
-    res.status(201).json({ ok: true, n, auto_declined: autoDecline });
+    res.status(201).json({ ok: true, n, auto_declined: autoDecline, reason: autoDecline ? changes.decline_reason : null });
   });
 
   app.post('/api/leads/:id/notes', auth.requireUser, (req, res) => {

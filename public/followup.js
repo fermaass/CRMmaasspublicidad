@@ -9,8 +9,12 @@
   // Después de cotizar: seguimientos a los 2, 5 y 10 días; luego cada 7 días desde el último toque.
   const QUOTE_CADENCE = [2, 5, 10];
   const AFTER_QUOTE_EVERY = 7;
+  // Si ya contestó y luego deja de responder: con 3 seguimientos seguidos sin respuesta se declina ("Dejó de contestar").
+  const SILENT_MAX = 3;
 
   const ms = (iso) => new Date(iso).getTime();
+  // Aviso cuando el siguiente seguimiento sin respuesta declinaría el lead.
+  const lastTry = (l) => ((l.silent_streak || 0) >= SILENT_MAX - 1 ? ' (último intento)' : '');
 
   // Devuelve { kind, n, due, label } o null si no hay nada pendiente.
   function nextAction(l) {
@@ -30,12 +34,12 @@
       const due = since < QUOTE_CADENCE.length
         ? ms(l.quoted_at) + QUOTE_CADENCE[since] * DAY
         : ms(l.last_touch_at || l.quoted_at) + AFTER_QUOTE_EVERY * DAY;
-      return { kind: 'cotizacion', n, due: new Date(due), label: `Seguimiento ${since + 1} de la cotización` };
+      return { kind: 'cotizacion', n, due: new Date(due), label: `Seguimiento ${since + 1} de la cotización${lastTry(l)}` };
     }
     return {
       kind: 'seguimiento', n,
       due: new Date(ms(l.last_touch_at || l.contacted_at) + FOLLOW_EVERY * DAY),
-      label: l.status === 'nuevo_perfil' ? 'Enviar cotización' : 'Perfilar',
+      label: `${l.status === 'nuevo_perfil' ? 'Enviar cotización' : 'Perfilar'}${lastTry(l)}`,
     };
   }
 
@@ -69,7 +73,7 @@
     return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   }
 
-  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, nextAction, dayDiff, waNumber, waLink };
+  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, SILENT_MAX, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);

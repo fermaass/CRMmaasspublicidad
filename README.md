@@ -42,13 +42,15 @@ Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una c
 | Cumple perfil | No contestó · Sigue en conversación · Se envió cotización (→ Cotizando) · No le interesó (→ Declinado, con motivo) |
 | Cotizando | No contestó · Sigue en conversación · Cerró venta (→ Vendido, con monto) · Rechazó (→ Declinado, con motivo) |
 
-Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". Cuando el cliente ya respondió, los toques siguen contando (para saber en cuál se cotizó y cerró) sin límite. Las tarjetas muestran el siguiente toque y si está vencido, y arriba del tablero aparece cuántos toques están vencidos o tocan hoy.
+Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". La misma lógica sigue en el resto del embudo: si el cliente ya había contestado (en Nuevo, Cumple perfil o Cotizando) y luego acumula **3 seguimientos seguidos sin respuesta**, pasa solo a Declinado con motivo "Dejó de contestar". Cualquier respuesta reinicia la cuenta, y el seguimiento que declinaría al lead aparece marcado como "último intento". Estos leads conservan su perfil y sus hitos, así que entran en las audiencias de remarketing.
+
+En la columna Nuevo, los que ya contestaron pero falta perfilar llevan la marca **"Ya contestó · falta perfilar"** (con borde verde) para distinguirlos de los que aún no contestan. Las tarjetas muestran el siguiente toque y si está vencido, y arriba del tablero aparece cuántos toques están vencidos o tocan hoy.
 
 Después de contestar, el seguimiento es cada 3 días hasta cotizar. Ya cotizado, los seguimientos tocan a los **2, 5 y 10 días** de enviada la cotización y luego cada 7 días. Al registrar la cotización se pide el monto (opcional) para saber cuánto dinero hay en juego. Si el cliente "lo pospuso", se puede poner una **fecha para volver a contactarlo** y ese día aparece en Mi día.
 
 La regla de qué toca y cuándo vive en un solo archivo (`public/followup.js`) que usan el servidor y el navegador.
 
-Los motivos de declinado son una lista fija: No contestó (5 toques), No cumple perfil, Precio, Eligió a otro proveedor, Lo pospuso / sin presupuesto ahora, Otro.
+Los motivos de declinado son una lista fija: No contestó (5 toques), Dejó de contestar, No cumple perfil, Precio, Eligió a otro proveedor, Lo pospuso / sin presupuesto ahora, Otro.
 
 El Resumen muestra **en qué toque responden** los leads, **en qué toque se cotiza**, **por qué se pierden** y, por vendedor, los toques promedio hasta respuesta y cotización y sus toques vencidos.
 

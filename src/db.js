@@ -40,7 +40,9 @@ const OUTCOMES_BY_STATUS = {
 };
 const NO_ANSWER = 'No contestó (5 toques)';
 const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
-const DECLINE_REASONS = [NO_ANSWER, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
+// Contestó en algún momento pero dejó de responder: 3 seguimientos seguidos sin respuesta (FOLLOWUP.SILENT_MAX).
+const GHOSTED = 'Dejó de contestar';
+const DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
@@ -143,7 +145,8 @@ function openDb(dbPath) {
   if (!catCols.includes('channel_id')) db.exec('ALTER TABLE catalog_items ADD COLUMN channel_id INTEGER');
   // Monto cotizado, fecha para volver a contactar, primer toque y de qué anuncio viene.
   for (const [col, type] of [['quote_amount', 'REAL'], ['recontact_at', 'TEXT'], ['first_touch_at', 'TEXT'],
-    ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_content', 'TEXT']]) {
+    ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_content', 'TEXT'],
+    ['silent_streak', 'INTEGER NOT NULL DEFAULT 0']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
     if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
   }
   // Inversión de cada campaña por mes ('AAAA-MM').
@@ -233,5 +236,5 @@ const WA_TEMPLATES = {
 module.exports = {
   WA_TEMPLATES,
   openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };
