@@ -29,13 +29,29 @@ function webhooksRouter(db) {
     // Campo trampa para bots: si viene lleno, se responde OK pero no se guarda.
     if (body.website) return res.json({ ok: true });
 
+    // Canal y producto se reconocen por nombre (sin importar mayúsculas); si no están en la lista,
+    // se agregan al mensaje para no perder el dato.
+    const extras = [];
+    const byName = (kind, value) => {
+      if (!value) return null;
+      const item = db.prepare('SELECT id FROM catalog_items WHERE kind = ? AND active = 1 AND name = ? COLLATE NOCASE')
+        .get(kind, String(value).trim());
+      if (!item) extras.push(`${kind === 'canal' ? 'Se enteró por' : 'Producto'}: ${value}`);
+      return item?.id ?? null;
+    };
+    const channelId = byName('canal', pick(body, 'canal', 'como_se_entero', 'cómo_se_enteró', 'como_nos_conocio'));
+    const productId = byName('producto', pick(body, 'producto', 'product'));
+    const message = [pick(body, 'mensaje', 'message', 'comentarios'), ...extras].filter(Boolean).join('\n') || null;
+
     try {
       const result = ingestLead(db, {
+        channel_id: channelId,
+        product_id: productId,
         source: 'formulario',
         name: pick(body, 'nombre', 'name', 'full_name'),
         phone: pick(body, 'telefono', 'teléfono', 'phone', 'phone_number', 'whatsapp'),
         email: pick(body, 'email', 'correo'),
-        message: pick(body, 'mensaje', 'message', 'comentarios'),
+        message,
         campaign: pick(body, 'campana', 'campaña', 'campaign', 'utm_campaign'),
       });
       const redirect = pick(body, 'redirect');

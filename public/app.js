@@ -1,4 +1,4 @@
-const state = { me: null, meta: null, users: [], leads: [], view: 'board' };
+const state = { me: null, meta: null, users: [], catalog: { canal: [], producto: [] }, leads: [], view: 'board' };
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const label = (k) => state.meta.labels[k] || k;
@@ -80,7 +80,7 @@ async function start() {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
-  state.users = await api('/api/users');
+  [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
   fillFilters();
   setView(state.view);
 }
@@ -95,19 +95,29 @@ function fillFilters() {
   opts('#f-source', state.meta.sources.map((s) => [s, label(s)]));
   opts('#f-status', state.meta.statuses.map((s) => [s, label(s)]));
   opts('#f-assigned', state.users.filter((u) => u.active).map((u) => [u.id, u.name]));
+  opts('#f-product', state.catalog.producto.map((i) => [i.id, i.name]));
+  opts('#f-channel', state.catalog.canal.map((i) => [i.id, i.name]));
+}
+
+// Opciones de un <select> de la lista; incluye el valor actual aunque ya no esté activo.
+function catalogOptions(kind, current, emptyLabel) {
+  const items = state.catalog[kind].filter((i) => i.active || i.id === current);
+  return `<option value="">${esc(emptyLabel)}</option>`
+    + items.map((i) => `<option value="${i.id}" ${i.id === current ? 'selected' : ''}>${esc(i.name)}</option>`).join('');
 }
 
 function filterQuery() {
   const p = new URLSearchParams();
   const add = (k, sel) => { const v = $(sel).value.trim(); if (v) p.set(k, v); };
   add('q', '#f-q'); add('profile', '#f-profile'); add('source', '#f-source'); add('assigned', '#f-assigned');
+  add('product', '#f-product'); add('channel', '#f-channel');
   if (state.view !== 'board') add('status', '#f-status');
   return p.toString();
 }
 
 // ---------- Vistas ----------
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-['#f-profile', '#f-source', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
+['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
 $('#export').addEventListener('click', () => {
@@ -141,6 +151,7 @@ function cardHtml(l) {
     <div class="meta">
       <span class="tag ${l.source}">${esc(label(l.source))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
+      ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
     </div>
     <div class="meta">${l.assigned_name ? esc(l.assigned_name) : '<em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
   </div>`;
@@ -196,12 +207,13 @@ function renderList() {
     <td><strong>${esc(l.name || '—')}</strong><br><span class="muted">${esc(l.phone || '')} ${esc(l.email || '')}</span></td>
     <td><span class="tag status" style="background: var(--${l.status})">${esc(label(l.status))}</span></td>
     <td><span class="tag ${l.profile}">${esc(label(l.profile))}</span></td>
-    <td><span class="tag ${l.source}">${esc(label(l.source))}</span><br><span class="muted">${esc(l.campaign || '')}</span></td>
+    <td><span class="tag ${l.source}">${esc(label(l.source))}</span><br><span class="muted">${esc([l.channel_name, l.campaign].filter(Boolean).join(' · '))}</span></td>
+    <td>${esc(l.product_name || '—')}</td>
     <td>${esc(l.assigned_name || 'Sin asignar')}</td>
     <td class="muted">${fmtDate(l.created_at)}</td>
   </tr>`).join('');
   $('#view-list').innerHTML = `<p class="muted">${state.leads.length} leads</p>
-    <table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / campaña</th><th>Vendedor</th><th>Recibido</th></tr></thead>
+    <table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / canal / campaña</th><th>Producto</th><th>Vendedor</th><th>Recibido</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="6" class="muted">Sin resultados</td></tr>'}</tbody></table>`;
   $('#view-list').querySelectorAll('tbody tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openLead(tr.dataset.id)));
 }
@@ -231,11 +243,21 @@ async function renderStats() {
       <table><thead><tr><th>Vendedor</th><th>Leads</th><th>Cotizando</th><th>Vendidos</th></tr></thead><tbody>
       ${s.bySeller.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cotizando}</td><td>${r.vendidos}</td></tr>`).join('')}
       </tbody></table></div>
+    ${itemTable('Por producto', 'Producto', s.byProduct)}
+    ${itemTable('Por canal de percepción', 'Se enteró por', s.byChannel)}
     <div class="card wide"><h3>Por campaña</h3>
       <table><thead><tr><th>Campaña</th><th>Leads</th><th>Cumplen</th><th>Vendidos</th></tr></thead><tbody>
       ${s.byCampaign.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cumple}</td><td>${r.vendidos}</td></tr>`).join('')}
       </tbody></table></div>
   </div>`;
+}
+
+function itemTable(title, col, rows) {
+  return `<div class="card wide"><h3>${esc(title)}</h3>
+    <table><thead><tr><th>${esc(col)}</th><th>Leads</th><th>Cumplen</th><th>Vendidos</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.key)}</td><td>${r.n}</td><td>${r.cumple}</td><td>${r.vendidos}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">Sin datos</td></tr>'}
+    </tbody></table></div>`;
 }
 
 // ---------- Detalle de lead ----------
@@ -280,6 +302,10 @@ async function openLead(id) {
         <label>Email <input name="email" value="${esc(l.email)}" ${ro}></label>
         <label>Campaña <input name="campaign" value="${esc(l.campaign)}" ${ro}></label>
       </div>
+      <div class="row">
+        <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
+        <label>¿Cómo se enteró? <select name="channel_id" ${ro}>${catalogOptions('canal', l.channel_id, 'Sin dato')}</select></label>
+      </div>
       <p class="error" id="lead-error"></p>
       <div class="actions">
         ${l.can_edit ? '<button type="submit">Guardar</button>' : ''}
@@ -299,7 +325,7 @@ async function openLead(id) {
   form.status.addEventListener('change', () => $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado'));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'name', 'phone', 'email', 'campaign'].map((k) => [k, form[k].value]));
+    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'name', 'phone', 'email', 'campaign', 'product_id', 'channel_id'].map((k) => [k, form[k].value]));
     if (can('gerente', 'marketing')) body.assigned_to = form.assigned_to.value || null;
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body });
@@ -335,6 +361,8 @@ function openNewLead() {
       <label>Teléfono <input name="phone" inputmode="tel" autofocus></label>
       <label>Nombre <input name="name"></label>
       <label>Email <input name="email" type="email"></label>
+      <label>Producto de interés <select name="product_id">${catalogOptions('producto', null, 'Sin definir')}</select></label>
+      <label>¿Cómo se enteró de nosotros? <select name="channel_id">${catalogOptions('canal', null, 'Sin dato')}</select></label>
       <label>Campaña <input name="campaign"></label>
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
       <p class="error" id="new-error"></p>
@@ -423,6 +451,14 @@ function copyField(value, multiline = false) {
 
 async function renderSettings() {
   const s = await api('/api/settings');
+  const htmlAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const selectFor = (kind, name, first) => {
+    const items = state.catalog[kind].filter((i) => i.active);
+    if (!items.length) return '';
+    return `\n  <select name="${name}">\n    <option value="">${first}</option>\n`
+      + items.map((i) => `    <option value="${htmlAttr(i.name)}">${htmlAttr(i.name)}</option>`).join('\n')
+      + '\n  </select>';
+  };
   const snippet = `<form action="${s.form_url}" method="post">
   <input type="hidden" name="key" value="${s.form_api_key}">
   <input type="hidden" name="campana" value="sitio-web">
@@ -430,12 +466,16 @@ async function renderSettings() {
   <input name="website" style="display:none" tabindex="-1" autocomplete="off">
   <input name="nombre" placeholder="Nombre" required>
   <input name="telefono" placeholder="Teléfono" required>
-  <input name="email" type="email" placeholder="Email">
+  <input name="email" type="email" placeholder="Email">${selectFor('producto', 'producto', '¿Qué te interesa?')}${selectFor('canal', 'canal', '¿Cómo te enteraste de nosotros?')}
   <textarea name="mensaje" placeholder="¿En qué te podemos ayudar?"></textarea>
   <button>Enviar</button>
 </form>`;
 
   $('#view-settings').innerHTML = `<div class="settings">
+    <div class="lists">
+      ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
+      ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
+    </div>
     <div class="card">
       <h3>Formulario de tu página web</h3>
       <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
@@ -455,11 +495,60 @@ async function renderSettings() {
     b.textContent = 'Copiado';
     setTimeout(() => { b.textContent = 'Copiar'; }, 1500);
   }));
+  $('#view-settings').querySelectorAll('.list-form').forEach((f) => f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = f.elements.name.value.trim();
+    if (!name) return;
+    try {
+      await api('/api/catalog', { method: 'POST', body: { kind: f.dataset.kind, name } });
+      await reloadCatalog();
+      toast(`"${name}" agregado`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  }));
+  $('#view-settings').querySelectorAll('[data-item]').forEach((row) => {
+    const id = row.dataset.item;
+    $('[data-rename]', row).addEventListener('click', async () => {
+      const name = await ask('Nuevo nombre:', { input: true, okLabel: 'Guardar' });
+      if (!name) return;
+      try { await api(`/api/catalog/${id}`, { method: 'PATCH', body: { name } }); await reloadCatalog(); } catch (err) { toast(err.message, 'error'); }
+    });
+    $('[data-toggle]', row).addEventListener('click', async () => {
+      const active = row.dataset.active !== '1';
+      await api(`/api/catalog/${id}`, { method: 'PATCH', body: { active } });
+      await reloadCatalog();
+    });
+  });
   $('#regen').addEventListener('click', async () => {
     if (!await ask('El formulario de tu página dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?', { okLabel: 'Cambiar clave', danger: true })) return;
     await api('/api/settings', { method: 'PATCH', body: { regenerate_form_key: true } });
     renderSettings();
   });
+}
+
+function listEditor(kind, title, help, placeholder) {
+  const items = state.catalog[kind];
+  return `<div class="card">
+    <h3>${esc(title)}</h3>
+    <p class="muted">${esc(help)}</p>
+    <form class="list-form" data-kind="${kind}">
+      <input name="name" placeholder="${esc(placeholder)}" aria-label="Agregar a ${esc(title)}" maxlength="120">
+      <button type="submit">Agregar</button>
+    </form>
+    <ul class="items">
+      ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
+        <span>${esc(i.name)}${i.active ? '' : ' <small>(quitado)</small>'}</span>
+        <button type="button" class="ghost small" data-rename>Renombrar</button>
+        <button type="button" class="ghost small" data-toggle>${i.active ? 'Quitar' : 'Volver a usar'}</button>
+      </li>`).join('') || '<li class="muted">Todavía no hay nada. Agrega el primero arriba.</li>'}
+    </ul>
+    ${items.some((i) => !i.active) ? '<p class="muted">Lo quitado ya no aparece para elegir, pero los leads que lo tenían lo conservan.</p>' : ''}
+  </div>`;
+}
+
+async function reloadCatalog() {
+  state.catalog = await api('/api/catalog');
+  fillFilters();
+  renderSettings();
 }
 
 // ---------- Arranque ----------

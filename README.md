@@ -2,6 +2,10 @@
 
 CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
 
+## Listas: productos y canales de percepción
+
+En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.
+
 ## Roles
 
 | Rol | Qué puede hacer |
@@ -42,6 +46,8 @@ La dirección y la clave aparecen en **Configuración**, junto con un formulario
 - `email` / `correo`
 - `mensaje` / `message`
 - `campana` / `campaign` / `utm_campaign`
+- `producto`: nombre de un producto de la lista (el formulario de ejemplo ya trae el selector)
+- `canal` / `como_se_entero`: nombre de un canal de percepción de la lista
 - `redirect` (opcional): URL a la que se manda al visitante después de enviar
 - `website`: campo trampa para bots, déjalo oculto y vacío
 

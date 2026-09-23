@@ -29,6 +29,7 @@ function ingestLead(db, data) {
   const lead = {
     name: clean(data.name), phone: clean(data.phone), email: clean(data.email),
     campaign: clean(data.campaign), message: clean(data.message), source: data.source,
+    channel_id: data.channel_id || null, product_id: data.product_id || null,
   };
   if (!lead.phone && !lead.email) throw new Error('Se necesita teléfono o email');
 
@@ -38,8 +39,9 @@ function ingestLead(db, data) {
     db.prepare(`UPDATE leads SET
         name = COALESCE(name, ?), phone = COALESCE(phone, ?), phone_key = COALESCE(phone_key, ?),
         email = COALESCE(email, ?), campaign = COALESCE(?, campaign),
+        channel_id = COALESCE(channel_id, ?), product_id = COALESCE(?, product_id),
         status = ?, updated_at = ? WHERE id = ?`)
-      .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.campaign,
+      .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.campaign, lead.channel_id, lead.product_id,
         reopen ? (existing.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo') : existing.status, now(), existing.id);
     addEvent(db, existing.id, data.userId, 'contacto',
       `Nuevo contacto por ${LABELS[lead.source] || lead.source}${lead.campaign ? ` (${lead.campaign})` : ''}${lead.message ? `: ${lead.message}` : ''}`);
@@ -49,9 +51,10 @@ function ingestLead(db, data) {
 
   const ts = now();
   const { lastInsertRowid } = db.prepare(`INSERT INTO leads
-      (name, phone, phone_key, email, source, campaign, message, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.source, lead.campaign, lead.message, ts, ts);
+      (name, phone, phone_key, email, source, campaign, message, channel_id, product_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.source, lead.campaign, lead.message,
+      lead.channel_id, lead.product_id, ts, ts);
   const id = Number(lastInsertRowid);
   addEvent(db, id, data.userId, 'creado', `Lead recibido por ${LABELS[lead.source] || lead.source}`);
   return { id, created: true };

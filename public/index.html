@@ -38,7 +38,7 @@
         <button data-view="list">Lista</button>
         <button data-view="stats">Resumen</button>
         <button data-view="users" data-role="gerente">Usuarios</button>
-        <button data-view="settings" data-role="gerente">Configuración</button>
+        <button data-view="settings" data-role="gerente,marketing">Configuración</button>
       </nav>
       <span class="spacer"></span>
       <span id="me" class="muted"></span>
@@ -49,6 +49,8 @@
       <input id="f-q" type="search" placeholder="Buscar nombre, teléfono, email, campaña">
       <select id="f-profile"><option value="">Todo perfil</option></select>
       <select id="f-source"><option value="">Todo origen</option></select>
+      <select id="f-product"><option value="">Todo producto</option><option value="none">Sin producto</option></select>
+      <select id="f-channel"><option value="">Todo canal</option><option value="none">Sin dato de canal</option></select>
       <select id="f-assigned"><option value="">Todos los vendedores</option><option value="none">Sin asignar</option></select>
       <select id="f-status" class="list-only"><option value="">Todo estado</option></select>
       <span class="spacer"></span>

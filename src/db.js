@@ -14,6 +14,10 @@ const LABELS = {
   formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro',
 };
 
+const CATALOG_KINDS = ['canal', 'producto'];
+// Canales iniciales; se editan desde Configuración.
+const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
+
 function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -71,7 +75,25 @@ function openDb(dbPath) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- Listas que se administran desde Configuración: canales de percepción y productos.
+    CREATE TABLE IF NOT EXISTS catalog_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK (kind IN (${CATALOG_KINDS.map((k) => `'${k}'`).join(',')})),
+      name TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      UNIQUE (kind, name)
+    );
   `);
+
+  const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
+  if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
+  if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
+
+  if (!db.prepare("SELECT 1 FROM catalog_items WHERE kind = 'canal'").get()) {
+    const add = db.prepare("INSERT INTO catalog_items (kind, name) VALUES ('canal', ?)");
+    for (const name of DEFAULT_CHANNELS) add.run(name);
+  }
   return db;
 }
 
@@ -103,5 +125,5 @@ function phoneKey(phone) {
 }
 
 module.exports = {
-  openDb, phoneKey, getSetting, setSetting, ensureSettings, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+  openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };

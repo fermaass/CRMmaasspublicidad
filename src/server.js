@@ -1,7 +1,7 @@
 const path = require('node:path');
 const express = require('express');
 const {
-  openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, phoneKey, getSetting, setSetting, ensureSettings,
+  openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
 } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now } = require('./leads');
@@ -72,7 +72,7 @@ function createApp({ db, config }) {
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS }));
 
   // ---------- Configuración (solo gerente) ----------
-  app.get('/api/settings', auth.requireRole('gerente'), (req, res) => {
+  app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const base = `${req.protocol}://${req.get('host')}`;
     res.json({
       form_url: `${base}/webhooks/form`,
@@ -80,11 +80,55 @@ function createApp({ db, config }) {
     });
   });
 
-  app.patch('/api/settings', auth.requireRole('gerente'), (req, res) => {
+  app.patch('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const b = req.body || {};
     if (b.regenerate_form_key) setSetting(db, 'form_api_key', require('node:crypto').randomBytes(18).toString('base64url'));
     res.json({ ok: true });
   });
+
+  // ---------- Listas: canales de percepción y productos ----------
+  app.get('/api/catalog', auth.requireUser, (req, res) => {
+    const items = db.prepare('SELECT id, kind, name, active FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
+    res.json(Object.fromEntries(CATALOG_KINDS.map((k) => [k, items.filter((i) => i.kind === k)])));
+  });
+
+  app.post('/api/catalog', auth.requireRole(...EDITORS), (req, res) => {
+    const kind = req.body?.kind;
+    const name = String(req.body?.name || '').trim();
+    if (!CATALOG_KINDS.includes(kind) || !name) return res.status(400).json({ error: 'Escribe un nombre' });
+    const existing = db.prepare('SELECT id, active FROM catalog_items WHERE kind = ? AND name = ? COLLATE NOCASE').get(kind, name);
+    if (existing?.active) return res.status(409).json({ error: 'Ya está en la lista' });
+    if (existing) {
+      db.prepare('UPDATE catalog_items SET active = 1 WHERE id = ?').run(existing.id);
+      return res.json({ id: existing.id });
+    }
+    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name) VALUES (?, ?)').run(kind, name.slice(0, 120));
+    res.status(201).json({ id: Number(lastInsertRowid) });
+  });
+
+  // No se borran: se desactivan para que los leads que ya los tienen conserven el dato.
+  app.patch('/api/catalog/:id', auth.requireRole(...EDITORS), (req, res) => {
+    const item = db.prepare('SELECT * FROM catalog_items WHERE id = ?').get(Number(req.params.id));
+    if (!item) return res.status(404).json({ error: 'No existe' });
+    const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : item.name;
+    if (!name) return res.status(400).json({ error: 'Escribe un nombre' });
+    const active = req.body?.active !== undefined ? (req.body.active ? 1 : 0) : item.active;
+    try {
+      db.prepare('UPDATE catalog_items SET name = ?, active = ? WHERE id = ?').run(name, active, item.id);
+    } catch {
+      return res.status(409).json({ error: 'Ya hay otro elemento con ese nombre' });
+    }
+    res.json({ ok: true });
+  });
+
+  // Valida un id de la lista; undefined = no cambia, null = sin valor.
+  function catalogId(kind, value) {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    const item = db.prepare('SELECT id FROM catalog_items WHERE id = ? AND kind = ?').get(Number(value), kind);
+    if (!item) throw new Error(kind === 'canal' ? 'Canal inválido' : 'Producto inválido');
+    return item.id;
+  }
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
@@ -125,7 +169,10 @@ function createApp({ db, config }) {
   });
 
   // ---------- Leads ----------
-  const leadSelect = `SELECT l.*, u.name AS assigned_name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to`;
+  const leadSelect = `SELECT l.*, u.name AS assigned_name, ch.name AS channel_name, pr.name AS product_name FROM leads l
+    LEFT JOIN users u ON u.id = l.assigned_to
+    LEFT JOIN catalog_items ch ON ch.id = l.channel_id
+    LEFT JOIN catalog_items pr ON pr.id = l.product_id`;
 
   function leadFilters(req) {
     const where = [];
@@ -138,6 +185,10 @@ function createApp({ db, config }) {
     if (q.assigned === 'none') where.push('l.assigned_to IS NULL');
     else if (q.assigned) { where.push('l.assigned_to = ?'); params.push(Number(q.assigned)); }
     if (q.campaign) { where.push('l.campaign = ?'); params.push(String(q.campaign)); }
+    for (const [param, col] of [['channel', 'l.channel_id'], ['product', 'l.product_id']]) {
+      if (q[param] === 'none') where.push(`${col} IS NULL`);
+      else if (q[param]) { where.push(`${col} = ?`); params.push(Number(q[param])); }
+    }
     if (q.from) { where.push('l.created_at >= ?'); params.push(String(q.from)); }
     if (q.to) { where.push('l.created_at < ?'); params.push(String(q.to)); }
     if (q.q) {
@@ -169,7 +220,7 @@ function createApp({ db, config }) {
     const { sql, params } = leadFilters(req);
     const rows = db.prepare(`${leadSelect} ${sql} ORDER BY l.created_at DESC`).all(...params);
     const cols = [['id', 'ID'], ['name', 'Nombre'], ['phone', 'Teléfono'], ['email', 'Email'], ['source', 'Origen'],
-      ['campaign', 'Campaña'], ['status', 'Estado'], ['profile', 'Perfil'], ['decline_reason', 'Motivo declinado'],
+      ['campaign', 'Campaña'], ['channel_name', 'Se enteró por'], ['product_name', 'Producto'], ['status', 'Estado'], ['profile', 'Perfil'], ['decline_reason', 'Motivo declinado'],
       ['assigned_name', 'Vendedor'], ['created_at', 'Fecha']];
     const esc = (v) => {
       const s = v == null ? '' : String(v);
@@ -193,7 +244,9 @@ function createApp({ db, config }) {
     try {
       if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
       // Si el contacto ya existía, ingestLead lo registra en su historial en vez de duplicarlo.
-      const result = ingestLead(db, { ...b, userId: req.user.id });
+      const result = ingestLead(db, {
+        ...b, userId: req.user.id, channel_id: catalogId('canal', b.channel_id), product_id: catalogId('producto', b.product_id),
+      });
       if (!result.created) {
         const owner = db.prepare('SELECT l.assigned_to, u.name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?')
           .get(result.id);
@@ -215,9 +268,11 @@ function createApp({ db, config }) {
     if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
     const b = req.body || {};
 
-    let next;
+    let next; let channelId; let productId;
     try {
       next = resolveStatusProfile(lead, { status: b.status, profile: b.profile });
+      channelId = catalogId('canal', b.channel_id) ?? (b.channel_id === undefined ? lead.channel_id : null);
+      productId = catalogId('producto', b.product_id) ?? (b.product_id === undefined ? lead.product_id : null);
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
@@ -236,9 +291,13 @@ function createApp({ db, config }) {
     const declineReason = next.status === 'declinado' ? field('decline_reason') : null;
 
     db.prepare(`UPDATE leads SET name = ?, phone = ?, phone_key = ?, email = ?, campaign = ?, status = ?, profile = ?,
-      decline_reason = ?, assigned_to = ?, updated_at = ? WHERE id = ?`)
+      decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, updated_at = ? WHERE id = ?`)
       .run(field('name'), phone, phoneKey(phone), field('email'), field('campaign'), next.status, next.profile,
-        declineReason, assigned, now(), lead.id);
+        declineReason, assigned, channelId, productId, now(), lead.id);
+
+    const itemName = (id) => (id ? db.prepare('SELECT name FROM catalog_items WHERE id = ?').get(id).name : 'ninguno');
+    if (productId !== lead.product_id) addEvent(db, lead.id, req.user.id, 'perfil', `Producto: ${itemName(productId)}`);
+    if (channelId !== lead.channel_id) addEvent(db, lead.id, req.user.id, 'perfil', `Se enteró por: ${itemName(channelId)}`);
 
     if (next.status !== lead.status) {
       addEvent(db, lead.id, req.user.id, 'estado',
@@ -287,8 +346,14 @@ function createApp({ db, config }) {
     const byCampaign = db.prepare(`SELECT COALESCE(l.campaign, 'Sin campaña') AS key, COUNT(*) AS n,
         SUM(l.profile = 'cumple') AS cumple, SUM(l.status = 'vendido') AS vendidos
       FROM leads l ${sql} GROUP BY l.campaign ORDER BY n DESC LIMIT 20`).all(...params);
+    const byItem = (col, empty) => db.prepare(`SELECT COALESCE(c.name, '${empty}') AS key, COUNT(*) AS n,
+        SUM(l.profile = 'cumple') AS cumple, SUM(l.status = 'vendido') AS vendidos
+      FROM leads l LEFT JOIN catalog_items c ON c.id = ${col} ${sql} GROUP BY ${col} ORDER BY n DESC`).all(...params);
     const total = db.prepare(`SELECT COUNT(*) AS n FROM leads l ${sql}`).get(...params).n;
-    res.json({ total, byStatus: group('l.status'), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign });
+    res.json({
+      total, byStatus: group('l.status'), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
+      byChannel: byItem('l.channel_id', 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
+    });
   });
 
   app.use(express.static(path.join(__dirname, '..', 'public')));

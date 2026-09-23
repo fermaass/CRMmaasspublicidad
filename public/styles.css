@@ -83,6 +83,17 @@ tbody tr:hover { background: #f7f9fc; }
 .settings li { margin-bottom: 6px; }
 .copy { display: flex; gap: 8px; margin: 6px 0 10px; align-items: flex-start; }
 .copy input, .copy textarea { flex: 1; font-family: ui-monospace, monospace; font-size: 12px; background: #fafbfc; }
+.lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.lists .card { margin: 12px 0 0; }
+.list-form { display: flex; gap: 8px; }
+.list-form input { flex: 1; min-width: 0; }
+.items { list-style: none; padding: 0; margin: 8px 0 0; }
+.items li { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.items li span { flex: 1; }
+.items li.inactive span { color: var(--muted); text-decoration: line-through; }
+.items li small { text-decoration: none; }
+button.small { padding: 3px 8px; font-size: 12px; }
+.tag.product { background: #eef3ff; color: var(--accent); }
 .ok { color: var(--vendido); }
 .warn { color: var(--cotizando); }
 
