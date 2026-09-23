@@ -17,6 +17,40 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// ---------- Avisos y confirmaciones dentro de la página ----------
+function toast(message, kind = '') {
+  const el = $('#toast');
+  el.textContent = message;
+  el.className = `toast ${kind}`;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { el.className = 'toast hidden'; }, 3500);
+}
+
+// Devuelve true/false, o el texto escrito si se pide un campo (null si se cancela).
+function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const modal = $('#modal');
+    $('#modal-text').textContent = message;
+    const field = $('#modal-input');
+    field.classList.toggle('hidden', !input);
+    field.value = '';
+    field.placeholder = placeholder;
+    const ok = $('#modal-ok');
+    ok.textContent = okLabel;
+    ok.classList.toggle('danger', danger);
+    modal.classList.remove('hidden');
+    (input ? field : ok).focus();
+    const close = (value) => {
+      modal.classList.add('hidden');
+      ok.onclick = null; $('#modal-cancel').onclick = null; field.onkeydown = null;
+      resolve(value);
+    };
+    ok.onclick = () => close(input ? field.value.trim() : true);
+    $('#modal-cancel').onclick = () => close(input ? null : false);
+    field.onkeydown = (e) => { if (e.key === 'Enter') ok.onclick(); };
+  });
+}
+
 // ---------- Sesión ----------
 function showLogin() {
   state.me = null;
@@ -76,7 +110,10 @@ document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('clic
 ['#f-profile', '#f-source', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
-$('#export').addEventListener('click', () => { window.location = `/api/leads.csv?${filterQuery()}`; });
+$('#export').addEventListener('click', () => {
+  if (window.crmExport) return window.crmExport(filterQuery());
+  window.location = `/api/leads.csv?${filterQuery()}`;
+});
 $('#new-lead').addEventListener('click', openNewLead);
 
 function setView(view) {
@@ -144,13 +181,13 @@ function renderBoard() {
 async function changeStatus(lead, status) {
   const body = { status };
   if (status === 'declinado') {
-    const reason = prompt('Motivo por el que se declina (opcional):');
+    const reason = await ask('¿Por qué se declina? (opcional, ayuda a marketing)', { input: true, placeholder: 'Ej. presupuesto, eligió a otro proveedor', okLabel: 'Declinar' });
     if (reason === null) return;
     body.decline_reason = reason;
   }
   try {
     await api(`/api/leads/${lead.id}`, { method: 'PATCH', body });
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, 'error'); }
   refresh();
 }
 
@@ -271,10 +308,10 @@ async function openLead(id) {
     } catch (err) { $('#lead-error').textContent = err.message; }
   });
   $('#take')?.addEventListener('click', async () => {
-    try { await api(`/api/leads/${l.id}/take`, { method: 'POST' }); openLead(l.id); refresh(); } catch (err) { alert(err.message); }
+    try { await api(`/api/leads/${l.id}/take`, { method: 'POST' }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
   });
   $('#delete')?.addEventListener('click', async () => {
-    if (!confirm('¿Eliminar este lead y su historial? No se puede deshacer.')) return;
+    if (!await ask('¿Eliminar este lead y su historial? No se puede deshacer.', { okLabel: 'Eliminar', danger: true })) return;
     await api(`/api/leads/${l.id}`, { method: 'DELETE' });
     closeDrawer(); refresh();
   });
@@ -353,13 +390,13 @@ async function renderUsers() {
   });
   $('#view-users').querySelectorAll('tbody tr').forEach((tr) => {
     const patch = async (body) => {
-      try { await api(`/api/users/${tr.dataset.id}`, { method: 'PATCH', body }); } catch (err) { alert(err.message); }
+      try { await api(`/api/users/${tr.dataset.id}`, { method: 'PATCH', body }); } catch (err) { toast(err.message, 'error'); }
       renderUsers();
     };
     $('[data-f=role]', tr).addEventListener('change', (e) => patch({ role: e.target.value }));
     $('[data-f=active]', tr).addEventListener('change', (e) => patch({ active: e.target.checked }));
-    $('[data-f=password]', tr).addEventListener('click', () => {
-      const password = prompt('Nueva contraseña (mínimo 8 caracteres):');
+    $('[data-f=password]', tr).addEventListener('click', async () => {
+      const password = await ask('Nueva contraseña (mínimo 8 caracteres):', { input: true, okLabel: 'Cambiar' });
       if (password) patch({ password });
     });
   });
@@ -419,7 +456,7 @@ async function renderSettings() {
     setTimeout(() => { b.textContent = 'Copiar'; }, 1500);
   }));
   $('#regen').addEventListener('click', async () => {
-    if (!confirm('El formulario actual dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?')) return;
+    if (!await ask('El formulario de tu página dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?', { okLabel: 'Cambiar clave', danger: true })) return;
     await api('/api/settings', { method: 'PATCH', body: { regenerate_form_key: true } });
     renderSettings();
   });

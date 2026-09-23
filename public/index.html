@@ -70,6 +70,18 @@
     <aside class="drawer-panel" id="drawer-body"></aside>
   </div>
 
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-text">
+    <div class="card modal-box">
+      <p id="modal-text"></p>
+      <input id="modal-input" class="hidden">
+      <div class="actions">
+        <button type="button" id="modal-ok">Aceptar</button>
+        <button type="button" class="ghost" id="modal-cancel">Cancelar</button>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden" role="status"></div>
+
   <script src="app.js"></script>
 </body>
 </html>
