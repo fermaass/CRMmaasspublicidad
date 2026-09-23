@@ -101,6 +101,15 @@ main { padding: 0 16px 28px; }
 .lead-card .name { font-weight: 600; }
 .lead-card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .lead-card .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.lead-card.compact { padding: 11px 13px; }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.card-top .name { line-height: 1.3; }
+.card-top .avatar { width: 26px; height: 26px; font-size: 11px; margin: 0; flex: none; }
+.card-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; }
+.card-bottom .touch-badge { margin: 0; white-space: normal; }
+.card-bottom .ago { font-size: 11px; color: var(--muted); white-space: nowrap; margin-left: auto; }
+.drawer-panel .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; }
+.contact-line { margin: 2px 0 0; color: var(--text); }
 .avatar { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff;
   font-size: 10px; font-weight: 700; margin-right: 4px; vertical-align: -5px; }
 .avatar.none { background: var(--empty); }

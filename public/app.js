@@ -206,20 +206,36 @@ async function refresh() {
   renderBoardAlert();
 }
 
+// Tarjeta mínima: quién es, qué toca hacer y de quién es. El resto está en la ficha.
 function cardHtml(l) {
-  return `<div class="lead-card" draggable="${canEditLead(l)}" data-id="${l.id}">
-    <div class="name">${esc(l.name || l.phone || l.email)}</div>
-    <div class="meta">${esc([l.phone, l.email].filter(Boolean).join(' · '))}</div>
-    <div class="tags">
-      <span class="tag ${l.source}">${esc(label(l.source))}</span>
-      <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
-      ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
-    </div>
-    ${touchBadge(l)}
-    <div class="meta">${l.assigned_name
-      ? `<span class="avatar" aria-hidden="true">${esc(initials(l.assigned_name))}</span>${esc(l.assigned_name)}`
-      : '<span class="avatar none" aria-hidden="true">?</span><em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
+  const owner = l.assigned_name
+    ? `<span class="avatar" title="${esc(l.assigned_name)}">${esc(initials(l.assigned_name))}</span>`
+    : '<span class="avatar none" title="Sin asignar">?</span>';
+  return `<div class="lead-card compact" draggable="${canEditLead(l)}" data-id="${l.id}">
+    <div class="card-top"><span class="name">${esc(l.name || l.phone || l.email)}</span>${owner}</div>
+    <div class="card-bottom">${cardAction(l)}<span class="ago">${timeAgo(l.updated_at)}</span></div>
   </div>`;
+}
+
+// Lo único que el vendedor necesita saber de un vistazo, según la etapa.
+function cardAction(l) {
+  if (l.status === 'nuevo') return touchBadge(l) || '<span class="touch-badge">Sin toques</span>';
+  if (l.status === 'nuevo_perfil') return touchBadge(l);
+  if (l.status === 'cotizando') {
+    return `<span class="touch-badge">${icon('file', 13)} ${l.quote_touch ? `Cotizado en el toque ${l.quote_touch}` : 'Cotizado'}</span>`;
+  }
+  if (l.status === 'declinado') return `<span class="touch-badge late">${esc(l.decline_reason || 'Sin motivo')}</span>`;
+  return `<span class="touch-badge ok">${icon('check', 13)} ${l.sale_amount ? money(l.sale_amount) : 'Vendido'}</span>`;
+}
+
+function timeAgo(iso) {
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (min < 1) return 'ahora';
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h / 24);
+  return `hace ${d} ${d === 1 ? 'día' : 'días'}`;
 }
 
 function canEditLead(l) {
@@ -241,12 +257,12 @@ function touchDue(l) {
 
 function touchBadge(l) {
   const t = state.meta.touches;
-  if (l.response_touch) return `<div class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</div>`;
+  if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
   const d = touchDue(l);
-  if (!d) return l.touch_count ? `<div class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</div>` : '';
-  const when = d.days < 0 ? `vencido hace ${-d.days} ${d.days === -1 ? 'día' : 'días'}` : d.days === 0 ? 'toca hoy' : d.days === 1 ? 'mañana' : `en ${d.days} días`;
+  if (!d) return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
+  const when = d.days < 0 ? `${-d.days} ${d.days === -1 ? 'día' : 'días'} tarde` : d.days === 0 ? 'toca hoy' : d.days === 1 ? 'mañana' : `en ${d.days} días`;
   const cls = d.days < 0 ? 'late' : d.days === 0 ? 'today' : '';
-  return `<div class="touch-badge ${cls}">${icon('phone', 13)} Toque ${d.n}/${t.max} · ${when}</div>`;
+  return `<span class="touch-badge ${cls}">${icon('phone', 13)} Toque ${d.n}/${t.max} · ${when}</span>`;
 }
 
 // Aviso arriba del tablero con los toques vencidos y los de hoy.
@@ -744,8 +760,15 @@ async function openLead(id) {
   openDrawer(`
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>${esc(l.name || l.phone || l.email)}</h2>
-    <p class="muted">Recibido ${fmtDate(l.created_at)} por <span class="tag ${l.source}">${esc(label(l.source))}</span>
-      ${waLink ? `· <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
+    <p class="contact-line">${[l.phone && esc(l.phone), l.email && esc(l.email)].filter(Boolean).join(' · ')}
+      ${waLink ? ` · <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
+    <div class="tags">
+      <span class="tag ${l.source}">${esc(label(l.source))}</span>
+      <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
+      ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
+      ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : ''}
+    </div>
+    <p class="muted small-note">Recibido ${fmtDate(l.created_at)}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}</p>
     ${milestones(l)}
     ${touchesPanel(l, touches)}
     ${l.message ? `<p class="card">${esc(l.message)}</p>` : ''}
