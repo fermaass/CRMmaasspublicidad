@@ -2,6 +2,7 @@ const path = require('node:path');
 const express = require('express');
 const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, DECLINE_REASONS,
 } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName } = require('./leads');
@@ -69,7 +70,9 @@ function createApp({ db, config }) {
 
   app.get('/api/me', auth.requireUser, (req, res) => res.json(req.user));
 
-  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS }));
+  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
+    touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
+    declineReasons: DECLINE_REASONS }));
 
   // ---------- Configuración (solo gerente) ----------
   app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
@@ -285,8 +288,14 @@ function createApp({ db, config }) {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
-    const b = req.body || {};
+    const err = updateLead(req.user, lead, req.body || {});
+    if (err) return res.status(err.status).json({ error: err.error });
+    res.json({ ok: true });
+  });
 
+  // Aplica cambios a un lead (desde la ficha, el tablero o un toque) y registra los hitos del embudo.
+  // Devuelve { status, error } si algo no es válido.
+  function updateLead(user, lead, b) {
     let next; let channelId; let productId; let campaign; let saleAmount;
     try {
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
@@ -295,15 +304,15 @@ function createApp({ db, config }) {
       channelId = catalogId('canal', b.channel_id) ?? (b.channel_id === undefined ? lead.channel_id : null);
       productId = catalogId('producto', b.product_id) ?? (b.product_id === undefined ? lead.product_id : null);
     } catch (err) {
-      return res.status(400).json({ error: err.message });
+      return { status: 400, error: err.message };
     }
 
     let assigned = lead.assigned_to;
     if (b.assigned_to !== undefined) {
-      if (!EDITORS.includes(req.user.role)) return res.status(403).json({ error: 'Solo gerente o marketing asignan leads' });
+      if (!EDITORS.includes(user.role)) return { status: 403, error: 'Solo gerente o marketing asignan leads' };
       assigned = b.assigned_to ? Number(b.assigned_to) : null;
       if (assigned && !db.prepare("SELECT 1 FROM users WHERE id = ? AND active = 1").get(assigned)) {
-        return res.status(400).json({ error: 'Usuario inválido' });
+        return { status: 400, error: 'Usuario inválido' };
       }
     }
 
@@ -325,37 +334,92 @@ function createApp({ db, config }) {
       m.quoted_at ||= ts;
       m.contacted_at ||= ts; // si ya cotizó, el cliente contestó
     }
-    if (next.status === 'vendido') m.won_at ||= ts;
+    if (next.status === 'vendido') { m.won_at ||= ts; m.quoted_at ||= ts; }
+
+    // En qué toque respondió y en qué toque se cotizó (si ya hubo toques registrados).
+    const touchNow = lead.touch_count > 0 ? lead.touch_count : null;
+    let responseTouch = m.contacted_at ? lead.response_touch : null;
+    if (m.contacted_at && !lead.contacted_at && !responseTouch) responseTouch = touchNow;
+    const quoteTouch = m.quoted_at && !lead.quoted_at ? touchNow : lead.quote_touch;
 
     db.prepare(`UPDATE leads SET name = ?, phone = ?, phone_key = ?, email = ?, campaign = ?, status = ?, profile = ?,
       decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, assigned_at = ?, contacted_at = ?,
-      profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, sale_amount = ?, updated_at = ? WHERE id = ?`)
+      profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, sale_amount = ?, response_touch = ?, quote_touch = ?,
+      updated_at = ? WHERE id = ?`)
       .run(field('name'), phone, phoneKey(phone), field('email'), campaign, next.status, next.profile,
         declineReason, assigned, channelId, productId, m.assigned_at, m.contacted_at,
-        m.profiled_at, m.quoted_at, m.won_at, m.declined_at, saleAmount, ts, lead.id);
+        m.profiled_at, m.quoted_at, m.won_at, m.declined_at, saleAmount, responseTouch, quoteTouch, ts, lead.id);
 
-    if (campaign !== lead.campaign) addEvent(db, lead.id, req.user.id, 'perfil', `Campaña: ${campaign || 'ninguna'}`);
+    if (campaign !== lead.campaign) addEvent(db, lead.id, user.id, 'perfil', `Campaña: ${campaign || 'ninguna'}`);
     if (saleAmount !== lead.sale_amount && saleAmount != null) {
-      addEvent(db, lead.id, req.user.id, 'estado', `Monto de venta: $${saleAmount.toLocaleString('es-MX')}`);
+      addEvent(db, lead.id, user.id, 'estado', `Monto de venta: $${saleAmount.toLocaleString('es-MX')}`);
     }
 
-    if (m.contacted_at && !lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'El cliente contestó');
-    if (!m.contacted_at && lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'Se desmarcó "El cliente contestó"');
+    if (m.contacted_at && !lead.contacted_at) addEvent(db, lead.id, user.id, 'contacto', 'El cliente contestó');
+    if (!m.contacted_at && lead.contacted_at) addEvent(db, lead.id, user.id, 'contacto', 'Se desmarcó "El cliente contestó"');
 
     const itemName = (id) => (id ? db.prepare('SELECT name FROM catalog_items WHERE id = ?').get(id).name : 'ninguno');
-    if (productId !== lead.product_id) addEvent(db, lead.id, req.user.id, 'perfil', `Producto: ${itemName(productId)}`);
-    if (channelId !== lead.channel_id) addEvent(db, lead.id, req.user.id, 'perfil', `Se enteró por: ${itemName(channelId)}`);
+    if (productId !== lead.product_id) addEvent(db, lead.id, user.id, 'perfil', `Producto: ${itemName(productId)}`);
+    if (channelId !== lead.channel_id) addEvent(db, lead.id, user.id, 'perfil', `Se enteró por: ${itemName(channelId)}`);
 
     if (next.status !== lead.status) {
-      addEvent(db, lead.id, req.user.id, 'estado',
+      addEvent(db, lead.id, user.id, 'estado',
         `${LABELS[lead.status]} → ${LABELS[next.status]}${declineReason ? ` (motivo: ${declineReason})` : ''}`);
     }
-    if (next.profile !== lead.profile) addEvent(db, lead.id, req.user.id, 'perfil', `Perfil: ${LABELS[next.profile]}`);
+    if (next.profile !== lead.profile) addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${LABELS[next.profile]}`);
     if (assigned !== lead.assigned_to) {
       const name = assigned ? db.prepare('SELECT name FROM users WHERE id = ?').get(assigned).name : 'nadie';
-      addEvent(db, lead.id, req.user.id, 'asignacion', `Asignado a ${name}`);
+      addEvent(db, lead.id, user.id, 'asignacion', `Asignado a ${name}`);
     }
-    res.json({ ok: true });
+    return null;
+  }
+
+  // ---------- Toques ----------
+  // Cada toque es un intento de contacto; su resultado mueve al lead de etapa.
+  app.get('/api/leads/:id/touches', auth.requireUser, (req, res) => {
+    const lead = getLead(req, Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: 'No existe' });
+    res.json(db.prepare(`SELECT t.*, u.name AS user_name FROM lead_touches t LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.lead_id = ? ORDER BY t.n`).all(lead.id));
+  });
+
+  app.post('/api/leads/:id/touches', auth.requireUser, (req, res) => {
+    const lead = getLead(req, Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: 'No existe' });
+    if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'Toma el lead primero para registrar toques' });
+    const { channel, outcome } = req.body || {};
+    if (!TOUCH_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Indica por qué medio fue el toque' });
+    const allowed = OUTCOMES_BY_STATUS[lead.status];
+    if (!allowed) return res.status(409).json({ error: 'Este lead ya está cerrado; reábrelo para registrar más toques' });
+    if (!allowed.includes(outcome)) return res.status(400).json({ error: 'Ese resultado no aplica en esta etapa' });
+
+    const changes = {};
+    if (outcome !== 'sin_respuesta') changes.contacted = true;
+    if (outcome === 'cumple') changes.profile = 'cumple';
+    if (outcome === 'no_cumple') Object.assign(changes, { profile: 'no_cumple', status: 'declinado', decline_reason: 'No cumple perfil' });
+    if (outcome === 'cotizado') {
+      changes.status = 'cotizando';
+      if (lead.profile === 'sin_perfilar') changes.profile = 'cumple';
+    }
+    if (outcome === 'vendido') Object.assign(changes, { status: 'vendido', sale_amount: req.body.sale_amount ?? undefined });
+    if (outcome === 'rechazo') {
+      if (!DECLINE_REASONS.includes(req.body.decline_reason)) return res.status(400).json({ error: 'Elige el motivo' });
+      Object.assign(changes, { status: 'declinado', decline_reason: req.body.decline_reason });
+    }
+    const n = (lead.touch_count || 0) + 1;
+    // Cinco toques sin que el cliente haya respondido nunca: se declina solo.
+    const autoDecline = outcome === 'sin_respuesta' && !lead.contacted_at && n === MAX_TOUCHES;
+    if (autoDecline) Object.assign(changes, { status: 'declinado', decline_reason: NO_ANSWER });
+
+    const ts = now();
+    db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(lead.id, n, req.user.id, channel, outcome, ts);
+    db.prepare('UPDATE leads SET touch_count = ?, last_touch_at = ?, updated_at = ? WHERE id = ?').run(n, ts, ts, lead.id);
+    addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
+
+    const err = updateLead(req.user, getLead(req, lead.id), changes);
+    if (err) return res.status(err.status).json({ error: err.error });
+    res.status(201).json({ ok: true, n, auto_declined: autoDecline });
   });
 
   app.post('/api/leads/:id/take', auth.requireRole('vendedor'), (req, res) => {
@@ -421,12 +485,28 @@ function createApp({ db, config }) {
     // Eficiencia por vendedor: lo que recibe, cuántos contestan, cotiza y cierra, y horas promedio hasta que el cliente contesta.
     const sellerFunnel = db.prepare(`SELECT l.assigned_to AS id, COALESCE(u.name, 'Sin asignar') AS key, ${funnelCols},
       AVG(CASE WHEN l.contacted_at IS NOT NULL
-        THEN (julianday(l.contacted_at) - julianday(COALESCE(l.assigned_at, l.created_at))) * 24 END) AS horas_contacto
+        THEN (julianday(l.contacted_at) - julianday(COALESCE(l.assigned_at, l.created_at))) * 24 END) AS horas_contacto,
+      AVG(l.response_touch) AS toques_respuesta, AVG(l.quote_touch) AS toques_cotizacion
       FROM leads l LEFT JOIN users u ON u.id = l.assigned_to ${sql} GROUP BY l.assigned_to
       ORDER BY l.assigned_to IS NULL, cerrados DESC, recibidos DESC`).all(...params);
 
+    // Toques: en qué toque responden, en qué toque se cotiza, por qué se pierden y qué toques están vencidos.
+    const where = (cond) => `${sql ? `${sql} AND` : 'WHERE'} ${cond}`;
+    const byTouch = (col) => db.prepare(`SELECT l.${col} AS n, COUNT(*) AS c FROM leads l ${where(`l.${col} IS NOT NULL`)}
+      GROUP BY 1 ORDER BY 1`).all(...params);
+    const touches = {
+      response: byTouch('response_touch'),
+      quote: byTouch('quote_touch'),
+      noAnswer: db.prepare(`SELECT COUNT(*) AS n FROM leads l ${where('l.decline_reason = ?')}`).get(...params, NO_ANSWER).n,
+      declineReasons: db.prepare(`SELECT COALESCE(l.decline_reason, 'Sin motivo') AS key, COUNT(*) AS n FROM leads l
+        ${where("l.status = 'declinado'")} GROUP BY 1 ORDER BY n DESC`).all(...params),
+      ...pendingTouches(db.prepare(`SELECT l.assigned_to, l.assigned_at, l.created_at, l.touch_count FROM leads l
+        ${where("l.status = 'nuevo' AND l.contacted_at IS NULL AND l.touch_count < " + MAX_TOUCHES)}`).all(...params)),
+    };
+    sellerFunnel.forEach((r) => { r.toques_vencidos = touches.overdueBySeller[r.id ?? 'none'] || 0; });
+
     res.json({
-      funnel, campaignFunnel, sellerFunnel,
+      funnel, campaignFunnel, sellerFunnel, touches,
       byDay,
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", 'LEFT JOIN catalog_items c ON c.id = l.channel_id'),
@@ -439,6 +519,29 @@ function createApp({ db, config }) {
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
   return app;
+}
+
+// Fecha en que toca el siguiente toque según la cadencia de 12 días (null si ya no aplica).
+function nextTouchDue(lead) {
+  if (lead.touch_count >= MAX_TOUCHES) return null;
+  const base = new Date(lead.assigned_at || lead.created_at);
+  return new Date(base.getTime() + CADENCE_DAYS[lead.touch_count] * 86400e3);
+}
+
+function pendingTouches(leads) {
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  let overdue = 0; let today = 0; const overdueBySeller = {};
+  for (const l of leads) {
+    const due = nextTouchDue(l);
+    if (!due || due > endOfToday) continue;
+    if (due < startOfToday) {
+      overdue++;
+      const k = l.assigned_to ?? 'none';
+      overdueBySeller[k] = (overdueBySeller[k] || 0) + 1;
+    } else today++;
+  }
+  return { overdue, today, overdueBySeller };
 }
 
 function seedAdmin(db, config) {

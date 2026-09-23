@@ -6,9 +6,25 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads de
 
 Cada lead guarda la fecha en que pasó por cada paso: **recibido → contestó → perfilado (cumple perfil) → cotizado → cerrado**. Esos pasos no se borran aunque el lead se decline, así que un lead que cotizó y luego se perdió sigue contando como cotizado. El embudo es acumulado: llegar a un paso cuenta también los anteriores (si se cotizó, el cliente contestó).
 
-- En la ficha del lead se marca **"El cliente ya contestó"**.
+- Que el cliente contestó se registra con los toques (ver abajo).
 - El **Resumen** muestra el embudo, la conversión por campaña y la eficiencia por vendedor (cuántos recibe, cuántos le contestan, cuántos perfila, cotiza y cierra, y el tiempo promedio desde la asignación hasta que el cliente contesta).
 - Todo se puede filtrar por periodo (este mes, mes pasado, 30/90 días, este año) y por campaña.
+
+## Toques y cadencia
+
+Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una cadencia de **12 días**: día 0, 1, 3, 7 y 12 desde que se asigna. En la ficha del lead se registra cada toque con su medio (llamada, WhatsApp, correo o visita) y su resultado, y **el resultado mueve al lead de etapa**:
+
+| Etapa | Resultados posibles |
+|---|---|
+| Nuevo | No contestó · Contestó y cumple perfil (→ Cumple perfil) · Contestó pero no cumple (→ Declinado) · Contestó, falta perfilar |
+| Cumple perfil | No contestó · Sigue en conversación · Se envió cotización (→ Cotizando) · No le interesó (→ Declinado, con motivo) |
+| Cotizando | No contestó · Sigue en conversación · Cerró venta (→ Vendido, con monto) · Rechazó (→ Declinado, con motivo) |
+
+Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". Cuando el cliente ya respondió, los toques siguen contando (para saber en cuál se cotizó y cerró) sin límite. Las tarjetas muestran el siguiente toque y si está vencido, y arriba del tablero aparece cuántos toques están vencidos o tocan hoy.
+
+Los motivos de declinado son una lista fija: No contestó (5 toques), No cumple perfil, Precio, Eligió a otro proveedor, Lo pospuso / sin presupuesto ahora, Otro.
+
+El Resumen muestra **en qué toque responden** los leads, **en qué toque se cotiza**, **por qué se pierden** y, por vendedor, los toques promedio hasta respuesta y cotización y sus toques vencidos.
 
 ## Campañas y su eficiencia
 

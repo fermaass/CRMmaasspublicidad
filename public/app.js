@@ -35,6 +35,7 @@ const ICONS = {
   radio: '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
   layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
   sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>',
 };
 const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -68,10 +69,14 @@ function toast(message, kind = '') {
 }
 
 // Devuelve true/false, o el texto escrito si se pide un campo (null si se cancela).
-function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', danger = false } = {}) {
+// Con `options` muestra una lista para elegir y devuelve la opción elegida.
+function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', danger = false, options = null } = {}) {
   return new Promise((resolve) => {
     const modal = $('#modal');
     $('#modal-text').textContent = message;
+    const select = $('#modal-select');
+    select.classList.toggle('hidden', !options);
+    select.innerHTML = (options || []).map((o) => `<option>${esc(o)}</option>`).join('');
     const field = $('#modal-input');
     field.classList.toggle('hidden', !input);
     field.value = '';
@@ -86,8 +91,8 @@ function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', da
       ok.onclick = null; $('#modal-cancel').onclick = null; field.onkeydown = null;
       resolve(value);
     };
-    ok.onclick = () => close(input ? field.value.trim() : true);
-    $('#modal-cancel').onclick = () => close(input ? null : false);
+    ok.onclick = () => close(options ? select.value : input ? field.value.trim() : true);
+    $('#modal-cancel').onclick = () => close(input || options ? null : false);
     field.onkeydown = (e) => { if (e.key === 'Enter') ok.onclick(); };
   });
 }
@@ -187,6 +192,7 @@ function setView(view) {
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
   $('.toolbar').classList.toggle('hidden', ['users', 'settings'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
+  if (!['board', 'list'].includes(view)) $('#board-alert').classList.add('hidden');
   refresh();
 }
 
@@ -197,6 +203,7 @@ async function refresh() {
   if (state.view === 'stats') return renderStats();
   state.leads = await api(`/api/leads?${filterQuery()}`);
   state.view === 'board' ? renderBoard() : renderList();
+  renderBoardAlert();
 }
 
 function cardHtml(l) {
@@ -208,6 +215,7 @@ function cardHtml(l) {
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
       ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
     </div>
+    ${touchBadge(l)}
     <div class="meta">${l.assigned_name
       ? `<span class="avatar" aria-hidden="true">${esc(initials(l.assigned_name))}</span>${esc(l.assigned_name)}`
       : '<span class="avatar none" aria-hidden="true">?</span><em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
@@ -216,6 +224,41 @@ function cardHtml(l) {
 
 function canEditLead(l) {
   return can('gerente', 'marketing') || (state.me.role === 'vendedor' && l.assigned_to === state.me.id);
+}
+
+// ---------- Toques y cadencia ----------
+const DAY = 86400e3;
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+// Siguiente toque según la cadencia de 12 días; solo mientras el cliente no ha respondido.
+function touchDue(l) {
+  const t = state.meta.touches;
+  if (l.status !== 'nuevo' || l.contacted_at || l.touch_count >= t.max) return null;
+  const base = new Date(l.assigned_at || l.created_at);
+  const due = new Date(base.getTime() + t.cadence[l.touch_count] * DAY);
+  const days = Math.round((startOfDay(due) - startOfDay(new Date())) / DAY);
+  return { n: l.touch_count + 1, due, days };
+}
+
+function touchBadge(l) {
+  const t = state.meta.touches;
+  if (l.response_touch) return `<div class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</div>`;
+  const d = touchDue(l);
+  if (!d) return l.touch_count ? `<div class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</div>` : '';
+  const when = d.days < 0 ? `vencido hace ${-d.days} ${d.days === -1 ? 'día' : 'días'}` : d.days === 0 ? 'toca hoy' : d.days === 1 ? 'mañana' : `en ${d.days} días`;
+  const cls = d.days < 0 ? 'late' : d.days === 0 ? 'today' : '';
+  return `<div class="touch-badge ${cls}">${icon('phone', 13)} Toque ${d.n}/${t.max} · ${when}</div>`;
+}
+
+// Aviso arriba del tablero con los toques vencidos y los de hoy.
+function renderBoardAlert() {
+  const el = $('#board-alert');
+  const dues = state.leads.map(touchDue).filter(Boolean);
+  const late = dues.filter((d) => d.days < 0).length;
+  const today = dues.filter((d) => d.days === 0).length;
+  el.classList.toggle('hidden', !(late || today) || !['board', 'list'].includes(state.view));
+  el.innerHTML = `${late ? `<span class="alert-pill late">${icon('phone', 15)} ${late} ${late === 1 ? 'toque vencido' : 'toques vencidos'}</span>` : ''}
+    ${today ? `<span class="alert-pill today">${icon('calendar', 15)} ${today} ${today === 1 ? 'toque para hoy' : 'toques para hoy'}</span>` : ''}
+    <span class="muted">Cadencia: 5 toques en 12 días (día ${state.meta.touches.cadence.join(', ')}).</span>`;
 }
 
 function renderBoard() {
@@ -249,7 +292,7 @@ function renderBoard() {
 async function changeStatus(lead, status) {
   const body = { status };
   if (status === 'declinado') {
-    const reason = await ask('¿Por qué se declina? (opcional, ayuda a marketing)', { input: true, placeholder: 'Ej. presupuesto, eligió a otro proveedor', okLabel: 'Declinar' });
+    const reason = await ask('¿Por qué se declina?', { options: state.meta.declineReasons, okLabel: 'Declinar' });
     if (reason === null) return;
     body.decline_reason = reason;
   }
@@ -318,6 +361,11 @@ async function renderStats() {
     <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
     <div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>
     <div class="card chart-card span-6">${cardTitle('radio', 'var(--whatsapp)', '¿Cómo se enteraron?', 'canal de percepción')}${categoryBars(s.byChannel)}</div>
+    <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
+      ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</div>
+    <div class="card chart-card span-6">${cardTitle('file', 'var(--f-cotizados)', '¿En qué toque se cotiza?', 'toque en que se envió la cotización')}
+      ${touchBars(s.touches.quote, null, 'f-cotizados', 'se cotizaron')}</div>
+    <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
     <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Perfil')}${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
   </div>`;
   animateIn($('#view-stats'));
@@ -339,6 +387,13 @@ function insightBanner(s) {
   if (leak) parts.push(`La mayor fuga está de <b>${esc(leak.from)}</b> a <b>${esc(leak.to)}</b>: solo avanza el ${leak.rate}%.`);
   if (campaigns[0]) parts.push(`Campaña que mejor convierte: <b>${esc(campaigns[0].key)}</b> (${pctOf(campaigns[0].cerrados, campaigns[0].recibidos)}%).`);
   if (seller) parts.push(`Más cierres: <b>${esc(seller.key)}</b> con ${seller.cerrados}.`);
+  const resp = s.touches.response;
+  const respTotal = resp.reduce((t, r) => t + r.c, 0);
+  if (respTotal) {
+    const topTouch = [...resp].sort((a, b) => b.c - a.c)[0];
+    parts.push(`La mayoría responde en el <b>toque ${topTouch.n}</b> (${pctOf(topTouch.c, respTotal)}%).`);
+  }
+  if (s.touches.overdue) parts.push(`Hay <b>${s.touches.overdue} ${s.touches.overdue === 1 ? 'toque vencido' : 'toques vencidos'}</b>.`);
   return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>${parts.join(' ')}</p></div></div>`;
 }
 
@@ -384,7 +439,7 @@ function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
   return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Tiempo hasta que contestan</th>
+    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Toques a respuesta</th><th>Toques a cotizar</th><th>Toques vencidos</th><th>Tiempo hasta que contestan</th>
   </tr></thead><tbody>${rows.map((r) => {
     const conv = pctOf(r.cerrados, r.recibidos);
     return `<tr class="${r.id ? '' : 'unassigned'}">
@@ -393,6 +448,9 @@ function sellerTable(rows) {
       ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
       ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
       <td><span class="conv ${r.id && conv === best && best > 0 ? 'top' : ''}">${conv}%</span></td>
+      <td class="num">${r.toques_respuesta ? r.toques_respuesta.toFixed(1) : '—'}</td>
+      <td class="num">${r.toques_cotizacion ? r.toques_cotizacion.toFixed(1) : '—'}</td>
+      <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td>
       <td class="num">${hours(r.horas_contacto)}</td></tr>`;
   }).join('')}</tbody></table></div>
   <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. "Tiempo hasta que contestan" va de la asignación a que el cliente respondió.</p>`;
@@ -443,6 +501,40 @@ function campaignEfficiency(rows) {
   }).join('')}</tbody></table></div>
   <p class="muted small-note">Retorno = ventas ÷ inversión: 3x significa que por cada peso invertido se vendieron tres. Las ventas se toman del monto capturado al marcar un lead como vendido.</p>
   ${periodNote}`;
+}
+
+// Barras por número de toque (T1…T5, 6+), con el acumulado: "con 3 toques ya respondió el 80%".
+function touchBars(rows, never, colorKey, verb) {
+  const max = state.meta.touches.max;
+  const buckets = Array.from({ length: max }, (_, i) => ({ key: `Toque ${i + 1}`, n: rows.find((r) => r.n === i + 1)?.c || 0 }));
+  const extra = rows.filter((r) => r.n > max).reduce((t, r) => t + r.c, 0);
+  if (extra) buckets.push({ key: `Toque ${max + 1} o más`, n: extra });
+  const total = buckets.reduce((t, b) => t + b.n, 0);
+  if (!total && !never) return '<p class="muted">Todavía no hay toques registrados. Se llena solo cuando los vendedores registran sus toques.</p>';
+  const top = Math.max(...buckets.map((b) => b.n), never || 0, 1);
+  let acc = 0;
+  const rowsHtml = buckets.map((b) => {
+    acc += b.n;
+    return `<div class="brow"><span class="k">${b.key}</span>
+      <div class="battery thin" style="background:transparent"><div class="seg" style="--w:${(b.n / top) * 100}%; --c:var(--${colorKey}); border-radius:4px"
+        data-tip="${esc(`${b.key}: ${b.n} ${verb}\nAcumulado: ${pctOf(acc, total)}% hasta este toque`)}"></div></div>
+      <span class="n">${b.n}</span></div>`;
+  }).join('');
+  const neverHtml = never != null ? `<div class="brow"><span class="k">Nunca (5 toques)</span>
+      <div class="battery thin" style="background:transparent"><div class="seg" style="--w:${(never / top) * 100}%; --c:var(--empty); border-radius:4px"></div></div>
+      <span class="n">${never}</span></div>` : '';
+  const within = buckets.slice(0, 3).reduce((t, b) => t + b.n, 0);
+  return `<div class="brows">${rowsHtml}${neverHtml}</div>
+    ${total ? `<p class="muted small-note">El ${pctOf(within, total)}% de los que ${verb} lo hizo en los primeros 3 toques.</p>` : ''}`;
+}
+
+function reasonBars(rows) {
+  if (!rows.length) return '<p class="muted">Sin leads declinados con estos filtros.</p>';
+  const top = Math.max(...rows.map((r) => r.n));
+  const total = rows.reduce((t, r) => t + r.n, 0);
+  return `<div class="brows">${rows.map((r) => `<div class="brow"><span class="k" title="${esc(r.key)}">${esc(r.key)}</span>
+    <div class="battery thin" style="background:transparent"><div class="seg" style="--w:${(r.n / top) * 100}%; --c:var(--declinado); border-radius:4px"
+      data-tip="${esc(`${r.key}: ${r.n} (${pctOf(r.n, total)}%)`)}"></div></div><span class="n">${r.n}</span></div>`).join('')}</div>`;
 }
 
 // Barra tipo "batería": segmentos proporcionales con 2px de separación.
@@ -605,17 +697,46 @@ function milestones(l) {
   const dates = [l.created_at, l.contacted_at, l.profiled_at, l.quoted_at, l.won_at];
   const steps = [['recibidos', 'Recibido'], ['contactados', 'Contestó'], ['perfilados', 'Perfilado'], ['cotizados', 'Cotizado'], ['cerrados', 'Cerrado']]
     .map(([k, name], i) => [k, name, reached[i] && (dates[i] || true)]);
-  const canMark = l.can_edit && !l.quoted_at && !l.won_at;
   return `<div class="tracker">${steps.map(([k, name, at]) => `<div class="t-step ${at ? 'done' : ''}" style="--c:var(--f-${k})">
       <span class="t-dot">${at ? '✓' : ''}</span><span class="t-name">${name}</span>
       <span class="t-date">${at && typeof at === 'string' ? new Date(at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : ''}</span></div>`).join('')}
-    </div>
-    ${canMark ? `<button type="button" class="${l.contacted_at ? 'ghost small' : 'contact-btn'}" id="contacted">
-      ${l.contacted_at ? 'Desmarcar "contestó"' : '✓ El cliente ya contestó'}</button>` : ''}`;
+    </div>`;
+}
+
+// Panel de toques: los 5 de la cadencia (y los que sigan) y el registro del siguiente.
+function touchesPanel(l, touches) {
+  const t = state.meta.touches;
+  const slots = Math.max(t.max, touches.length + (t.byStatus[l.status] ? 1 : 0));
+  const dots = Array.from({ length: slots }, (_, i) => {
+    const tt = touches[i];
+    const planned = new Date(new Date(l.assigned_at || l.created_at).getTime() + (t.cadence[i] ?? t.cadence.at(-1)) * DAY);
+    if (tt) {
+      const ok = tt.outcome !== 'sin_respuesta';
+      return `<div class="tp ${ok ? 'ok' : 'miss'}" data-tip="${esc(`Toque ${tt.n} · ${label(tt.channel)} · ${fmtDate(tt.created_at)}
+${t.outcomes[tt.outcome]}${tt.user_name ? `
+${tt.user_name}` : ''}`)}">
+        <span class="tp-dot">${ok ? '✓' : '✕'}</span><span class="tp-n">T${tt.n}</span>
+        <span class="tp-date">${new Date(tt.created_at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}</span></div>`;
+    }
+    const inCadence = i < t.max && !l.contacted_at;
+    return `<div class="tp todo"><span class="tp-dot">${i + 1}</span><span class="tp-n">T${i + 1}</span>
+      <span class="tp-date">${inCadence ? planned.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : ''}</span></div>`;
+  }).join('');
+  const outcomes = t.byStatus[l.status];
+  const n = touches.length + 1;
+  const d = touchDue(l);
+  const form = l.can_edit && outcomes ? `<div class="touch-form">
+      <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${d.days < 0 ? 'late' : d.days === 0 ? 'today' : ''}">
+        ${d.days < 0 ? `vencido hace ${-d.days} d` : d.days === 0 ? 'toca hoy' : `toca el ${d.due.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`}</span>` : ''}</div>
+      <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c, i) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${i === 0 ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
+      <div class="outcome-grid">${outcomes.map((o) => `<button type="button" class="outcome ${o}" data-outcome="${o}">${esc(t.outcomes[o])}</button>`).join('')}</div>
+      ${!l.contacted_at && n === t.max ? '<p class="muted small-note">Es el último toque de la cadencia: si no contesta, el lead pasa a Declinado.</p>' : ''}
+    </div>` : '';
+  return `<div class="touches"><div class="touch-row">${dots}</div>${form}</div>`;
 }
 
 async function openLead(id) {
-  const l = await api(`/api/leads/${id}`);
+  const [l, touches] = await Promise.all([api(`/api/leads/${id}`), api(`/api/leads/${id}/touches`)]);
   const ro = l.can_edit ? '' : 'disabled';
   const sellers = state.users.filter((u) => u.active && ['vendedor', 'gerente', 'marketing'].includes(u.role));
   const waLink = l.phone ? `https://wa.me/${l.phone.replace(/\D/g, '')}` : null;
@@ -626,6 +747,7 @@ async function openLead(id) {
     <p class="muted">Recibido ${fmtDate(l.created_at)} por <span class="tag ${l.source}">${esc(label(l.source))}</span>
       ${waLink ? `· <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
     ${milestones(l)}
+    ${touchesPanel(l, touches)}
     ${l.message ? `<p class="card">${esc(l.message)}</p>` : ''}
 
     <form id="lead-form">
@@ -635,7 +757,8 @@ async function openLead(id) {
       </div>
       <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
         <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
-      <label class="${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">Motivo declinado <input name="decline_reason" value="${esc(l.decline_reason)}" ${ro}></label>
+      <label class="${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">Motivo declinado <select name="decline_reason" ${ro}>${[...new Set([...(l.decline_reason ? [l.decline_reason] : []), ...state.meta.declineReasons])]
+        .map((r) => `<option ${r === l.decline_reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
       <label>Vendedor
         <select name="assigned_to" ${can('gerente', 'marketing') ? '' : 'disabled'}>
           <option value="">Sin asignar</option>
@@ -669,13 +792,25 @@ async function openLead(id) {
       <small>${e.user_name ? esc(e.user_name) + ' · ' : ''}${fmtDate(e.created_at)}</small></li>`).join('')}</ul>
   `);
 
-  $('#contacted')?.addEventListener('click', async () => {
+  document.querySelectorAll('#drawer-body .outcome').forEach((b) => b.addEventListener('click', async () => {
+    const outcome = b.dataset.outcome;
+    const body = { channel: $('#drawer-body input[name=touch-channel]:checked').value, outcome };
+    if (outcome === 'rechazo') {
+      const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== 'No contestó (5 toques)'), okLabel: 'Declinar' });
+      if (reason === null) return;
+      body.decline_reason = reason;
+    }
+    if (outcome === 'vendido') {
+      const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional)', { input: true, placeholder: 'Ej. 45000', okLabel: 'Registrar venta' });
+      if (amount === null) return;
+      if (amount) body.sale_amount = amount;
+    }
     try {
-      await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { contacted: !l.contacted_at } });
-      if (!l.contacted_at) toast('Marcado: el cliente contestó', 'ok');
+      const r = await api(`/api/leads/${l.id}/touches`, { method: 'POST', body });
+      toast(r.auto_declined ? 'Quinto toque sin respuesta: el lead pasó a Declinado' : `Toque ${r.n} registrado`, r.auto_declined ? '' : 'ok');
       openLead(l.id); refresh();
     } catch (err) { toast(err.message, 'error'); }
-  });
+  }));
   const form = $('#lead-form');
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');

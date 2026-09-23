@@ -237,6 +237,43 @@ td.status-cell span.dark-text { color: var(--text); }
 .contact-btn { background: linear-gradient(135deg, #00a39b, #2cc4b5); box-shadow: 0 4px 12px rgba(0, 163, 155, .3); width: 100%; margin-bottom: 4px; }
 .contact-btn:hover { background: #008a83; }
 
+/* Toques */
+.touch-badge { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap;
+  background: #eef1f7; padding: 3px 9px; border-radius: 999px; }
+.touch-badge.today { background: #fff1d6; color: #9a5b00; }
+.touch-badge.late { background: #ffe3ec; color: #c21e56; }
+.touch-badge.ok { background: #d9f4f1; color: #00736d; }
+.touch-badge .ico { width: 13px; height: 13px; }
+.board-alert { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+.alert-pill { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 999px; font-weight: 700; }
+.alert-pill.late { background: #ffe3ec; color: #c21e56; }
+.alert-pill.today { background: #fff1d6; color: #9a5b00; }
+.touches { margin: 6px 0 14px; padding: 14px; border-radius: var(--radius); background: #f6f8fc; border: 1px solid var(--line); }
+.touch-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.tp { display: grid; justify-items: center; gap: 2px; min-width: 52px; font-size: 11px; color: var(--muted); }
+.tp-dot { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px;
+  border: 2px dashed #c9cfdd; color: var(--muted); background: #fff; }
+.tp.ok .tp-dot { border: 0; color: #fff; background: linear-gradient(135deg, #00a39b, #2cc4b5); }
+.tp.miss .tp-dot { border: 0; color: #fff; background: linear-gradient(135deg, #8f95a8, #b3b8c6); }
+.tp-n { font-weight: 700; color: var(--text); }
+.touch-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.touch-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.touch-head .touch-badge { margin: 0; }
+.seg-group { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.seg { margin: 0; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg span { display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1.5px solid #d5dae6; color: var(--text); font-size: 13px;
+  cursor: pointer; background: #fff; }
+.seg input:checked + span { background: var(--grad); color: #fff; border-color: transparent; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.outcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+button.outcome { font-size: 13px; padding: 9px 10px; box-shadow: none; }
+button.outcome.sin_respuesta { background: #fff; color: var(--text); border: 1.5px solid #d5dae6; }
+button.outcome.cumple, button.outcome.cotizado, button.outcome.vendido { background: linear-gradient(135deg, #037f4c, #1fa56b); }
+button.outcome.conversacion, button.outcome.seguimiento { background: linear-gradient(135deg, #00a39b, #2cc4b5); }
+button.outcome.no_cumple, button.outcome.rechazo { background: linear-gradient(135deg, #d9304e, #f0607a); }
+#modal-select { width: 100%; }
+
 .tip { position: fixed; z-index: 40; pointer-events: none; background: var(--nav); color: #fff; font-size: 12px; line-height: 1.4;
   padding: 7px 10px; border-radius: 6px; box-shadow: var(--shadow-lift); white-space: pre-line; max-width: 240px; }
 

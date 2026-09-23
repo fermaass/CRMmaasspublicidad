@@ -11,10 +11,34 @@ const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
 const LABELS = {
   nuevo: 'Nuevo', nuevo_perfil: 'Nuevo – cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
   sin_perfilar: 'Sin perfilar', cumple: 'Cumple perfil', no_cumple: 'No cumple',
-  formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro',
+  formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro', correo: 'Correo', visita: 'Visita',
 };
 
 const CATALOG_KINDS = ['canal', 'producto', 'campana'];
+
+// Toques: cada intento de contacto del vendedor. Su resultado mueve al lead de etapa.
+const MAX_TOUCHES = 5;
+// Cadencia de 12 días: día en que toca cada toque, contado desde que se asigna el lead.
+const CADENCE_DAYS = [0, 1, 3, 7, 12];
+const TOUCH_CHANNELS = ['llamada', 'whatsapp', 'correo', 'visita'];
+const TOUCH_OUTCOMES = {
+  sin_respuesta: 'No contestó',
+  conversacion: 'Contestó, falta perfilar',
+  cumple: 'Contestó y cumple perfil',
+  no_cumple: 'Contestó pero no cumple perfil',
+  seguimiento: 'Sigue en conversación',
+  cotizado: 'Se envió cotización',
+  vendido: 'Cerró venta',
+  rechazo: 'No le interesó',
+};
+// Qué resultados tienen sentido según la etapa en que va el lead.
+const OUTCOMES_BY_STATUS = {
+  nuevo: ['sin_respuesta', 'cumple', 'no_cumple', 'conversacion'],
+  nuevo_perfil: ['sin_respuesta', 'seguimiento', 'cotizado', 'rechazo'],
+  cotizando: ['sin_respuesta', 'seguimiento', 'vendido', 'rechazo'],
+};
+const NO_ANSWER = 'No contestó (5 toques)';
+const DECLINE_REASONS = [NO_ANSWER, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', 'Lo pospuso / sin presupuesto ahora', 'Otro'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
@@ -107,6 +131,22 @@ function openDb(dbPath) {
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('sale_amount')) db.exec('ALTER TABLE leads ADD COLUMN sale_amount REAL');
+  if (!leadCols.includes('touch_count')) {
+    db.exec(`ALTER TABLE leads ADD COLUMN touch_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE leads ADD COLUMN response_touch INTEGER; -- en qué toque respondió por primera vez
+      ALTER TABLE leads ADD COLUMN quote_touch INTEGER;    -- en qué toque se cotizó
+      ALTER TABLE leads ADD COLUMN last_touch_at TEXT;`);
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS lead_touches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      n INTEGER NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      channel TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS lead_touches_lead ON lead_touches(lead_id);`);
   // Hitos del embudo: la fecha en que el lead pasó por cada paso. No se borran aunque el lead retroceda o se decline.
   if (!leadCols.includes('won_at')) {
     for (const col of MILESTONES) db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
@@ -160,5 +200,6 @@ function phoneKey(phone) {
 }
 
 module.exports = {
-  openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+  openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, DECLINE_REASONS, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };
