@@ -1,7 +1,6 @@
-const crypto = require('node:crypto');
 const express = require('express');
 const { ingestLead } = require('./leads');
-const { getSetting, setSetting } = require('./db');
+const { getSetting } = require('./db');
 
 const pick = (body, ...keys) => {
   for (const k of keys) if (body[k] != null && String(body[k]).trim() !== '') return body[k];
@@ -45,53 +44,6 @@ function webhooksRouter(db) {
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
-  });
-
-  // WhatsApp Cloud API: verificación del webhook
-  router.get('/whatsapp', (req, res) => {
-    const token = getSetting(db, 'whatsapp_verify_token');
-    if (req.query['hub.mode'] === 'subscribe' && token && req.query['hub.verify_token'] === token) {
-      return res.send(req.query['hub.challenge']);
-    }
-    res.sendStatus(403);
-  });
-
-  // WhatsApp Cloud API: mensajes entrantes
-  router.post('/whatsapp', (req, res) => {
-    const appSecret = getSetting(db, 'whatsapp_app_secret');
-    if (appSecret) {
-      const expected = 'sha256=' + crypto.createHmac('sha256', appSecret)
-        .update(req.rawBody || '').digest('hex');
-      const got = req.get('x-hub-signature-256') || '';
-      if (got.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected))) {
-        return res.sendStatus(401);
-      }
-    }
-
-    if (req.body?.entry?.length) setSetting(db, 'whatsapp_last_message', new Date().toISOString());
-    for (const entry of req.body?.entry || []) {
-      for (const change of entry.changes || []) {
-        const value = change.value || {};
-        const names = Object.fromEntries((value.contacts || []).map((c) => [c.wa_id, c.profile?.name]));
-        for (const msg of value.messages || []) {
-          const text = msg.text?.body || msg.button?.text || msg.interactive?.button_reply?.title
-            || msg.interactive?.list_reply?.title || `[${msg.type}]`;
-          try {
-            ingestLead(db, {
-              source: 'whatsapp',
-              phone: `+${msg.from}`,
-              name: names[msg.from],
-              message: text,
-              campaign: msg.referral?.headline || msg.referral?.source_url || null,
-            });
-          } catch (err) {
-            console.error('WhatsApp: no se pudo guardar el mensaje', err.message);
-          }
-        }
-      }
-    }
-    // Meta reintenta si no recibe 200, así que siempre respondemos OK.
-    res.sendStatus(200);
   });
 
   return router;

@@ -27,11 +27,9 @@ test('primer uso: se crea el gerente desde la pantalla y solo una vez', async ()
 
   // Las claves se generaron solas y sirven para recibir leads
   const s = await (await fetch(`${base}/api/settings`, { headers: { cookie } })).json();
-  assert.ok(s.form_api_key && s.whatsapp_verify_token);
+  assert.ok(s.form_api_key);
   assert.equal(s.form_url, `${base}/webhooks/form`);
   assert.equal((await post(`/webhooks/form?key=${s.form_api_key}`, { nombre: 'Ana', telefono: '5500000000' })).status, 201);
-  const v = await fetch(`${base}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=${s.whatsapp_verify_token}&hub.challenge=42`);
-  assert.equal(await v.text(), '42');
 
   // Cambiar la clave invalida la anterior
   await post('/api/settings', { regenerate_form_key: true }, cookie, 'PATCH');

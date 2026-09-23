@@ -1,12 +1,11 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const { openDb } = require('../src/db');
 const { createApp, seedAdmin } = require('../src/server');
 
 const config = {
   adminEmail: 'gerente@test.com', adminPassword: 'clave-gerente', adminName: 'Gerente',
-  formApiKey: 'form-key', whatsappVerifyToken: 'verify-me', whatsappAppSecret: 'app-secret', cookieSecure: false,
+  formApiKey: 'form-key', cookieSecure: false,
 };
 let server; let base; let db;
 
@@ -35,16 +34,6 @@ async function login(email, password) {
   const r = await req('/api/login', { method: 'POST', body: { email, password } });
   assert.equal(r.status, 200, r.text);
   return r.headers.get('set-cookie').split(';')[0];
-}
-
-function waPayload(from, name, text) {
-  return { object: 'whatsapp_business_account', entry: [{ changes: [{ value: {
-    contacts: [{ wa_id: from, profile: { name } }],
-    messages: [{ from, type: 'text', text: { body: text } }],
-  } }] }] };
-}
-function waSign(body) {
-  return 'sha256=' + crypto.createHmac('sha256', config.whatsappAppSecret).update(JSON.stringify(body)).digest('hex');
 }
 
 let gerente; let vendedorA; let vendedorB; let analista; let idA; let idB;
@@ -83,24 +72,28 @@ test('formulario urlencoded con redirect (formulario HTML simple)', async () => 
   assert.equal(res.headers.get('location'), 'https://maass.com/gracias');
 });
 
-test('WhatsApp: verificación, firma y deduplicación con el lead del formulario', async () => {
-  const v = await req('/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=abc');
-  assert.equal(v.text, 'abc');
-  assert.equal((await req('/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=mal&hub.challenge=abc')).status, 403);
+test('captura manual de WhatsApp: no duplica al contacto del formulario', async () => {
+  assert.equal((await req('/api/leads', { method: 'POST', cookie: gerente, body: { name: 'X' } })).status, 400);
 
-  const body = waPayload('5215512345678', 'Juan WA', 'Hola, sigo interesado');
-  assert.equal((await req('/webhooks/whatsapp', { method: 'POST', body, headers: { 'x-hub-signature-256': 'sha256=00' } })).status, 401);
-  assert.equal((await req('/webhooks/whatsapp', { method: 'POST', body, headers: { 'x-hub-signature-256': waSign(body) } })).status, 200);
+  const dup = await req('/api/leads', { method: 'POST', cookie: gerente,
+    body: { source: 'whatsapp', phone: '+52 1 55 1234 5678', message: 'Hola, sigo interesado' } });
+  assert.equal(dup.status, 200, dup.text);
+  assert.equal(dup.json.existing, true);
 
-  const nuevo = waPayload('5213300000000', 'María', 'Precio?');
-  await req('/webhooks/whatsapp', { method: 'POST', body: nuevo, headers: { 'x-hub-signature-256': waSign(nuevo) } });
+  const nuevo = await req('/api/leads', { method: 'POST', cookie: vendedorA,
+    body: { source: 'whatsapp', phone: '3300000000', name: 'María', message: 'Precio?' } });
+  assert.equal(nuevo.status, 201, nuevo.text);
 
   const leads = (await req('/api/leads', { cookie: gerente })).json;
-  assert.equal(leads.length, 3, 'el mensaje de Juan por WhatsApp no debe duplicar su lead');
+  assert.equal(leads.length, 3, 'el WhatsApp de Juan no debe duplicar su lead');
   const juan = leads.find((l) => l.email === 'juan@mail.com');
   const detail = (await req(`/api/leads/${juan.id}`, { cookie: gerente })).json;
-  assert.ok(detail.events.some((e) => e.type === 'contacto' && e.content.includes('sigo interesado')));
-  assert.ok(leads.some((l) => l.source === 'whatsapp' && l.name === 'María'));
+  const ev = detail.events.find((e) => e.type === 'contacto');
+  assert.match(ev.content, /WhatsApp.*sigo interesado/);
+  assert.equal(ev.user_name, 'Gerente');
+  const maria = leads.find((l) => l.name === 'María');
+  assert.equal(maria.source, 'whatsapp');
+  assert.equal(maria.assigned_to, idA, 'la vendedora que lo captura queda como dueña');
 });
 
 test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar', async () => {
@@ -120,8 +113,8 @@ test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar',
   assert.deepEqual(reuse.map((x) => x.id), [juan.id]);
 
   // Si vuelve a escribir, se reabre conservando el perfil
-  const again = waPayload('5215512345678', 'Juan', 'Ahora sí tengo presupuesto');
-  await req('/webhooks/whatsapp', { method: 'POST', body: again, headers: { 'x-hub-signature-256': waSign(again) } });
+  await req('/api/leads', { method: 'POST', cookie: gerente,
+    body: { source: 'whatsapp', phone: '5215512345678', message: 'Ahora sí tengo presupuesto' } });
   l = (await req(`/api/leads/${juan.id}`, { cookie: gerente })).json;
   assert.equal(l.status, 'nuevo_perfil');
   assert.equal(l.profile, 'cumple');
@@ -129,7 +122,7 @@ test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar',
 
 test('permisos: vendedor ve lo suyo y lo libre, analista solo lee', async () => {
   const leads = (await req('/api/leads', { cookie: gerente })).json;
-  const [l1, l2] = leads;
+  const [l1, l2] = leads.filter((l) => !l.assigned_to);
   await req(`/api/leads/${l1.id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: idA } });
 
   // Beto no ve el lead de Ana ni puede tocarlo
@@ -142,6 +135,11 @@ test('permisos: vendedor ve lo suyo y lo libre, analista solo lee', async () => 
   assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorB, body: {} })).status, 200);
   assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorA, body: {} })).status, 404);
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando' } })).status, 200);
+
+  // Si Ana registra un contacto que ya es de Beto, se le avisa sin mostrarle la ficha
+  const taken = await req('/api/leads', { method: 'POST', cookie: vendedorA, body: { source: 'llamada', phone: l2.phone, email: l2.email } });
+  assert.equal(taken.status, 409);
+  assert.match(taken.json.error, /Beto/);
 
   // Vendedor no reasigna
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { assigned_to: idA } })).status, 403);

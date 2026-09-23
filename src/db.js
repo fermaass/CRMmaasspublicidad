@@ -5,7 +5,14 @@ const { DatabaseSync } = require('node:sqlite');
 const STATUSES = ['nuevo', 'nuevo_perfil', 'cotizando', 'declinado', 'vendido'];
 const PROFILES = ['sin_perfilar', 'cumple', 'no_cumple'];
 const ROLES = ['gerente', 'marketing', 'vendedor', 'analista'];
-const SOURCES = ['formulario', 'whatsapp', 'manual'];
+const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
+// Orígenes que se capturan a mano (el formulario es el único automático).
+const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
+const LABELS = {
+  nuevo: 'Nuevo', nuevo_perfil: 'Nuevo – cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
+  sin_perfilar: 'Sin perfilar', cumple: 'Cumple perfil', no_cumple: 'No cumple',
+  formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro',
+};
 
 function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -82,12 +89,10 @@ function ensureSettings(db, config = {}) {
   const random = () => require('node:crypto').randomBytes(18).toString('base64url');
   const initial = {
     form_api_key: config.formApiKey,
-    whatsapp_verify_token: config.whatsappVerifyToken,
-    whatsapp_app_secret: config.whatsappAppSecret,
   };
   for (const [key, fromEnv] of Object.entries(initial)) {
     if (fromEnv) setSetting(db, key, fromEnv);
-    else if (!getSetting(db, key) && key !== 'whatsapp_app_secret') setSetting(db, key, random());
+    else if (!getSetting(db, key)) setSetting(db, key, random());
   }
 }
 
@@ -97,4 +102,6 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
-module.exports = { openDb, phoneKey, getSetting, setSetting, ensureSettings, STATUSES, PROFILES, ROLES, SOURCES };
+module.exports = {
+  openDb, phoneKey, getSetting, setSetting, ensureSettings, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+};

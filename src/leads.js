@@ -1,4 +1,4 @@
-const { phoneKey, STATUSES, PROFILES } = require('./db');
+const { phoneKey, STATUSES, PROFILES, LABELS } = require('./db');
 
 const now = () => new Date().toISOString();
 
@@ -20,7 +20,7 @@ function findExisting(db, { phone, email }) {
 }
 
 /**
- * Entrada automática (formulario / WhatsApp). Si el contacto ya existe no se duplica:
+ * Alta de un lead (formulario o captura manual). Si el contacto ya existe no se duplica:
  * se registra el nuevo mensaje en su historial y, si estaba declinado o vendido, se reabre como nuevo
  * (conservando su perfil) para que ventas lo vea.
  */
@@ -41,10 +41,9 @@ function ingestLead(db, data) {
         status = ?, updated_at = ? WHERE id = ?`)
       .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.campaign,
         reopen ? (existing.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo') : existing.status, now(), existing.id);
-    const origin = lead.source === 'whatsapp' ? 'WhatsApp' : 'formulario';
-    addEvent(db, existing.id, null, 'contacto',
-      `Nuevo contacto por ${origin}${lead.campaign ? ` (${lead.campaign})` : ''}${lead.message ? `: ${lead.message}` : ''}`);
-    if (reopen) addEvent(db, existing.id, null, 'estado', `Reabierto (estaba ${existing.status})`);
+    addEvent(db, existing.id, data.userId, 'contacto',
+      `Nuevo contacto por ${LABELS[lead.source] || lead.source}${lead.campaign ? ` (${lead.campaign})` : ''}${lead.message ? `: ${lead.message}` : ''}`);
+    if (reopen) addEvent(db, existing.id, data.userId, 'estado', `Reabierto (estaba ${existing.status})`);
     return { id: existing.id, created: false };
   }
 
@@ -54,7 +53,7 @@ function ingestLead(db, data) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.source, lead.campaign, lead.message, ts, ts);
   const id = Number(lastInsertRowid);
-  addEvent(db, id, null, 'creado', `Lead recibido por ${lead.source}`);
+  addEvent(db, id, data.userId, 'creado', `Lead recibido por ${LABELS[lead.source] || lead.source}`);
   return { id, created: true };
 }
 

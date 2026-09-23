@@ -1,15 +1,13 @@
 const path = require('node:path');
 const express = require('express');
-const { openDb, ROLES, STATUSES, PROFILES, SOURCES, phoneKey, getSetting, setSetting, ensureSettings } = require('./db');
+const {
+  openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, phoneKey, getSetting, setSetting, ensureSettings,
+} = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
 
 const EDITORS = ['gerente', 'marketing'];
-const LABELS = {
-  nuevo: 'Nuevo', nuevo_perfil: 'Nuevo – cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
-  sin_perfilar: 'Sin perfilar', cumple: 'Cumple perfil', no_cumple: 'No cumple',
-};
 
 function createApp({ db, config }) {
   ensureSettings(db, config);
@@ -71,7 +69,7 @@ function createApp({ db, config }) {
 
   app.get('/api/me', auth.requireUser, (req, res) => res.json(req.user));
 
-  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, labels: LABELS }));
+  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS }));
 
   // ---------- Configuración (solo gerente) ----------
   app.get('/api/settings', auth.requireRole('gerente'), (req, res) => {
@@ -79,16 +77,11 @@ function createApp({ db, config }) {
     res.json({
       form_url: `${base}/webhooks/form`,
       form_api_key: getSetting(db, 'form_api_key'),
-      whatsapp_url: `${base}/webhooks/whatsapp`,
-      whatsapp_verify_token: getSetting(db, 'whatsapp_verify_token'),
-      whatsapp_app_secret_set: Boolean(getSetting(db, 'whatsapp_app_secret')),
-      whatsapp_last_message: getSetting(db, 'whatsapp_last_message'),
     });
   });
 
   app.patch('/api/settings', auth.requireRole('gerente'), (req, res) => {
     const b = req.body || {};
-    if (b.whatsapp_app_secret !== undefined) setSetting(db, 'whatsapp_app_secret', String(b.whatsapp_app_secret).trim());
     if (b.regenerate_form_key) setSetting(db, 'form_api_key', require('node:crypto').randomBytes(18).toString('base64url'));
     res.json({ ok: true });
   });
@@ -198,11 +191,18 @@ function createApp({ db, config }) {
   app.post('/api/leads', auth.requireRole('gerente', 'marketing', 'vendedor'), (req, res) => {
     const b = req.body || {};
     try {
-      const result = ingestLead(db, { ...b, source: 'manual' });
-      if (!result.created) return res.status(409).json({ error: 'Ese contacto ya existe', id: result.id });
+      if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
+      // Si el contacto ya existía, ingestLead lo registra en su historial en vez de duplicarlo.
+      const result = ingestLead(db, { ...b, userId: req.user.id });
+      if (!result.created) {
+        const owner = db.prepare('SELECT l.assigned_to, u.name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?')
+          .get(result.id);
+        if (req.user.role === 'vendedor' && owner.assigned_to && owner.assigned_to !== req.user.id) {
+          return res.status(409).json({ error: `Este contacto ya lo atiende ${owner.name}. Se dejó registrado en su historial.` });
+        }
+        return res.json({ id: result.id, existing: true });
+      }
       if (req.user.role === 'vendedor') db.prepare('UPDATE leads SET assigned_to = ? WHERE id = ?').run(req.user.id, result.id);
-      db.prepare('UPDATE lead_events SET user_id = ?, content = ? WHERE lead_id = ?')
-        .run(req.user.id, 'Lead capturado manualmente', result.id);
       res.status(201).json({ id: result.id });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -314,8 +314,6 @@ function loadConfig(env = process.env) {
     adminEmail: env.ADMIN_EMAIL,
     adminPassword: env.ADMIN_PASSWORD,
     formApiKey: env.FORM_API_KEY,
-    whatsappVerifyToken: env.WHATSAPP_VERIFY_TOKEN,
-    whatsappAppSecret: env.WHATSAPP_APP_SECRET,
     cookieSecure: env.COOKIE_SECURE === 'true',
   };
 }

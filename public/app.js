@@ -13,7 +13,7 @@ async function api(path, opts = {}) {
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Sesión expirada'); }
-  if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data?.error || `Error ${res.status}`), { data });
   return data;
 }
 
@@ -58,7 +58,7 @@ function fillFilters() {
     values.forEach(([v, t]) => el.insertAdjacentHTML('beforeend', `<option data-dyn value="${esc(v)}">${esc(t)}</option>`));
   };
   opts('#f-profile', state.meta.profiles.map((p) => [p, label(p)]));
-  opts('#f-source', state.meta.sources.map((s) => [s, s[0].toUpperCase() + s.slice(1)]));
+  opts('#f-source', state.meta.sources.map((s) => [s, label(s)]));
   opts('#f-status', state.meta.statuses.map((s) => [s, label(s)]));
   opts('#f-assigned', state.users.filter((u) => u.active).map((u) => [u.id, u.name]));
 }
@@ -102,7 +102,7 @@ function cardHtml(l) {
     <div class="name">${esc(l.name || l.phone || l.email)}</div>
     <div class="meta">${esc([l.phone, l.email].filter(Boolean).join(' · '))}</div>
     <div class="meta">
-      <span class="tag ${l.source}">${esc(l.source)}</span>
+      <span class="tag ${l.source}">${esc(label(l.source))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
     </div>
     <div class="meta">${l.assigned_name ? esc(l.assigned_name) : '<em>Sin asignar</em>'} · ${fmtDate(l.updated_at)}</div>
@@ -159,7 +159,7 @@ function renderList() {
     <td><strong>${esc(l.name || '—')}</strong><br><span class="muted">${esc(l.phone || '')} ${esc(l.email || '')}</span></td>
     <td><span class="tag status" style="background: var(--${l.status})">${esc(label(l.status))}</span></td>
     <td><span class="tag ${l.profile}">${esc(label(l.profile))}</span></td>
-    <td><span class="tag ${l.source}">${esc(l.source)}</span><br><span class="muted">${esc(l.campaign || '')}</span></td>
+    <td><span class="tag ${l.source}">${esc(label(l.source))}</span><br><span class="muted">${esc(l.campaign || '')}</span></td>
     <td>${esc(l.assigned_name || 'Sin asignar')}</td>
     <td class="muted">${fmtDate(l.created_at)}</td>
   </tr>`).join('');
@@ -219,7 +219,7 @@ async function openLead(id) {
   openDrawer(`
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>${esc(l.name || l.phone || l.email)}</h2>
-    <p class="muted">Recibido ${fmtDate(l.created_at)} por <span class="tag ${l.source}">${esc(l.source)}</span>
+    <p class="muted">Recibido ${fmtDate(l.created_at)} por <span class="tag ${l.source}">${esc(label(l.source))}</span>
       ${waLink ? `· <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
     ${l.message ? `<p class="card">${esc(l.message)}</p>` : ''}
 
@@ -292,8 +292,11 @@ function openNewLead() {
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>Nuevo lead</h2>
     <form id="new-form">
+      <label>¿Por dónde llegó?
+        <select name="source">${state.meta.manualSources.map((s) => `<option value="${s}">${esc(label(s))}</option>`).join('')}</select>
+      </label>
+      <label>Teléfono <input name="phone" inputmode="tel" autofocus></label>
       <label>Nombre <input name="name"></label>
-      <label>Teléfono <input name="phone"></label>
       <label>Email <input name="email" type="email"></label>
       <label>Campaña <input name="campaign"></label>
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
@@ -304,9 +307,13 @@ function openNewLead() {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target));
     try {
-      const { id } = await api('/api/leads', { method: 'POST', body });
+      const { id, existing } = await api('/api/leads', { method: 'POST', body });
       refresh();
-      openLead(id);
+      await openLead(id);
+      if (existing) {
+        $('#drawer-body h2').insertAdjacentHTML('afterend',
+          '<p class="warn">Este contacto ya estaba registrado. Se agregó el nuevo contacto a su historial.</p>');
+      }
     } catch (err) { $('#new-error').textContent = err.message; }
   });
 }
@@ -390,9 +397,6 @@ async function renderSettings() {
   <textarea name="mensaje" placeholder="¿En qué te podemos ayudar?"></textarea>
   <button>Enviar</button>
 </form>`;
-  const waStatus = s.whatsapp_last_message
-    ? `<p class="ok">Conectado. Último mensaje recibido: ${fmtDate(s.whatsapp_last_message)}</p>`
-    : '<p class="warn">Todavía no ha llegado ningún mensaje de WhatsApp.</p>';
 
   $('#view-settings').innerHTML = `<div class="settings">
     <div class="card">
@@ -405,26 +409,6 @@ async function renderSettings() {
       <button type="button" class="ghost" id="regen">Cambiar la clave (si llega spam)</button>
     </div>
 
-    <div class="card">
-      <h3>WhatsApp</h3>
-      ${waStatus}
-      <p>Se usa la API oficial de WhatsApp Business de Meta. El número que conectes no puede estar al mismo tiempo en la app de WhatsApp del celular.</p>
-      <ol>
-        <li>Entra a <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a>, crea una app de tipo <em>Empresa</em> y agrégale el producto <em>WhatsApp</em>.</li>
-        <li>En <em>WhatsApp → Configuración → Webhook</em> pega estos dos datos y dale <em>Verificar y guardar</em>:
-          <label>URL de devolución de llamada</label>${copyField(s.whatsapp_url)}
-          <label>Token de verificación</label>${copyField(s.whatsapp_verify_token)}
-        </li>
-        <li>En esa misma pantalla, en <em>Campos del webhook</em>, activa <strong>messages</strong>.</li>
-        <li>En <em>Configuración de la app → Básica</em> copia la <em>Clave secreta de la app</em> y pégala aquí. Sirve para que nadie más pueda meter mensajes falsos.
-          <form id="secret-form" class="copy">
-            <input name="secret" type="password" placeholder="${s.whatsapp_app_secret_set ? 'Ya está guardada (pega otra para cambiarla)' : 'Clave secreta de la app'}">
-            <button type="submit">Guardar</button>
-          </form>
-        </li>
-        <li>Agrega y verifica tu número de empresa en <em>WhatsApp → Configuración de la API</em>.</li>
-      </ol>
-    </div>
   </div>`;
 
   $('#view-settings').querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
@@ -437,13 +421,6 @@ async function renderSettings() {
   $('#regen').addEventListener('click', async () => {
     if (!confirm('El formulario actual dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?')) return;
     await api('/api/settings', { method: 'PATCH', body: { regenerate_form_key: true } });
-    renderSettings();
-  });
-  $('#secret-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const secret = e.target.secret.value.trim();
-    if (!secret) return;
-    await api('/api/settings', { method: 'PATCH', body: { whatsapp_app_secret: secret } });
     renderSettings();
   });
 }

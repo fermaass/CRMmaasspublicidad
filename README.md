@@ -1,6 +1,6 @@
 # CRM Maass Publicidad
 
-CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads entran solos desde formularios web y WhatsApp. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
+CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
 
 ## Roles
 
@@ -17,7 +17,7 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads en
 2. **New Project → Deploy from GitHub repo** y elige este repositorio.
 3. Cuando aparezca el servicio, clic derecho sobre él → **Attach volume** (o *Add Volume*), con ruta `/data`. Ahí se guarda la base de datos; sin volumen se borraría en cada actualización.
 4. En el servicio: **Settings → Networking → Generate Domain**. Esa es la dirección de tu CRM.
-5. Abre esa dirección: la app te pide crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario y WhatsApp.
+5. Abre esa dirección: la app te pide crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario de tu página.
 
 No hace falta configurar variables de entorno: la app detecta el volumen y genera sola sus claves.
 
@@ -65,15 +65,13 @@ La clave queda visible en el HTML de la página. Para formularios públicos es a
 
 Para Meta Lead Ads, Google Ads u otros, conecta con Zapier o Make apuntando a esta misma URL.
 
-### WhatsApp (WhatsApp Business Cloud API de Meta)
+### WhatsApp y llamadas (captura manual)
 
-Los pasos, con la URL y el token para copiar, están en la pantalla **Configuración** de la app. Ahí mismo se guarda la clave secreta de la app de Meta y se ve cuándo llegó el último mensaje.
-
-Cada número nuevo que escribe crea un lead con su nombre de perfil de WhatsApp. Si el número ya existe no se duplica: el mensaje se agrega a su historial.
+Con **+ Lead** se elige por dónde llegó (WhatsApp, llamada u otro) y se escribe el teléfono. Si ese contacto ya existe, no se duplica: se abre su ficha y el nuevo contacto queda en su historial. Si lo atiende otro vendedor, la app avisa quién. En el Resumen se ve cuántos leads llegan por cada canal.
 
 ### Duplicados
 
-Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como llega de WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Nuevo – cumple perfil si ya estaba perfilado) y conserva su historial.
+Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Nuevo – cumple perfil si ya estaba perfilado) y conserva su historial.
 
 ## Respaldos
 
