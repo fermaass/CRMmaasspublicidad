@@ -55,7 +55,7 @@ test('los toques mueven la etapa: responde en el 2, cumple perfil, se cotiza en 
   await touch(id, 'vendido', { sale_amount: '50,000' });
   l = await lead(id);
   assert.equal(l.status, 'vendido'); assert.equal(l.sale_amount, 50000); assert.equal(l.touch_count, 4);
-  assert.equal((await touch(id, 'seguimiento')).status, 409, 'un lead cerrado ya no lleva toques');
+  assert.equal((await touch(id, 'sin_respuesta')).status, 400, 'un vendido solo lleva toques de postventa');
 
   const list = (await req(`/api/leads/${id}/touches`, { cookie: ana })).json;
   assert.deepEqual(list.map((t) => [t.n, t.outcome]), [[1, 'sin_respuesta'], [2, 'cumple'], [3, 'cotizado'], [4, 'vendido']]);

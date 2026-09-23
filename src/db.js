@@ -31,15 +31,25 @@ const TOUCH_OUTCOMES = {
   cotizado: 'Se envió cotización',
   vendido: 'Cerró venta',
   rechazo: 'No le interesó',
+  referidos: 'Ya lo contacté (referidos)',
+  renovo: 'Renovó',
+  no_renueva: 'No renueva',
 };
 // Qué resultados tienen sentido según la etapa en que va el lead.
 const OUTCOMES_BY_STATUS = {
   nuevo: ['sin_respuesta', 'cumple', 'no_cumple', 'conversacion'],
   nuevo_perfil: ['sin_respuesta', 'seguimiento', 'cotizado', 'rechazo'],
   cotizando: ['sin_respuesta', 'seguimiento', 'vendido', 'rechazo'],
+  vendido: ['referidos', 'renovo', 'no_renueva'], // postventa: cuál aplica depende de lo que toque (ver FOLLOWUP.nextAction)
 };
 const NO_ANSWER = 'No contestó (5 toques)';
 const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
+// Perfil rápido: tres preguntas de un toque, todas opcionales.
+const QUICK_PROFILE = {
+  decision_maker: { label: '¿Habla con quien decide?', options: { si: 'Sí, decide', no: 'No, decide otro' } },
+  budget_status: { label: '¿Tiene presupuesto?', options: { si: 'Sí tiene', por_definir: 'Por definir' } },
+  start_window: { label: '¿Cuándo arranca?', options: { mes: 'Este mes', trimestre: '1 a 3 meses', despues: 'Más adelante' } },
+};
 // Contestó en algún momento pero dejó de responder: 3 seguimientos seguidos sin respuesta (FOLLOWUP.SILENT_MAX).
 const GHOSTED = 'Dejó de contestar';
 const DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
@@ -146,7 +156,11 @@ function openDb(dbPath) {
   // Monto cotizado, fecha para volver a contactar, primer toque y de qué anuncio viene.
   for (const [col, type] of [['quote_amount', 'REAL'], ['recontact_at', 'TEXT'], ['first_touch_at', 'TEXT'],
     ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_content', 'TEXT'],
-    ['silent_streak', 'INTEGER NOT NULL DEFAULT 0']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
+    ['silent_streak', 'INTEGER NOT NULL DEFAULT 0'],
+    // Perfil rápido (3 preguntas de un toque), próximo paso acordado y postventa.
+    ['decision_maker', 'TEXT'], ['budget_status', 'TEXT'], ['start_window', 'TEXT'],
+    ['next_step', 'TEXT'], ['next_step_at', 'TEXT'],
+    ['campaign_end', 'TEXT'], ['postsale_at', 'TEXT'], ['renewal_for', 'TEXT'], ['renewal_amount', 'REAL NOT NULL DEFAULT 0']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
     if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
   }
   // Inversión de cada campaña por mes ('AAAA-MM').
@@ -231,10 +245,12 @@ const WA_TEMPLATES = {
   seguimiento: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Para prepararte una propuesta de {producto}, ¿me confirmas zona, fechas y presupuesto aproximado?',
   cotizacion: 'Hola {nombre}, ¿pudiste revisar la cotización de {producto} que te enviamos? Con gusto resolvemos cualquier duda.',
   recontacto: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
+  postventa: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. ¿Cómo va tu campaña? Si conoces a alguien a quien le pueda servir, con gusto lo atendemos.',
+  renovacion: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Tu campaña está por terminar; ¿te aparto el espacio para el siguiente periodo antes de que se ocupe?',
 };
 
 module.exports = {
   WA_TEMPLATES,
   openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, QUICK_PROFILE, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };

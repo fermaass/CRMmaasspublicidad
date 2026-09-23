@@ -456,3 +456,22 @@ button:disabled { opacity: .45; cursor: default; }
 .answered-pill { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px; background: #d9f4f1; color: #00736d;
   font-size: 11px; font-weight: 700; }
 .today-main .answered-pill { margin-top: 0; }
+
+/* Perfil rápido, acuerdo y última nota */
+.modal-extra { display: grid; gap: 10px; margin: 6px 0 12px; }
+.modal-extra label { display: grid; gap: 4px; }
+.modal-extra .seg-group { margin-bottom: 0; }
+.modal-box { max-height: 90vh; overflow-y: auto; }
+.quick-profile { display: grid; gap: 6px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fafbfe; }
+.qp-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.qp-q { color: var(--muted); min-width: 170px; }
+button.qp { background: #fff; color: var(--text); border: 1.5px solid #d5dae6; box-shadow: none; padding: 3px 10px; font-size: 12px; font-weight: 600; border-radius: 999px; }
+button.qp:hover { border-color: var(--accent); filter: none; box-shadow: none; }
+button.qp.on { background: var(--f-contactados); border-color: var(--f-contactados); color: #fff; }
+button.qp:disabled { opacity: 1; }
+.agreed-note { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); color: #0b4a9c; margin: 8px 0; }
+.touch-badge.agreed:not(.late):not(.today) { background: var(--accent-soft); color: #0b4a9c; }
+.today-note { flex: 1 1 100%; color: var(--muted); font-size: 13px; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.touch-head { flex-wrap: wrap; }
+.touch-head strong { white-space: nowrap; }
+.touch-head .touch-badge { white-space: normal; max-width: 100%; }

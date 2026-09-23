@@ -108,6 +108,26 @@ function ask(message, { input = false, inputType = 'text', placeholder = '', okL
   });
 }
 
+// Pregunta con varios campos opcionales en el mismo recuadro. Devuelve los valores o null si se cancela.
+function askForm(message, fieldsHtml, okLabel = 'Registrar') {
+  return new Promise((resolve) => {
+    const modal = $('#modal'); const extra = $('#modal-extra'); const ok = $('#modal-ok');
+    $('#modal-text').textContent = message;
+    $('#modal-select').classList.add('hidden'); $('#modal-input').classList.add('hidden');
+    extra.innerHTML = fieldsHtml; extra.classList.remove('hidden');
+    ok.textContent = okLabel; ok.classList.remove('danger');
+    modal.classList.remove('hidden');
+    (extra.querySelector('input:not([type=radio]), textarea') || ok).focus();
+    const close = (value) => {
+      modal.classList.add('hidden'); extra.classList.add('hidden'); extra.innerHTML = '';
+      ok.onclick = null; $('#modal-cancel').onclick = null;
+      resolve(value);
+    };
+    ok.onclick = () => close(Object.fromEntries(new FormData(extra)));
+    $('#modal-cancel').onclick = () => close(null);
+  });
+}
+
 // ---------- Sesión ----------
 function showLogin() {
   state.me = null;
@@ -295,7 +315,7 @@ function cardAction(l) {
     return l.recontact_at ? `<span class="touch-badge today">${icon('calendar', 13)} Volver a contactar ${shortDate(`${l.recontact_at}T12:00:00`)}</span>`
       : `<span class="touch-badge late">${esc(l.decline_reason || 'Sin motivo')}</span>`;
   }
-  return `<span class="touch-badge ok">${icon('check', 13)} ${l.sale_amount ? money(l.sale_amount) : 'Vendido'}</span>`;
+  return (nextAction(l) && touchBadge(l)) || `<span class="touch-badge ok">${icon('check', 13)} ${l.sale_amount ? money(l.sale_amount) : 'Vendido'}</span>`;
 }
 
 function timeAgo(iso) {
@@ -319,6 +339,20 @@ function nextAction(l) {
   const a = F.nextAction(l);
   return a ? { ...a, days: F.dayDiff(a.due) } : null;
 }
+// Resultados posibles del siguiente toque. En Vendido dependen de lo que toque: referidos o renovación.
+function outcomesFor(l) {
+  if (l.status !== 'vendido') return state.meta.touches.byStatus[l.status] || [];
+  const k = F.nextAction(l)?.kind;
+  return k === 'postventa' ? ['referidos'] : k === 'renovacion' ? ['renovo', 'no_renueva'] : [];
+}
+const hhmm = (d) => new Date(d).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+// Cuándo toca, con hora si fue acordado con el cliente.
+function whenLabel(a) {
+  if (a.kind === 'recontacto' && a.days < 0) return `desde el ${shortDate(a.due)}`;
+  if (!a.agreed) return whenText(a.days);
+  const day = a.days === 0 ? 'hoy' : a.days === 1 ? 'mañana' : a.days < 0 ? whenText(a.days) : shortDate(a.due);
+  return `${day} ${hhmm(a.due)}`;
+}
 const whenText = (days) => (days < 0 ? `${-days} ${days === -1 ? 'día' : 'días'} tarde` : days === 0 ? 'toca hoy' : days === 1 ? 'mañana' : `en ${days} días`);
 // Liga de WhatsApp con el mensaje de lo que toca (primer contacto, seguimiento, cotización o recontacto).
 // {vendedor} es quien da clic: el mensaje sale de su WhatsApp.
@@ -341,7 +375,7 @@ function touchBadge(l) {
     if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
     return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
   }
-  return `<span class="touch-badge ${whenClass(a.days)}">${icon(a.kind === 'cotizacion' ? 'file' : 'phone', 13)} ${esc(a.label)} · ${whenText(a.days)}</span>`;
+  return `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${icon(a.kind === 'cotizacion' ? 'file' : 'phone', 13)} ${esc(a.label)} · ${whenLabel(a)}</span>`;
 }
 
 // Aviso arriba del tablero con lo vencido y lo de hoy (toques, seguimientos y cotizaciones).
@@ -373,18 +407,20 @@ function renderToday() {
     nuevo_perfil: 'Cumplen perfil: toca enviar la cotización',
     cotizando: 'Seguimiento de la cotización a los 2, 5 y 10 días',
     declinado: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
+    vendido: 'Clientes: preguntar cómo va la campaña, pedir referidos y ofrecer la renovación a tiempo',
   };
   const canTouch = (l) => canEditLead(l);
   const row = ({ l, a }) => {
-    const outcomes = state.meta.touches.byStatus[l.status] || [];
+    const outcomes = outcomesFor(l);
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
         ${answeredInNew(l) ? ANSWERED_PILL : ''}
-        <span class="touch-badge ${whenClass(a.days)}">${esc(a.label)} · ${a.kind === 'recontacto' && a.days < 0 ? `desde el ${shortDate(a.due)}` : whenText(a.days)}</span>
+        <span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
         ${l.phone ? `<span class="muted">${esc(l.phone)}</span>` : ''}
+        ${l.last_note && l.last_note !== l.next_step ? `<span class="today-note" title="${esc(l.last_note)}">“${esc(l.last_note)}”</span>` : ''}
       </div>
       ${!canTouch(l) ? '' : a.kind === 'recontacto'
         ? `<div class="today-actions">${waButton(l, true)}<button type="button" class="small" data-reactivate>Reactivar lead</button></div>`
@@ -398,10 +434,10 @@ function renderToday() {
   const sections = state.meta.statuses.filter((st) => STAGE_HELP[st]).map((st) => {
     const list = items.filter((x) => x.l.status === st);
     const onBoard = state.leads.filter(mine).filter((l) => l.status === st).length;
-    if (st === 'declinado' && !list.length) return '';
+    if (['declinado', 'vendido'].includes(st) && !list.length) return '';
     return `<section class="card today-group">
       <h3 class="col-head today-head ${textClass(st)}" style="${colorVar(st)}"><span>${esc(label(st))}</span>
-        <span class="count">${list.length} hoy${st === 'declinado' ? '' : ` · ${onBoard} en el tablero`}</span></h3>
+        <span class="count">${list.length} hoy${['declinado', 'vendido'].includes(st) ? '' : ` · ${onBoard} en el tablero`}</span></h3>
       <p class="muted small-note today-help">${STAGE_HELP[st]}</p>
       ${list.length ? list.map(row).join('') : '<p class="muted today-none">Nada pendiente hoy en esta etapa.</p>'}
     </section>`;
@@ -431,12 +467,40 @@ function renderToday() {
 }
 
 // Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
+// Perfil rápido en la ficha: tres preguntas, un toque cada una (otro toque en la misma respuesta la borra).
+function quickProfileStrip(l) {
+  if (!['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status) && !Object.keys(state.meta.quickProfile).some((k) => l[k])) return '';
+  return `<div class="quick-profile">${Object.entries(state.meta.quickProfile).map(([k, q]) => `<div class="qp-row"><span class="qp-q">${esc(q.label)}</span>
+    ${Object.entries(q.options).map(([v, t]) => `<button type="button" class="qp ${l[k] === v ? 'on' : ''}" data-qp="${k}" data-v="${v}" ${l.can_edit ? '' : 'disabled'}>${esc(t)}</button>`).join('')}</div>`).join('')}</div>`;
+}
+
+// Campos de captura: todos opcionales y lo más cortos posible.
+const agreementFields = () => `<label>¿Qué se habló o acordó?<input name="note" maxlength="300" placeholder="Ej. Le mando propuesta con 3 ubicaciones"></label>
+  <label>¿Cuándo es el siguiente paso?<input type="datetime-local" name="next_step_at"></label>`;
+const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
+  <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
+const moneyField = (name, text) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000"></label>`;
+const dateField = (name, text) => `<label>${text}<input type="date" name="${name}"></label>`;
+
+// Registra un toque (desde Mi día o la ficha) pidiendo en un solo paso lo que haga falta según el resultado.
 async function registerTouch(l, channel, outcome) {
   const body = { channel, outcome };
-  if (outcome === 'cotizado') {
-    const amount = await ask('¿De cuánto es la cotización? (opcional, sirve para ver cuánto dinero hay en juego)', { input: true, placeholder: 'Ej. 60000', okLabel: 'Registrar cotización' });
-    if (amount === null) return false;
-    if (amount) body.quote_amount = amount;
+  const forms = {
+    cumple: ['Cumple perfil. Si puedes, responde (un toque cada una):', `${quickProfileFields(l)}${agreementFields()}`],
+    conversacion: ['Contestó. ¿Qué quedaron?', agreementFields()],
+    seguimiento: ['Sigue en conversación. ¿Qué quedaron?', agreementFields()],
+    cotizado: ['Cotización enviada', `${moneyField('quote_amount', '¿De cuánto es? (para saber cuánto hay en juego)')}${agreementFields()}`],
+    vendido: ['¡Venta cerrada!', `${moneyField('sale_amount', '¿De cuánto fue?')}${dateField('campaign_end', '¿Cuándo termina la campaña? (para ofrecer la renovación a tiempo)')}`],
+    referidos: ['¿Cómo va su campaña?', '<label>¿Te recomendó a alguien?<input name="note" maxlength="300" placeholder="Nombre y teléfono, si te lo dio"></label>'],
+    renovo: ['¡Renovó!', `${moneyField('renewal_amount', '¿Por cuánto?')}${dateField('campaign_end', '¿Hasta cuándo va ahora la campaña?')}`],
+  };
+  if (forms[outcome]) {
+    const v = await askForm(forms[outcome][0], forms[outcome][1]);
+    if (v === null) return false;
+    for (const [k, val] of Object.entries(v)) if (val) body[k] = val;
+    // La hora la pone el navegador del vendedor: se manda en ISO para que no dependa de la zona del servidor.
+    if (body.note && body.next_step_at) body.next_step = body.note;
+    if (body.next_step_at) body.next_step_at = new Date(body.next_step_at).toISOString();
   }
   if (outcome === 'rechazo') {
     const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== state.meta.noAnswer && r !== state.meta.ghosted), okLabel: 'Declinar' });
@@ -446,11 +510,6 @@ async function registerTouch(l, channel, outcome) {
       const date = await ask('¿Cuándo lo volvemos a contactar? (opcional)', { input: true, inputType: 'date', okLabel: 'Guardar' });
       if (date) body.recontact_at = date;
     }
-  }
-  if (outcome === 'vendido') {
-    const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional)', { input: true, placeholder: 'Ej. 45000', okLabel: 'Registrar venta' });
-    if (amount === null) return false;
-    if (amount) body.sale_amount = amount;
   }
   try {
     const r = await api(`/api/leads/${l.id}/touches`, { method: 'POST', body });
@@ -1004,12 +1063,12 @@ ${tt.user_name}` : ''}`)}">
     return `<div class="tp todo"><span class="tp-dot">${i + 1}</span><span class="tp-n">T${i + 1}</span>
       <span class="tp-date">${inCadence ? planned.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : ''}</span></div>`;
   }).join('');
-  const outcomes = t.byStatus[l.status];
+  const outcomes = outcomesFor(l).length ? outcomesFor(l) : null;
   const n = touches.length + 1;
   const d = nextAction(l);
   const form = l.can_edit && outcomes ? `<div class="touch-form">
       <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${whenClass(d.days)}">
-        ${esc(d.label)} · ${d.days < 0 ? whenText(d.days) : d.days === 0 ? 'toca hoy' : `el ${shortDate(d.due)}`}</span>` : ''}</div>
+        ${esc(d.label)} · ${d.agreed ? whenLabel(d) : d.days < 0 ? whenText(d.days) : d.days === 0 ? 'toca hoy' : `el ${shortDate(d.due)}`}</span>` : ''}</div>
       <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c, i) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${i === 0 ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
       <div class="outcome-grid">${outcomes.map((o) => `<button type="button" class="outcome ${o}" data-outcome="${o}">${esc(t.outcomes[o])}</button>`).join('')}</div>
       ${!l.contacted_at && n === t.max ? '<p class="muted small-note">Es el último toque de la cadencia: si no contesta, el lead pasa a Declinado.</p>' : ''}
@@ -1035,7 +1094,12 @@ async function openLead(id) {
       ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : l.channel_name ? `<span class="tag">${esc(l.channel_name)}</span>` : ''}
       ${l.quote_amount ? `<span class="tag">Cotizado ${money(l.quote_amount)}</span>` : ''}
       ${l.sale_amount ? `<span class="tag cumple">Vendido ${money(l.sale_amount)}</span>` : ''}
+      ${l.campaign_end ? `<span class="tag">Campaña hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
+      ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
     </div>
+    ${quickProfileStrip(l)}
+    ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
+      ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
     <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${adLine ? ` · ${esc(adLine)}` : ''}</p>
     ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
       ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
@@ -1074,6 +1138,8 @@ async function openLead(id) {
           <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
             <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
         </div>
+        <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="end-wrap">¿Cuándo termina la campaña?
+          <input type="date" name="campaign_end" value="${esc(l.campaign_end || '')}" ${ro}></label>
         <div class="row ${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">
           <label>Motivo <select name="decline_reason" ${ro}>${[...new Set([...(l.decline_reason ? [l.decline_reason] : []), ...state.meta.declineReasons])]
             .map((r) => `<option ${r === l.decline_reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
@@ -1098,6 +1164,12 @@ async function openLead(id) {
     if (ok) openLead(l.id);
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
+  document.querySelectorAll('#drawer-body [data-qp]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { [b.dataset.qp]: l[b.dataset.qp] === b.dataset.v ? null : b.dataset.v } });
+      openLead(l.id);
+    } catch (err) { toast(err.message, 'error'); }
+  }));
   $('#drawer-body [data-wa]')?.addEventListener('click', () => {
     const r = $('#drawer-body input[name=touch-channel][value=whatsapp]'); if (r) r.checked = true;
   });
@@ -1113,13 +1185,14 @@ async function openLead(id) {
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
     $('#sale-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
+    $('#end-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
     $('#quote-wrap').classList.toggle('hidden', !['cotizando', 'vendido', 'declinado'].includes(form.status.value));
     form.status.setAttribute('style', colorVar(form.status.value));
     form.status.classList.toggle('dark-text', DARK_TEXT.has(form.status.value));
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'name', 'phone', 'email', 'product_id']
+    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'campaign_end', 'name', 'phone', 'email', 'product_id']
       .map((k) => [k, form[k].value]));
     Object.assign(body, originToFields(form.origin.value));
     try {
@@ -1390,7 +1463,7 @@ async function renderSettings() {
       <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
         Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code> y <code>{producto}</code>.</p>
       <form id="wa-form" class="wa-form">
-        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)']]
+        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', 'Cliente: cómo va la campaña y referidos'], ['renovacion', 'Cliente: ofrecer la renovación']]
           .map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000">${esc(s.wa_templates[k])}</textarea></label>`).join('')}
         <p class="muted small-note">Si dejas uno vacío, vuelve al mensaje de fábrica.</p>
         <button type="submit">Guardar mensajes</button>

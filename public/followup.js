@@ -11,20 +11,38 @@
   const AFTER_QUOTE_EVERY = 7;
   // Si ya contestó y luego deja de responder: con 3 seguimientos seguidos sin respuesta se declina ("Dejó de contestar").
   const SILENT_MAX = 3;
+  // Después de vender: pedir referidos a las 3 semanas y ofrecer renovación 30 días antes de que termine la campaña.
+  const REFERRAL_AFTER = 21;
+  const RENEW_BEFORE = 30;
 
   const ms = (iso) => new Date(iso).getTime();
+  const fmtDay = (d) => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
   // Aviso cuando el siguiente seguimiento sin respuesta declinaría el lead.
   const lastTry = (l) => ((l.silent_streak || 0) >= SILENT_MAX - 1 ? ' (último intento)' : '');
 
   // Devuelve { kind, n, due, label } o null si no hay nada pendiente.
   function nextAction(l) {
-    if (l.status === 'vendido') return null;
+    if (l.status === 'vendido') {
+      if (l.won_at && !l.postsale_at) {
+        return { kind: 'postventa', n: null, due: new Date(ms(l.won_at) + REFERRAL_AFTER * DAY), label: '¿Cómo va la campaña? Pedir referidos' };
+      }
+      if (l.campaign_end && l.renewal_for !== l.campaign_end) {
+        const end = new Date(`${l.campaign_end}T09:00:00`);
+        return { kind: 'renovacion', n: null, due: new Date(end.getTime() - RENEW_BEFORE * DAY), label: `Renovación: la campaña termina el ${fmtDay(end)}` };
+      }
+      return null;
+    }
     if (l.status === 'declinado') {
       if (!l.recontact_at) return null;
       return { kind: 'recontacto', n: null, due: new Date(`${l.recontact_at}T09:00:00`), label: 'Volver a contactar' };
     }
     const done = l.touch_count || 0;
     const n = done + 1;
+    // Lo que el vendedor acordó con el cliente manda sobre la cadencia.
+    if (l.next_step_at) {
+      return { kind: l.status === 'cotizando' ? 'cotizacion' : 'seguimiento', n, due: new Date(l.next_step_at), agreed: true,
+        label: `Acordado: ${l.next_step || 'dar seguimiento'}${lastTry(l)}` };
+    }
     if (!l.contacted_at) {
       if (l.status !== 'nuevo' || done >= MAX) return null;
       return { kind: 'cadencia', n, due: new Date(ms(l.created_at) + CADENCE[done] * DAY), label: `Toque ${n}/${MAX}` };
@@ -73,7 +91,7 @@
     return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   }
 
-  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, SILENT_MAX, nextAction, dayDiff, waNumber, waLink };
+  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);

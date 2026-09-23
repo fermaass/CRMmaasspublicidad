@@ -18,6 +18,13 @@ Si un vendedor captura un lead que le escribió directo, se queda con él. En la
 
 Si un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan **sin asignar** (con una nota en su historial) para repartirlos; antes de hacerlo, la app avisa cuántos son. La pestaña Asignación muestra cuántos leads esperan vendedor y se pone en rojo si alguno lleva más de 2 horas esperando.
 
+## Lo que captura el vendedor (todo opcional y en un solo paso)
+
+- **Perfil rápido.** Al marcar "Contestó y cumple perfil" salen tres preguntas de un toque: ¿habla con quien decide?, ¿tiene presupuesto? y ¿cuándo arranca? (este mes, 1 a 3 meses, más adelante). Se ven y se cambian con un toque en la ficha.
+- **Qué se acordó y cuándo.** Al registrar una respuesta (contestó, sigue en conversación, cotización enviada) se puede escribir qué se habló y la fecha y hora del siguiente paso. Esa fecha **manda sobre la cadencia** en Mi día ("Acordado: … · jueves 11:00"). El siguiente toque reemplaza el acuerdo.
+- **Última nota en Mi día**, para preparar la llamada sin abrir la ficha.
+- **Postventa.** Al cerrar la venta se pregunta cuándo termina la campaña. A las 3 semanas de vendido aparece "¿Cómo va la campaña? Pedir referidos" y 30 días antes de que termine, "Renovación". Si renueva, se registra el monto (aparte de la venta original) y la nueva fecha de fin, y el ciclo vuelve a empezar. Los clientes aparecen en Mi día bajo Vendido.
+
 ## Botón de WhatsApp
 
 En la ficha y en Mi día hay un botón que abre WhatsApp (en el celular o en WhatsApp Web) con el chat del cliente y un mensaje ya escrito según lo que toque: primer contacto, seguimiento, seguimiento de la cotización o volver a contactar. Quien lo envía puede cambiarlo antes. Los mensajes se editan en **Configuración → Mensajes de WhatsApp** con `{nombre}` (primer nombre del cliente), `{vendedor}` (quien envía) y `{producto}`.

@@ -46,7 +46,7 @@ test('plantillas de WhatsApp: de fábrica, editables por gerente y visibles para
   const { id } = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Ana', email: 'a@t.com', password: 'password123', role: 'vendedor' } })).json;
   const ana = (await req('/api/login', { method: 'POST', body: { email: 'a@t.com', password: 'password123' } })).cookie;
   const t = (await req('/api/wa-templates', { cookie: ana })).json;
-  assert.deepEqual(Object.keys(t).sort(), ['cadencia', 'cotizacion', 'recontacto', 'seguimiento']);
+  assert.deepEqual(Object.keys(t).sort(), ['cadencia', 'cotizacion', 'postventa', 'recontacto', 'renovacion', 'seguimiento']);
   await req('/api/settings', { method: 'PATCH', cookie: gerente, body: { wa_templates: { cotizacion: 'Hola {nombre}, ¿revisaste la propuesta?', otra: 'x' } } });
   const t2 = (await req('/api/wa-templates', { cookie: ana })).json;
   assert.equal(t2.cotizacion, 'Hola {nombre}, ¿revisaste la propuesta?');

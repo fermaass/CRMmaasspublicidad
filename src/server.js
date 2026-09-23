@@ -2,7 +2,7 @@ const path = require('node:path');
 const express = require('express');
 const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, QUICK_PROFILE, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
 } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
@@ -26,6 +26,7 @@ const requireAssigner = (req, res, next) => {
 // Canal efectivo del lead: el suyo o, si no tiene, el de su campaña.
 const CHANNEL_EXPR = `COALESCE(l.channel_id, (SELECT cc.channel_id FROM catalog_items cc WHERE cc.kind = 'campana' AND cc.name = l.campaign))`;
 const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+const isDateTime = (v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v)) && !Number.isNaN(new Date(v).getTime());
 
 function createApp({ db, config }) {
   ensureSettings(db, config);
@@ -89,7 +90,7 @@ function createApp({ db, config }) {
 
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
     touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
-    declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
+    quickProfile: QUICK_PROFILE, declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
   app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
@@ -252,7 +253,8 @@ function createApp({ db, config }) {
   });
 
   // ---------- Leads ----------
-  const leadSelect = `SELECT l.*, u.name AS assigned_name, ch.name AS channel_name, pr.name AS product_name FROM leads l
+  const leadSelect = `SELECT l.*, u.name AS assigned_name, ch.name AS channel_name, pr.name AS product_name,
+    (SELECT e.content FROM lead_events e WHERE e.lead_id = l.id AND e.type = 'nota' ORDER BY e.id DESC LIMIT 1) AS last_note FROM leads l
     LEFT JOIN users u ON u.id = l.assigned_to
     LEFT JOIN catalog_items ch ON ch.id = ${CHANNEL_EXPR}
     LEFT JOIN catalog_items pr ON pr.id = l.product_id`;
@@ -406,6 +408,27 @@ function createApp({ db, config }) {
     res.json({ ok: true });
   });
 
+  // Perfil rápido, próximo paso acordado y fin de campaña. Solo cambia lo que viene en b.
+  function saveExtras(user, lead, b, status) {
+    const set = {};
+    for (const k of Object.keys(QUICK_PROFILE)) if (b[k] !== undefined) set[k] = b[k] || null;
+    if (b.campaign_end !== undefined) set.campaign_end = b.campaign_end || null;
+    if (b.next_step !== undefined) set.next_step = String(b.next_step || '').trim().slice(0, 300) || null;
+    if (b.next_step_at !== undefined) set.next_step_at = b.next_step_at ? new Date(b.next_step_at).toISOString() : null;
+    // Un lead cerrado no tiene próximo paso pendiente.
+    if (['declinado', 'vendido'].includes(status)) { set.next_step = null; set.next_step_at = null; }
+    const keys = Object.keys(set);
+    if (!keys.length) return;
+    db.prepare(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => set[k]), lead.id);
+    const answers = Object.keys(QUICK_PROFILE).filter((k) => set[k] && set[k] !== lead[k]).map((k) => QUICK_PROFILE[k].options[set[k]]);
+    if (answers.length) addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${answers.join(' · ')}`);
+    if (set.campaign_end && set.campaign_end !== lead.campaign_end) addEvent(db, lead.id, user.id, 'estado', `La campaña termina el ${set.campaign_end}`);
+    if (set.next_step_at) {
+      const when = new Date(set.next_step_at).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' });
+      addEvent(db, lead.id, user.id, 'estado', `Próximo paso acordado para el ${when}`);
+    }
+  }
+
   // Aplica cambios a un lead (desde la ficha, el tablero o un toque) y registra los hitos del embudo.
   // Devuelve { status, error } si algo no es válido.
   function updateLead(user, lead, b) {
@@ -413,6 +436,11 @@ function createApp({ db, config }) {
     try {
       quoteAmount = b.quote_amount !== undefined ? money(b.quote_amount) : lead.quote_amount;
       if (b.recontact_at && !isDate(b.recontact_at)) throw new Error('Fecha inválida');
+      if (b.campaign_end && !isDate(b.campaign_end)) throw new Error('Fecha de fin de campaña inválida');
+      if (b.next_step_at && !isDateTime(b.next_step_at)) throw new Error('Fecha del próximo paso inválida');
+      for (const k of Object.keys(QUICK_PROFILE)) {
+        if (b[k] && !QUICK_PROFILE[k].options[b[k]]) throw new Error('Respuesta de perfil inválida');
+      }
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
       saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
       next = resolveStatusProfile(lead, { status: b.status, profile: b.profile });
@@ -474,6 +502,7 @@ function createApp({ db, config }) {
       addEvent(db, lead.id, user.id, 'estado', `Monto cotizado: $${quoteAmount.toLocaleString('es-MX')}`);
     }
     if (recontactAt && recontactAt !== lead.recontact_at) addEvent(db, lead.id, user.id, 'estado', `Volver a contactar el ${recontactAt}`);
+    saveExtras(user, lead, b, next.status);
 
     if (campaign !== lead.campaign) addEvent(db, lead.id, user.id, 'perfil', `Campaña: ${campaign || 'ninguna'}`);
     if (saleAmount !== lead.sale_amount && saleAmount != null) {
@@ -518,8 +547,23 @@ function createApp({ db, config }) {
     if (!allowed) return res.status(409).json({ error: 'Este lead ya está cerrado; reábrelo para registrar más toques' });
     if (!allowed.includes(outcome)) return res.status(400).json({ error: 'Ese resultado no aplica en esta etapa' });
 
+    // Postventa: el resultado tiene que corresponder a lo que toca (referidos o renovación).
+    if (lead.status === 'vendido') {
+      const kind = FOLLOWUP.nextAction(lead)?.kind;
+      if (outcome === 'referidos' && kind !== 'postventa') return res.status(400).json({ error: 'Ya se pidieron referidos a este cliente' });
+      if (['renovo', 'no_renueva'].includes(outcome) && !lead.campaign_end) return res.status(400).json({ error: 'Primero captura cuándo termina la campaña' });
+      if (req.body.campaign_end && !isDate(req.body.campaign_end)) return res.status(400).json({ error: 'Fecha de fin de campaña inválida' });
+    }
+    let renewalAmount = null;
+    try { renewalAmount = outcome === 'renovo' ? money(req.body.renewal_amount) : null; } catch (e) { return res.status(400).json({ error: e.message }); }
+
     const changes = {};
-    if (outcome !== 'sin_respuesta') changes.contacted = true;
+    if (outcome !== 'sin_respuesta' && lead.status !== 'vendido') changes.contacted = true;
+    // Lo que se acordó y cuándo (opcional). Cada toque reemplaza el acuerdo anterior.
+    changes.next_step = req.body.next_step ?? null;
+    changes.next_step_at = req.body.next_step_at || null;
+    for (const k of Object.keys(QUICK_PROFILE)) if (req.body[k] !== undefined) changes[k] = req.body[k];
+    if (outcome === 'vendido' && req.body.campaign_end) changes.campaign_end = req.body.campaign_end;
     if (outcome === 'cumple') changes.profile = 'cumple';
     if (outcome === 'no_cumple') Object.assign(changes, { profile: 'no_cumple', status: 'declinado', decline_reason: 'No cumple perfil' });
     if (outcome === 'cotizado') {
@@ -548,6 +592,17 @@ function createApp({ db, config }) {
     db.prepare('UPDATE leads SET touch_count = ?, silent_streak = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
       .run(n, streak, ts, ts, ts, lead.id);
     addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
+    const note = String(req.body.note || '').trim();
+    if (note) addEvent(db, lead.id, req.user.id, 'nota', note.slice(0, 5000));
+    if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);
+    if (outcome === 'no_renueva') db.prepare('UPDATE leads SET renewal_for = campaign_end WHERE id = ?').run(lead.id);
+    if (outcome === 'renovo') {
+      // Renovó: se registra el monto y, si viene, el nuevo fin de campaña (arranca otro ciclo de renovación).
+      const amount = renewalAmount;
+      db.prepare(`UPDATE leads SET renewal_for = campaign_end, renewal_amount = renewal_amount + ?,
+        campaign_end = COALESCE(?, campaign_end) WHERE id = ?`).run(amount || 0, req.body.campaign_end || null, lead.id);
+      addEvent(db, lead.id, req.user.id, 'estado', `Renovó${amount ? ` por $${amount.toLocaleString('es-MX')}` : ''}${req.body.campaign_end ? `; la campaña ahora termina el ${req.body.campaign_end}` : ''}`);
+    }
 
     const err = updateLead(req.user, getLead(req, lead.id), changes);
     if (err) return res.status(err.status).json({ error: err.error });
