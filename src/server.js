@@ -1,6 +1,6 @@
 const path = require('node:path');
 const express = require('express');
-const { openDb, ROLES, STATUSES, PROFILES, SOURCES, phoneKey } = require('./db');
+const { openDb, ROLES, STATUSES, PROFILES, SOURCES, phoneKey, getSetting, setSetting, ensureSettings } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
@@ -12,12 +12,16 @@ const LABELS = {
 };
 
 function createApp({ db, config }) {
+  ensureSettings(db, config);
   const app = express();
   app.disable('x-powered-by');
+  // Detrás del proxy HTTPS del hosting: así sabemos si la conexión es segura y la URL pública real.
+  app.set('trust proxy', 1);
+  app.get('/health', (req, res) => res.send('ok'));
   app.use(express.json({ limit: '1mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
   app.use(express.urlencoded({ extended: false }));
 
-  app.use('/webhooks', webhooksRouter(db, config));
+  app.use('/webhooks', webhooksRouter(db));
 
   app.use(auth.authMiddleware(db));
   // Las rutas de la API que modifican datos solo aceptan JSON: junto con la cookie SameSite
@@ -29,6 +33,26 @@ function createApp({ db, config }) {
     next();
   });
 
+  const startSession = (req, res, userId) => {
+    const { token, expires } = auth.createSession(db, userId);
+    res.set('Set-Cookie', auth.sessionCookie(token, expires, config.cookieSecure || req.secure));
+  };
+  const userCount = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+
+  // ---------- Primer uso: crear el gerente desde la pantalla ----------
+  app.get('/api/setup', (req, res) => res.json({ needed: userCount() === 0 }));
+
+  app.post('/api/setup', (req, res) => {
+    if (userCount() > 0) return res.status(409).json({ error: 'La app ya está configurada' });
+    const { name, email, password } = req.body || {};
+    if (!name || !email || !password) return res.status(400).json({ error: 'Faltan datos' });
+    if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
+      .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), 'gerente');
+    startSession(req, res, Number(lastInsertRowid));
+    res.status(201).json({ id: Number(lastInsertRowid), name, email, role: 'gerente' });
+  });
+
   // ---------- Sesión ----------
   app.post('/api/login', (req, res) => {
     const { email, password } = req.body || {};
@@ -36,8 +60,7 @@ function createApp({ db, config }) {
     if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' });
     }
-    const { token, expires } = auth.createSession(db, user.id);
-    res.set('Set-Cookie', auth.sessionCookie(token, expires, config.cookieSecure));
+    startSession(req, res, user.id);
     res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
   });
 
@@ -49,6 +72,26 @@ function createApp({ db, config }) {
   app.get('/api/me', auth.requireUser, (req, res) => res.json(req.user));
 
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, labels: LABELS }));
+
+  // ---------- Configuración (solo gerente) ----------
+  app.get('/api/settings', auth.requireRole('gerente'), (req, res) => {
+    const base = `${req.protocol}://${req.get('host')}`;
+    res.json({
+      form_url: `${base}/webhooks/form`,
+      form_api_key: getSetting(db, 'form_api_key'),
+      whatsapp_url: `${base}/webhooks/whatsapp`,
+      whatsapp_verify_token: getSetting(db, 'whatsapp_verify_token'),
+      whatsapp_app_secret_set: Boolean(getSetting(db, 'whatsapp_app_secret')),
+      whatsapp_last_message: getSetting(db, 'whatsapp_last_message'),
+    });
+  });
+
+  app.patch('/api/settings', auth.requireRole('gerente'), (req, res) => {
+    const b = req.body || {};
+    if (b.whatsapp_app_secret !== undefined) setSetting(db, 'whatsapp_app_secret', String(b.whatsapp_app_secret).trim());
+    if (b.regenerate_form_key) setSetting(db, 'form_api_key', require('node:crypto').randomBytes(18).toString('base64url'));
+    res.json({ ok: true });
+  });
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
@@ -264,7 +307,9 @@ function seedAdmin(db, config) {
 function loadConfig(env = process.env) {
   return {
     port: Number(env.PORT) || 3000,
-    dbPath: env.DB_PATH || path.join(__dirname, '..', 'data', 'crm.db'),
+    // En Railway el disco persistente se monta en RAILWAY_VOLUME_MOUNT_PATH; ahí va la base de datos.
+    dbPath: env.DB_PATH || (env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(env.RAILWAY_VOLUME_MOUNT_PATH, 'crm.db')
+      : path.join(__dirname, '..', 'data', 'crm.db')),
     adminName: env.ADMIN_NAME,
     adminEmail: env.ADMIN_EMAIL,
     adminPassword: env.ADMIN_PASSWORD,
@@ -281,7 +326,7 @@ if (require.main === module) {
   const db = openDb(config.dbPath);
   if (seedAdmin(db, config)) console.log(`Usuario gerente creado: ${config.adminEmail}`);
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
-    console.warn('No hay usuarios. Define ADMIN_EMAIL y ADMIN_PASSWORD y reinicia para crear el gerente.');
+    console.log('Primer uso: abre la app en el navegador para crear el usuario gerente.');
   }
   createApp({ db, config }).listen(config.port, () => console.log(`CRM en http://localhost:${config.port}`));
 }

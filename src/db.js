@@ -59,8 +59,36 @@ function openDb(dbPath) {
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
     CREATE INDEX IF NOT EXISTS lead_events_lead ON lead_events(lead_id);
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
   return db;
+}
+
+function getSetting(db, key) {
+  return db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value || null;
+}
+
+function setSetting(db, key, value) {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, value);
+}
+
+// Las claves se generan solas la primera vez; si vienen en variables de entorno, esas mandan.
+function ensureSettings(db, config = {}) {
+  const random = () => require('node:crypto').randomBytes(18).toString('base64url');
+  const initial = {
+    form_api_key: config.formApiKey,
+    whatsapp_verify_token: config.whatsappVerifyToken,
+    whatsapp_app_secret: config.whatsappAppSecret,
+  };
+  for (const [key, fromEnv] of Object.entries(initial)) {
+    if (fromEnv) setSetting(db, key, fromEnv);
+    else if (!getSetting(db, key) && key !== 'whatsapp_app_secret') setSetting(db, key, random());
+  }
 }
 
 // Últimos 10 dígitos: así "+52 1 55 1234 5678" (WhatsApp) y "55 1234 5678" (formulario) son el mismo contacto.
@@ -69,4 +97,4 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
-module.exports = { openDb, phoneKey, STATUSES, PROFILES, ROLES, SOURCES };
+module.exports = { openDb, phoneKey, getSetting, setSetting, ensureSettings, STATUSES, PROFILES, ROLES, SOURCES };

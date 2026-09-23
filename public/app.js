@@ -83,7 +83,7 @@ function setView(view) {
   state.view = view;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', view === 'users');
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   refresh();
 }
@@ -91,6 +91,7 @@ function setView(view) {
 async function refresh() {
   if (!state.me) return;
   if (state.view === 'users') return renderUsers();
+  if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
   state.leads = await api(`/api/leads?${filterQuery()}`);
   state.view === 'board' ? renderBoard() : renderList();
@@ -357,9 +358,103 @@ async function renderUsers() {
   });
 }
 
+// ---------- Primer uso ----------
+$('#setup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    state.me = await api('/api/setup', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    $('#setup').classList.add('hidden');
+    state.view = 'settings';
+    start();
+  } catch (err) { $('#setup-error').textContent = err.message; }
+});
+
+// ---------- Configuración ----------
+function copyField(value, multiline = false) {
+  const field = multiline
+    ? `<textarea readonly rows="9">${esc(value)}</textarea>`
+    : `<input readonly value="${esc(value)}">`;
+  return `<div class="copy">${field}<button type="button" class="ghost" data-copy>Copiar</button></div>`;
+}
+
+async function renderSettings() {
+  const s = await api('/api/settings');
+  const snippet = `<form action="${s.form_url}" method="post">
+  <input type="hidden" name="key" value="${s.form_api_key}">
+  <input type="hidden" name="campana" value="sitio-web">
+  <input type="hidden" name="redirect" value="https://TU-SITIO/gracias">
+  <input name="website" style="display:none" tabindex="-1" autocomplete="off">
+  <input name="nombre" placeholder="Nombre" required>
+  <input name="telefono" placeholder="Teléfono" required>
+  <input name="email" type="email" placeholder="Email">
+  <textarea name="mensaje" placeholder="¿En qué te podemos ayudar?"></textarea>
+  <button>Enviar</button>
+</form>`;
+  const waStatus = s.whatsapp_last_message
+    ? `<p class="ok">Conectado. Último mensaje recibido: ${fmtDate(s.whatsapp_last_message)}</p>`
+    : '<p class="warn">Todavía no ha llegado ningún mensaje de WhatsApp.</p>';
+
+  $('#view-settings').innerHTML = `<div class="settings">
+    <div class="card">
+      <h3>Formulario de tu página web</h3>
+      <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
+      <label>Dirección a donde se envía el formulario</label>${copyField(s.form_url)}
+      <label>Clave del formulario</label>${copyField(s.form_api_key)}
+      <label>Ejemplo de formulario listo para pegar en la página</label>${copyField(snippet, true)}
+      <p class="muted">Para anuncios de Facebook/Instagram (formularios de Meta) o Google Ads se conecta con Zapier o Make usando la misma dirección y clave.</p>
+      <button type="button" class="ghost" id="regen">Cambiar la clave (si llega spam)</button>
+    </div>
+
+    <div class="card">
+      <h3>WhatsApp</h3>
+      ${waStatus}
+      <p>Se usa la API oficial de WhatsApp Business de Meta. El número que conectes no puede estar al mismo tiempo en la app de WhatsApp del celular.</p>
+      <ol>
+        <li>Entra a <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a>, crea una app de tipo <em>Empresa</em> y agrégale el producto <em>WhatsApp</em>.</li>
+        <li>En <em>WhatsApp → Configuración → Webhook</em> pega estos dos datos y dale <em>Verificar y guardar</em>:
+          <label>URL de devolución de llamada</label>${copyField(s.whatsapp_url)}
+          <label>Token de verificación</label>${copyField(s.whatsapp_verify_token)}
+        </li>
+        <li>En esa misma pantalla, en <em>Campos del webhook</em>, activa <strong>messages</strong>.</li>
+        <li>En <em>Configuración de la app → Básica</em> copia la <em>Clave secreta de la app</em> y pégala aquí. Sirve para que nadie más pueda meter mensajes falsos.
+          <form id="secret-form" class="copy">
+            <input name="secret" type="password" placeholder="${s.whatsapp_app_secret_set ? 'Ya está guardada (pega otra para cambiarla)' : 'Clave secreta de la app'}">
+            <button type="submit">Guardar</button>
+          </form>
+        </li>
+        <li>Agrega y verifica tu número de empresa en <em>WhatsApp → Configuración de la API</em>.</li>
+      </ol>
+    </div>
+  </div>`;
+
+  $('#view-settings').querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    const field = b.previousElementSibling;
+    field.select();
+    try { await navigator.clipboard.writeText(field.value); } catch { document.execCommand('copy'); }
+    b.textContent = 'Copiado';
+    setTimeout(() => { b.textContent = 'Copiar'; }, 1500);
+  }));
+  $('#regen').addEventListener('click', async () => {
+    if (!confirm('El formulario actual dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?')) return;
+    await api('/api/settings', { method: 'PATCH', body: { regenerate_form_key: true } });
+    renderSettings();
+  });
+  $('#secret-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const secret = e.target.secret.value.trim();
+    if (!secret) return;
+    await api('/api/settings', { method: 'PATCH', body: { whatsapp_app_secret: secret } });
+    renderSettings();
+  });
+}
+
 // ---------- Arranque ----------
 (async () => {
   state.meta = await api('/api/meta');
+  if ((await api('/api/setup')).needed) {
+    $('#setup').classList.remove('hidden');
+    return;
+  }
   try {
     state.me = await api('/api/me');
     start();
@@ -367,5 +462,7 @@ async function renderUsers() {
     showLogin();
   }
   // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
-  setInterval(() => { if ($('#drawer').classList.contains('hidden') && state.view !== 'users') refresh(); }, 30000);
+  setInterval(() => {
+    if ($('#drawer').classList.contains('hidden') && !['users', 'settings'].includes(state.view)) refresh();
+  }, 30000);
 })();

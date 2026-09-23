@@ -11,25 +11,31 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads en
 | Vendedor | Ver sus leads y los que no tienen dueño; tomar un lead libre; cambiar etapa, perfil y agregar notas de los suyos |
 | Analista | Solo lectura de todo, resumen y exportar CSV |
 
-## Instalación
+## Publicarlo en Railway (recomendado)
 
-Requiere Node.js 22.13 o superior. No usa servicios externos: la base de datos es un archivo SQLite.
+1. Crea una cuenta en [railway.com](https://railway.com) entrando con tu cuenta de GitHub.
+2. **New Project → Deploy from GitHub repo** y elige este repositorio.
+3. Cuando aparezca el servicio, clic derecho sobre él → **Attach volume** (o *Add Volume*), con ruta `/data`. Ahí se guarda la base de datos; sin volumen se borraría en cada actualización.
+4. En el servicio: **Settings → Networking → Generate Domain**. Esa es la dirección de tu CRM.
+5. Abre esa dirección: la app te pide crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario y WhatsApp.
+
+No hace falta configurar variables de entorno: la app detecta el volumen y genera sola sus claves.
+
+## Correrlo en una computadora (desarrollo)
+
+Requiere Node.js 22.13 o superior.
 
 ```bash
 npm install
-cp .env.example .env   # y edita los valores
-npm start
+npm start      # abre http://localhost:3000
+npm test
 ```
-
-La primera vez que arranca crea el usuario gerente con `ADMIN_EMAIL` y `ADMIN_PASSWORD`. Desde la pestaña **Usuarios** el gerente da de alta a los demás.
-
-Pruebas: `npm test`.
 
 ## Entrada automática de leads
 
 ### Formularios
 
-`POST /webhooks/form` con la clave en el header `x-api-key` o en el campo/parámetro `key`. Acepta JSON o formulario HTML normal. Campos reconocidos (en español o inglés):
+La dirección y la clave aparecen en **Configuración**, junto con un formulario de ejemplo listo para copiar. Técnicamente: `POST /webhooks/form` con la clave en el header `x-api-key` o en el campo/parámetro `key`. Acepta JSON o formulario HTML normal. Campos reconocidos (en español o inglés):
 
 - `nombre` / `name`
 - `telefono` / `phone`
@@ -61,11 +67,7 @@ Para Meta Lead Ads, Google Ads u otros, conecta con Zapier o Make apuntando a es
 
 ### WhatsApp (WhatsApp Business Cloud API de Meta)
 
-1. En tu app de Meta for Developers, en WhatsApp → Configuración → Webhook:
-   - URL de devolución de llamada: `https://TU-DOMINIO/webhooks/whatsapp`
-   - Token de verificación: el mismo valor de `WHATSAPP_VERIFY_TOKEN`
-2. Suscríbete al campo `messages`.
-3. Pon el "App secret" de la app en `WHATSAPP_APP_SECRET` para que el servidor rechace mensajes que no vengan de Meta.
+Los pasos, con la URL y el token para copiar, están en la pantalla **Configuración** de la app. Ahí mismo se guarda la clave secreta de la app de Meta y se ve cuándo llegó el último mensaje.
 
 Cada número nuevo que escribe crea un lead con su nombre de perfil de WhatsApp. Si el número ya existe no se duplica: el mensaje se agrega a su historial.
 
@@ -73,6 +75,6 @@ Cada número nuevo que escribe crea un lead con su nombre de perfil de WhatsApp.
 
 Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como llega de WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Nuevo – cumple perfil si ya estaba perfilado) y conserva su historial.
 
-## Publicarlo
+## Respaldos
 
-Sirve cualquier servidor con Node y disco persistente (un VPS, Railway, Render con disco, etc.). WhatsApp exige HTTPS, así que ponlo detrás de un dominio con certificado y usa `COOKIE_SECURE=true`. Respalda el archivo de `DB_PATH` con regularidad.
+Toda la información vive en el archivo `crm.db` del volumen. En Railway activa los respaldos del volumen desde la pestaña del volumen.
