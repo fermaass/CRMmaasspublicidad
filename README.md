@@ -4,17 +4,17 @@ CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads de
 
 ## Mi día
 
-Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, ordenado por urgencia: volver a contactar a quien lo pospuso, seguimiento de cotizaciones, siguiente paso con quien ya contestó y toques de la cadencia. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. El vendedor ve además los leads sin dueño para tomarlos.
+Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, ordenado por urgencia: volver a contactar a quien lo pospuso, seguimiento de cotizaciones, siguiente paso con quien ya contestó y toques de la cadencia. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
 
 ## Asignación de leads
 
-Quien gestiona el CRM (gerente o marketing) decide qué vendedor le da seguimiento a cada lead:
+Los vendedores no toman leads: los asigna quien administra los leads. Ese es un permiso aparte, **Administra leads**, que el gerente le da a quien quiera en **Usuarios**, sea cual sea su rol. El gerente siempre lo tiene.
 
-- Al capturar un lead con **+ Lead** elige al vendedor. Viene preseleccionado el que tiene menos carga.
+- Al capturar un lead con **+ Lead**, quien administra elige al vendedor. Viene preseleccionado el que tiene menos carga.
 - En la pestaña **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana. Abajo están los leads sin dueño, del más viejo al más nuevo, cada uno con su selector y el botón Asignar. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga en ese momento.
 - La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
 
-Si un vendedor captura un lead, se queda con él. En **Configuración → Reparto de leads** se puede encender la asignación automática: cada lead que llegue sin vendedor se asigna solo al de menor carga. De fábrica está apagada.
+Si un vendedor captura un lead que le escribió directo, se queda con él. En la ficha, quien administra puede cambiar el vendedor en cualquier momento. En **Configuración → Reparto de leads** se puede encender la asignación automática: cada lead que llegue sin vendedor se asigna solo al de menor carga. De fábrica está apagada.
 
 ## Embudo de conversión y eficiencia por vendedor
 
@@ -56,17 +56,20 @@ Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola list
 
 En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.
 
-## Audiencias
+## Declinados y audiencias
 
-En la **Lista** hay atajos para armar audiencias y exportarlas en CSV: cumplen perfil y no compraron, lo pospusieron, nunca contestaron y clientes. Cada atajo solo aplica filtros; "Exportar CSV" descarga lo que se ve.
+Los declinados no se borran: son la base del embudo y de lo que cuesta cada campaña. Borrar a los que nunca contestaron haría que las campañas se vieran mejores de lo que son.
+
+- En el **Tablero**, la columna Declinado muestra solo a los que contestaron o cumplían perfil. Los que nunca contestaron se ocultan (se dice cuántos) y siguen contando en el Resumen.
+- En **Resumen → Marketing** están las audiencias para remarketing, con su conteo y un botón para descargarlas en CSV: cumplían perfil y no compraron, lo pospusieron, contestaron pero no cumplían perfil, y clientes. Los que nunca contestaron no entran en ninguna.
 
 ## Roles
 
 | Rol | Qué puede hacer |
 |---|---|
 | Gerente | Todo: leads, asignación, usuarios, exportar, eliminar leads |
-| Marketing | Ver y editar todos los leads, perfilar, asignar a vendedores, exportar |
-| Vendedor | Ver sus leads y los que no tienen dueño; tomar un lead libre; cambiar etapa, perfil y agregar notas de los suyos |
+| Marketing | Ver y editar todos los leads, campañas y listas; exportar. Asigna solo si tiene el permiso Administra leads |
+| Vendedor | Ver y trabajar solo los leads que le asignan; su propio Resumen de ventas (sin inversión ni datos de otros) |
 | Analista | Solo lectura de todo, resumen y exportar CSV |
 
 ## Publicarlo en Railway (recomendado)

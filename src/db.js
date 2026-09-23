@@ -130,6 +130,10 @@ function openDb(dbPath) {
       PRAGMA foreign_keys = ON;`);
   }
 
+  // Quién administra los leads (los asigna a vendedores). El gerente siempre puede; a los demás se les da este permiso.
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'can_assign')) {
+    db.exec('ALTER TABLE users ADD COLUMN can_assign INTEGER NOT NULL DEFAULT 0');
+  }
   const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');

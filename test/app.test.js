@@ -120,20 +120,22 @@ test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar',
   assert.equal(l.profile, 'cumple');
 });
 
-test('permisos: vendedor ve lo suyo y lo libre, analista solo lee', async () => {
+test('permisos: vendedor ve solo lo suyo, no toma leads; analista solo lee', async () => {
   const leads = (await req('/api/leads', { cookie: gerente })).json;
   const [l1, l2] = leads.filter((l) => !l.assigned_to);
   await req(`/api/leads/${l1.id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: idA } });
 
-  // Beto no ve el lead de Ana ni puede tocarlo
+  // Beto no ve el lead de Ana ni los que no tienen dueño
   const betoLeads = (await req('/api/leads', { cookie: vendedorB })).json;
-  assert.ok(!betoLeads.some((l) => l.id === l1.id));
+  assert.ok(!betoLeads.some((l) => l.id === l1.id || l.id === l2.id));
+  assert.ok(betoLeads.every((l) => l.assigned_to === idB));
   assert.equal((await req(`/api/leads/${l1.id}`, { cookie: vendedorB })).status, 404);
+  assert.equal((await req(`/api/leads/${l2.id}`, { cookie: vendedorB })).status, 404);
 
-  // Beto no puede editar un lead sin asignar, pero sí tomarlo
-  assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando' } })).status, 403);
-  assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorB, body: {} })).status, 200);
-  assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorA, body: {} })).status, 404);
+  // Ya no existe "tomar": los asigna quien administra los leads
+  assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorB, body: {} })).status, 404);
+  assert.equal((await req(`/api/leads/${l2.id}/assign`, { method: 'POST', cookie: vendedorB, body: { assigned_to: idB } })).status, 403);
+  assert.equal((await req(`/api/leads/${l2.id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: idB } })).status, 200);
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando' } })).status, 200);
 
   // Si Ana registra un contacto que ya es de Beto, se le avisa sin mostrarle la ficha

@@ -33,7 +33,7 @@ after(() => server.close());
 
 test('los toques mueven la etapa: responde en el 2, cumple perfil, se cotiza en el 3 y cierra en el 4', async () => {
   const id = await newLead('5510000001');
-  assert.equal((await touch(id, 'sin_respuesta')).status, 403, 'sin asignar no se puede tocar');
+  assert.equal((await touch(id, 'sin_respuesta')).status, 404, 'sin asignar el vendedor ni lo ve');
   await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
 
   assert.equal((await touch(id, 'cotizado')).status, 400, 'en Nuevo no se puede cotizar directo');

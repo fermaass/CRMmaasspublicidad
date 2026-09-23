@@ -5,6 +5,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const label = (k) => state.meta.labels[k] || k;
 const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 const can = (...roles) => state.me && roles.includes(state.me.role);
+// Quien administra los leads: el gerente o quien tenga ese permiso (no depende del rol).
+const canAssign = () => Boolean(state.me && (state.me.role === 'gerente' || state.me.can_assign));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
 const DARK_TEXT = new Set(['cotizando']);
 const colorVar = (key) => `--c: var(--${key})`;
@@ -46,7 +48,7 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
 const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', list: 'Lista de leads', assign: 'Asignación de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -134,6 +136,7 @@ async function start() {
   document.querySelectorAll('[data-role]').forEach((el) => {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
+  document.querySelectorAll('[data-assigner]').forEach((el) => el.classList.toggle('hidden', !canAssign()));
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
   fillFilters();
@@ -213,25 +216,17 @@ $('#clear-filters').addEventListener('click', () => {
   ['#f-q', '#f-period', '#f-assigned', '#f-campaign', ...EXTRA_FILTERS].forEach((sel) => { $(sel).value = ''; });
   updateMoreFiltersLabel(); refresh();
 });
-// Aplica un conjunto de filtros (audiencias listas) y abre la lista.
-function applyFilters(values) {
-  ['#f-q', '#f-period', '#f-assigned', '#f-campaign', ...EXTRA_FILTERS].forEach((sel) => { $(sel).value = ''; });
-  Object.entries(values).forEach(([sel, v]) => { $(sel).value = v; });
-  $('#extra-filters').classList.remove('hidden');
-  updateMoreFiltersLabel();
-  setView('list');
-}
-
 // ---------- Vistas ----------
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 ['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-campaign', '#f-period', '#f-assigned', '#f-status', '#f-reason']
   .forEach((s) => $(s).addEventListener('change', () => { updateMoreFiltersLabel(); refresh(); }));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
-$('#export').addEventListener('click', () => {
-  if (window.crmExport) return window.crmExport(filterQuery());
-  window.location = `/api/leads.csv?${filterQuery()}`;
-});
+function exportCsv(query) {
+  if (window.crmExport) return window.crmExport(query);
+  window.location = `/api/leads.csv?${query}`;
+}
+$('#export').addEventListener('click', () => exportCsv(filterQuery()));
 $('#new-lead').addEventListener('click', openNewLead);
 
 function setView(view) {
@@ -244,7 +239,7 @@ function setView(view) {
   $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
-  if (!['board', 'list'].includes(view)) $('#board-alert').classList.add('hidden');
+  if (view !== 'board') $('#board-alert').classList.add('hidden');
   refresh();
 }
 
@@ -257,7 +252,7 @@ async function refresh() {
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
-  state.view === 'board' ? renderBoard() : renderList();
+  renderBoard();
   renderBoardAlert();
 }
 
@@ -324,7 +319,7 @@ function renderBoardAlert() {
   const dues = state.leads.map(nextAction).filter((a) => a && a.kind !== 'recontacto');
   const late = dues.filter((d) => d.days < 0).length;
   const today = dues.filter((d) => d.days === 0).length;
-  el.classList.toggle('hidden', !(late || today) || !['board', 'list'].includes(state.view));
+  el.classList.toggle('hidden', !(late || today) || state.view !== 'board');
   el.innerHTML = `${late ? `<span class="alert-pill late">${icon('phone', 15)} ${late} ${late === 1 ? 'pendiente vencido' : 'pendientes vencidos'}</span>` : ''}
     ${today ? `<span class="alert-pill today">${icon('calendar', 15)} ${today} para hoy</span>` : ''}
     ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" class="ghost small" id="go-today">Ver Mi día</button>' : ''}`;
@@ -378,22 +373,16 @@ function renderToday() {
       <span class="alert-pill ${late ? 'late' : 'ok'}">${late ? `${late} ${late === 1 ? 'vencido' : 'vencidos'}` : 'Nada vencido'}</span>
       <span class="alert-pill today">${items.length - late} para hoy</span>
       ${upcoming ? `<span class="muted">${upcoming} más en los próximos 2 días</span>` : ''}
-      ${free.length && can('gerente', 'marketing') ? `<button type="button" class="ghost small" id="today-assign">${free.length} sin asignar · Asignar</button>` : ''}
+      ${free.length && canAssign() ? `<button type="button" class="ghost small" id="today-assign">${free.length} sin asignar · Asignar</button>` : ''}
       <span class="spacer"></span>
       ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
-    ${free.length && state.me.role === 'vendedor' ? `<section class="card today-group">${cardTitle('inbox', 'var(--accent)', `Leads sin dueño (${free.length})`, 'Tómalos para empezar su cadencia')}
-      ${free.map((l) => `<div class="today-row"><div class="today-main"><button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
-        <span class="muted">${timeAgo(l.created_at)}</span></div><div class="today-actions"><button type="button" class="small" data-take="${l.id}">Tomar</button></div></div>`).join('')}</section>` : ''}
     ${sections || `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
 
   const view = $('#view-today');
   $('#today-new')?.addEventListener('click', openNewLead);
   $('#today-assign')?.addEventListener('click', () => setView('assign'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
-  view.querySelectorAll('[data-take]').forEach((b) => b.addEventListener('click', async () => {
-    try { await api(`/api/leads/${b.dataset.take}/take`, { method: 'POST' }); toast('Lead tomado', 'ok'); refresh(); } catch (err) { toast(err.message, 'error'); }
-  }));
   view.querySelectorAll('.today-row[data-id]').forEach((r) => {
     const l = state.leads.find((x) => String(x.id) === r.dataset.id);
     r.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', () => registerTouch(l, $('[data-channel]', r).value, b.dataset.outcome)));
@@ -442,10 +431,17 @@ async function reactivate(l) {
 function renderBoard() {
   const board = $('#view-board');
   board.innerHTML = state.meta.statuses.map((s) => {
-    const items = state.leads.filter((l) => l.status === s);
+    let items = state.leads.filter((l) => l.status === s);
+    // Los declinados que nunca contestaron no se muestran: no vale la pena volver a buscarlos. Siguen contando en el Resumen.
+    let hidden = 0;
+    if (s === 'declinado') {
+      const keep = items.filter((l) => l.contacted_at || l.profile === 'cumple');
+      hidden = items.length - keep.length; items = keep;
+    }
     return `<div class="column" data-status="${s}">
       <h3 class="col-head ${textClass(s)}" style="${colorVar(s)}"><span>${esc(label(s))}</span><span class="count">${items.length}</span></h3>
       ${items.map(cardHtml).join('')}
+      ${hidden ? `<p class="muted small-note col-note">${hidden} ${hidden === 1 ? 'no contestó' : 'nunca contestaron'}; no se muestran aquí y siguen contando en el Resumen.</p>` : ''}
     </div>`;
   }).join('');
 
@@ -495,34 +491,6 @@ async function changeStatus(lead, status) {
   refresh();
 }
 
-function renderList() {
-  const rows = state.leads.map((l) => `<tr data-id="${l.id}">
-    <td><strong>${esc(l.name || '—')}</strong><br><span class="muted">${esc(l.phone || '')} ${esc(l.email || '')}</span></td>
-    <td class="status-cell"><span class="${textClass(l.status)}" style="${colorVar(l.status)}">${esc(label(l.status))}</span></td>
-    <td><span class="tag ${l.profile}">${esc(label(l.profile))}</span></td>
-    <td><span class="tag ${l.source}">${esc(label(l.source))}</span><br><span class="muted">${esc([l.channel_name, l.campaign].filter(Boolean).join(' · '))}</span></td>
-    <td>${esc(l.product_name || '—')}</td>
-    <td>${esc(l.assigned_name || 'Sin asignar')}</td>
-    <td class="muted">${fmtDate(l.created_at)}</td>
-  </tr>`).join('');
-  const audiences = can('gerente', 'marketing', 'analista') ? `<div class="audiences"><span class="muted">Audiencias listas:</span>
-      <button type="button" class="chip" data-aud="fit">Cumplen perfil y no compraron</button>
-      <button type="button" class="chip" data-aud="later">Lo pospusieron</button>
-      <button type="button" class="chip" data-aud="noanswer">Nunca contestaron</button>
-      <button type="button" class="chip" data-aud="clients">Clientes</button></div>` : '';
-  $('#view-list').innerHTML = `${audiences}<p class="muted">${state.leads.length} leads${can('gerente', 'marketing', 'analista') ? ' · "Exportar CSV" descarga exactamente esta lista' : ''}</p>
-    <div class="table-wrap"><table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / canal / campaña</th><th>Producto</th><th>Vendedor</th><th>Recibido</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="7" class="muted">Sin resultados</td></tr>'}</tbody></table></div>`;
-  $('#view-list').querySelectorAll('tbody tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openLead(tr.dataset.id)));
-  const AUD = {
-    fit: { '#f-status': 'declinado', '#f-profile': 'cumple' },
-    later: { '#f-status': 'declinado', '#f-reason': state.meta.postponed },
-    noanswer: { '#f-status': 'declinado', '#f-reason': state.meta.noAnswer },
-    clients: { '#f-status': 'vendido' },
-  };
-  $('#view-list').querySelectorAll('[data-aud]').forEach((b) => b.addEventListener('click', () => applyFilters(AUD[b.dataset.aud])));
-}
-
 async function renderStats() {
   const s = await api(`/api/stats?${filterQuery()}`);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
@@ -537,9 +505,11 @@ async function renderStats() {
     <div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
 
   const f = s.funnel;
-  const tab = state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas');
+  // El vendedor ve solo su Resumen de ventas; lo de marketing (inversión, costos) no le aplica.
+  const seller = state.me.role === 'vendedor';
+  const tab = seller ? 'ventas' : state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas');
   state.statsTab = tab;
-  const tabs = `<div class="tabs" role="tablist">
+  const tabs = seller ? '' : `<div class="tabs" role="tablist">
     <button type="button" role="tab" data-tab="ventas" class="${tab === 'ventas' ? 'active' : ''}">Ventas</button>
     <button type="button" role="tab" data-tab="marketing" class="${tab === 'marketing' ? 'active' : ''}">Marketing</button></div>`;
 
@@ -560,13 +530,15 @@ async function renderStats() {
     <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
       <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
-    <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
+    <div class="card chart-card">${seller ? cardTitle('users', 'var(--f-contactados)', 'Tu eficiencia', 'de lo que te asignan, cuánto avanza')
+      : cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
       ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</div>
     <div class="card chart-card span-6">${cardTitle('file', 'var(--f-cotizados)', '¿En qué toque se cotiza?', 'toque en que se envió la cotización')}
       ${touchBars(s.touches.quote, null, 'f-cotizados', 'se cotizaron')}</div>
     <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
-    <div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`;
+    ${seller ? `<div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>`
+      : `<div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`}`;
   } else {
     const paid = s.campaignFunnel.filter((r) => r.inversion > 0);
     const inv = paid.reduce((t, r) => t + r.inversion, 0);
@@ -581,6 +553,7 @@ async function renderStats() {
       ${textKpi('trend', 'Retorno', inv && sum('ingresos') ? `${(sum('ingresos') / inv).toFixed(1)}x` : '—', 'ventas ÷ inversión', 'var(--accent)')}
     </div>
     <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Conversión por campaña', 'de dónde salen los cierres')}${campaignTable(s.campaignFunnel)}</div>
+    <div class="card chart-card">${cardTitle('target', 'var(--nuevo_perfil)', 'Audiencias para remarketing', 'con los filtros de arriba; se descargan en CSV')}${audienceCards(s.audiences)}</div>
     <div class="card chart-card">${cardTitle('money', 'var(--f-cerrados)', 'Eficiencia de campañas', 'cuánto cuesta y cuánto regresa cada una')}${campaignEfficiency(s.campaignFunnel)}</div>
     <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Por anuncio', 'qué anuncio trae leads que cierran (utm_content)')}${adTable(s.adFunnel)}</div>
     <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
@@ -591,10 +564,26 @@ async function renderStats() {
     <div class="card chart-card span-6">${cardTitle('layers', 'var(--whatsapp)', 'Por canal', 'etapa de cada lead')}${stageRows(s.channelStages)}</div>`;
   }
   $('#view-stats').innerHTML = `<div class="dash">${tabs}${insightBanner(s)}${body}</div>`;
+  $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
+    exportCsv(`${filterQuery()}&audience=${b.dataset.audience}`);
+  }));
   $('#view-stats').querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
     state.statsTab = b.dataset.tab; pref.set('statsTab', b.dataset.tab); renderStats();
   }));
   animateIn($('#view-stats'));
+}
+
+const AUDIENCES = [
+  ['perfil', 'Cumplían perfil y no compraron', 'Los más valiosos para la siguiente campaña.'],
+  ['pospuso', 'Lo pospusieron', 'Tenían interés pero no presupuesto o no era el momento.'],
+  ['contestaron', 'Contestaron pero no cumplían perfil', 'Pueden servir para otro producto.'],
+  ['clientes', 'Clientes', 'Para recompra y recomendaciones.'],
+];
+function audienceCards(a) {
+  return `<div class="audience-grid">${AUDIENCES.map(([k, title, help]) => `<div class="audience">
+      <div class="value num">${a[k]}</div><strong>${title}</strong><p class="muted">${help}</p>
+      <button type="button" class="ghost small" data-audience="${k}" ${a[k] ? '' : 'disabled'}>Descargar CSV</button></div>`).join('')}</div>
+    <p class="muted small-note">Los que nunca contestaron no entran en ninguna audiencia.</p>`;
 }
 
 // KPI con texto ya formateado (dinero, tiempo), sin animación de conteo.
@@ -631,7 +620,7 @@ function insightBanner(s) {
   const parts = [`De <b>${f.recibidos}</b> leads se cerraron <b>${f.cerrados}</b> (${pctOf(f.cerrados, f.recibidos)}%).`];
   if (leak) parts.push(`La mayor fuga está de <b>${esc(leak.from)}</b> a <b>${esc(leak.to)}</b>: solo avanza el ${leak.rate}%.`);
   if (campaigns[0]) parts.push(`Campaña que mejor convierte: <b>${esc(campaigns[0].key)}</b> (${pctOf(campaigns[0].cerrados, campaigns[0].recibidos)}%).`);
-  if (seller) parts.push(`Más cierres: <b>${esc(seller.key)}</b> con ${seller.cerrados}.`);
+  if (seller && s.sellerFunnel.filter((r) => r.id).length > 1) parts.push(`Más cierres: <b>${esc(seller.key)}</b> con ${seller.cerrados}.`);
   const resp = s.touches.response;
   const respTotal = resp.reduce((t, r) => t + r.c, 0);
   if (respTotal) {
@@ -990,7 +979,7 @@ ${tt.user_name}` : ''}`)}">
 async function openLead(id) {
   const [l, touches] = await Promise.all([api(`/api/leads/${id}`), api(`/api/leads/${id}/touches`)]);
   const ro = l.can_edit ? '' : 'disabled';
-  const sellers = state.users.filter((u) => u.active && ['vendedor', 'gerente', 'marketing'].includes(u.role));
+  const sellers = state.users.filter((u) => (u.active && u.role === 'vendedor') || u.id === l.assigned_to);
   const waLink = l.phone ? `https://wa.me/${l.phone.replace(/\D/g, '')}` : null;
 
   const adLine = [l.utm_content && `Anuncio: ${l.utm_content}`, l.utm_source && [l.utm_source, l.utm_medium].filter(Boolean).join(' / ')].filter(Boolean).join(' · ');
@@ -1010,7 +999,6 @@ async function openLead(id) {
     <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${adLine ? ` · ${esc(adLine)}` : ''}</p>
     ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
       ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
-    ${state.me.role === 'vendedor' && !l.assigned_to ? '<button type="button" id="take" class="take-btn">Tomar este lead</button>' : ''}
     ${milestones(l)}
     ${touchesPanel(l, touches)}
     ${l.message ? `<p class="card message">${esc(l.message)}</p>` : ''}
@@ -1031,9 +1019,9 @@ async function openLead(id) {
           <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
         </div>
         <label>Vendedor
-          <select name="assigned_to" ${can('gerente', 'marketing') ? '' : 'disabled'}>
+          <select name="assigned_to" ${canAssign() ? '' : 'disabled'}>
             <option value="">Sin asignar</option>
-            ${sellers.map((u) => `<option value="${u.id}" ${u.id === l.assigned_to ? 'selected' : ''}>${esc(u.name)} (${u.role})</option>`).join('')}
+            ${sellers.map((u) => `<option value="${u.id}" ${u.id === l.assigned_to ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
           </select>
         </label>
         <div class="row">
@@ -1071,6 +1059,14 @@ async function openLead(id) {
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
   const form = $('#lead-form');
+  // El vendedor se cambia al momento, aparte de "Guardar": quien asigna no siempre edita el lead.
+  form.assigned_to.addEventListener('change', async () => {
+    try {
+      await api(`/api/leads/${l.id}/assign`, { method: 'POST', body: { assigned_to: form.assigned_to.value || null } });
+      toast(form.assigned_to.value ? `Asignado a ${form.assigned_to.selectedOptions[0].textContent}` : 'Sin vendedor', 'ok');
+      openLead(l.id); refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  });
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
     $('#sale-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
@@ -1083,15 +1079,11 @@ async function openLead(id) {
     const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'name', 'phone', 'email', 'product_id']
       .map((k) => [k, form[k].value]));
     Object.assign(body, originToFields(form.origin.value));
-    if (can('gerente', 'marketing')) body.assigned_to = form.assigned_to.value || null;
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body });
       openLead(l.id);
       refresh();
     } catch (err) { $('#lead-error').textContent = err.message; }
-  });
-  $('#take')?.addEventListener('click', async () => {
-    try { await api(`/api/leads/${l.id}/take`, { method: 'POST' }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
   });
   $('#delete')?.addEventListener('click', async () => {
     if (!await ask('¿Eliminar este lead y su historial? No se puede deshacer.', { okLabel: 'Eliminar', danger: true })) return;
@@ -1109,7 +1101,7 @@ async function openLead(id) {
 
 async function openNewLead() {
   let pick = '';
-  if (can('gerente', 'marketing')) {
+  if (canAssign()) {
     const w = await api('/api/workload');
     const sug = w.sellers.find((u) => u.id === w.suggested);
     pick = w.sellers.length ? `<label>¿Quién le da seguimiento? <select name="assigned_to">
@@ -1226,15 +1218,18 @@ async function renderUsers() {
         <label>Email <input name="email" type="email" required></label>
         <label>Contraseña <input name="password" type="text" minlength="8" required></label>
         <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
+        <label class="inline-check"><input type="checkbox" name="can_assign"> Administra leads</label>
         <button type="submit" style="flex:0">Crear</button>
       </form>
       <p class="error" id="user-error"></p>
-      <p class="muted">Gerente: todo, incluidos usuarios. Marketing: ve y edita todos los leads y asigna. Vendedor: ve sus leads y los sin asignar, puede tomarlos. Analista: solo lectura y reportes.</p>
+      <p class="muted">Gerente: todo, incluidos usuarios. Marketing: ve y edita todos los leads, campañas y listas. Vendedor: ve y trabaja solo los leads que le asignan, y su propio Resumen. Analista: solo lectura y reportes.
+        <strong>Administra leads</strong> es un permiso aparte: quien lo tenga asigna los leads a los vendedores, sea cual sea su rol. El gerente siempre puede.</p>
     </div>
-    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Administra leads</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
       <td>${esc(u.name)}</td><td>${esc(u.email)}</td>
       <td><select data-f="role">${roleOpts(u.role)}</select></td>
+      <td>${u.role === 'gerente' ? '<span class="muted">siempre</span>' : `<input type="checkbox" data-f="can_assign" aria-label="Administra leads" ${u.can_assign ? 'checked' : ''}>`}</td>
       <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''}></td>
       <td><button class="ghost" data-f="password">Cambiar contraseña</button></td>
     </tr>`).join('')}
@@ -1243,7 +1238,9 @@ async function renderUsers() {
   $('#user-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api('/api/users', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+      const body = Object.fromEntries(new FormData(e.target));
+      body.can_assign = e.target.can_assign.checked;
+      await api('/api/users', { method: 'POST', body });
       state.users = await api('/api/users'); fillFilters(); renderUsers();
     } catch (err) { $('#user-error').textContent = err.message; }
   });
@@ -1254,6 +1251,7 @@ async function renderUsers() {
     };
     $('[data-f=role]', tr).addEventListener('change', (e) => patch({ role: e.target.value }));
     $('[data-f=active]', tr).addEventListener('change', (e) => patch({ active: e.target.checked }));
+    $('[data-f=can_assign]', tr)?.addEventListener('change', (e) => patch({ can_assign: e.target.checked }));
     $('[data-f=password]', tr).addEventListener('click', async () => {
       const password = await ask('Nueva contraseña (mínimo 8 caracteres):', { input: true, okLabel: 'Cambiar' });
       if (password) patch({ password });

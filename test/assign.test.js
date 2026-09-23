@@ -83,3 +83,49 @@ test('con el reparto automático encendido, va al de menor carga', async () => {
   const { id } = (await capture('5540000020')).json;
   assert.equal((await lead(id)).assigned_to, w.suggested);
 });
+
+test('"Administra leads" es un permiso por usuario, no depende del rol', async () => {
+  const mk = async (name, role, extra = {}) => {
+    const email = `${name}@t.com`;
+    const { id } = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name, email, password: 'password123', role, ...extra } })).json;
+    return { id, cookie: (await req('/api/login', { method: 'POST', body: { email, password: 'password123' } })).cookie };
+  };
+  await req('/api/settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: false } });
+  const mkt = await mk('mkt', 'marketing');
+  assert.equal((await req('/api/workload', { cookie: mkt.cookie })).status, 403, 'marketing sin permiso no asigna');
+  const admin = await mk('admin', 'vendedor', { can_assign: true });
+  assert.equal((await req('/api/me', { cookie: admin.cookie })).json.can_assign, 1);
+  assert.equal((await req('/api/workload', { cookie: admin.cookie })).status, 200);
+
+  // Quien administra ve los leads sin dueño y los asigna
+  const { id } = (await capture('5540000030')).json;
+  assert.ok((await req('/api/leads?assigned=none', { cookie: admin.cookie })).json.some((l) => l.id === id));
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: admin.cookie, body: { assigned_to: sellers.Caro.id } })).status, 200);
+  assert.equal((await lead(id)).assigned_name, 'Caro');
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: admin.cookie, body: { assigned_to: 99999 } })).status, 400);
+
+  // El gerente da o quita el permiso
+  await req(`/api/users/${mkt.id}`, { method: 'PATCH', cookie: gerente, body: { can_assign: true } });
+  assert.equal((await req('/api/workload', { cookie: mkt.cookie })).status, 200);
+});
+
+test('audiencias: no incluyen a los que nunca contestaron y se exportan tal cual', async () => {
+  const fit = (await capture('5540000040', { assigned_to: sellers.Ana.id })).json.id;
+  await req(`/api/leads/${fit}/touches`, { method: 'POST', cookie: sellers.Ana.cookie, body: { channel: 'llamada', outcome: 'cumple' } });
+  await req(`/api/leads/${fit}/touches`, { method: 'POST', cookie: sellers.Ana.cookie, body: { channel: 'llamada', outcome: 'rechazo', decline_reason: 'Precio' } });
+  const ghost = (await capture('5540000041', { assigned_to: sellers.Ana.id })).json.id;
+  for (let i = 0; i < 5; i++) await req(`/api/leads/${ghost}/touches`, { method: 'POST', cookie: sellers.Ana.cookie, body: { channel: 'llamada', outcome: 'sin_respuesta' } });
+  assert.equal((await lead(ghost)).decline_reason, 'No contestó (5 toques)');
+
+  const s = (await req('/api/stats', { cookie: gerente })).json;
+  assert.equal(s.audiences.perfil, 1);
+  const csv = await fetch(`${base}/api/leads.csv?audience=perfil`, { headers: { cookie: gerente } }).then((r) => r.text());
+  assert.match(csv, /5540000040/);
+  assert.doesNotMatch(csv, /5540000041/);
+});
+
+test('el Resumen del vendedor es solo suyo y sin inversión', async () => {
+  const s = (await req('/api/stats', { cookie: sellers.Ana.cookie })).json;
+  assert.deepEqual(s.sellerFunnel.map((r) => r.key), ['Ana']);
+  assert.ok(s.campaignFunnel.every((r) => r.inversion == null));
+});
