@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { openDb } = require('../src/db');
 const { createApp, seedAdmin } = require('../src/server');
 
-const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k' };
+const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k', autoAssign: false };
 let server; let base; let gerente; let ana; let anaId;
 
 async function req(path, { method = 'GET', body, cookie } = {}) {

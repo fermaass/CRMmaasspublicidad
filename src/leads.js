@@ -1,4 +1,4 @@
-const { phoneKey, STATUSES, PROFILES, LABELS } = require('./db');
+const { phoneKey, STATUSES, PROFILES, LABELS, getSetting, setSetting } = require('./db');
 
 const now = () => new Date().toISOString();
 
@@ -41,6 +41,7 @@ function ingestLead(db, data) {
     name: clean(data.name), phone: clean(data.phone), email: clean(data.email),
     campaign: clean(data.campaign), message: clean(data.message), source: data.source,
     channel_id: data.channel_id || null, product_id: data.product_id || null,
+    utm_source: clean(data.utm_source), utm_medium: clean(data.utm_medium), utm_content: clean(data.utm_content),
   };
   if (!lead.phone && !lead.email) throw new Error('Se necesita teléfono o email');
 
@@ -51,8 +52,11 @@ function ingestLead(db, data) {
         name = COALESCE(name, ?), phone = COALESCE(phone, ?), phone_key = COALESCE(phone_key, ?),
         email = COALESCE(email, ?), campaign = COALESCE(?, campaign),
         channel_id = COALESCE(channel_id, ?), product_id = COALESCE(?, product_id),
+        utm_source = COALESCE(?, utm_source), utm_medium = COALESCE(?, utm_medium), utm_content = COALESCE(?, utm_content),
+        recontact_at = CASE WHEN ? THEN NULL ELSE recontact_at END,
         status = ?, updated_at = ? WHERE id = ?`)
       .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.campaign, lead.channel_id, lead.product_id,
+        lead.utm_source, lead.utm_medium, lead.utm_content, reopen ? 1 : 0,
         reopen ? (existing.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo') : existing.status, now(), existing.id);
     addEvent(db, existing.id, data.userId, 'contacto',
       `Nuevo contacto por ${LABELS[lead.source] || lead.source}${lead.campaign ? ` (${lead.campaign})` : ''}${lead.message ? `: ${lead.message}` : ''}`);
@@ -62,13 +66,31 @@ function ingestLead(db, data) {
 
   const ts = now();
   const { lastInsertRowid } = db.prepare(`INSERT INTO leads
-      (name, phone, phone_key, email, source, campaign, message, channel_id, product_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (name, phone, phone_key, email, source, campaign, message, channel_id, product_id,
+       utm_source, utm_medium, utm_content, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(lead.name, lead.phone, phoneKey(lead.phone), lead.email, lead.source, lead.campaign, lead.message,
-      lead.channel_id, lead.product_id, ts, ts);
+      lead.channel_id, lead.product_id, lead.utm_source, lead.utm_medium, lead.utm_content, ts, ts);
   const id = Number(lastInsertRowid);
   addEvent(db, id, data.userId, 'creado', `Lead recibido por ${LABELS[lead.source] || lead.source}`);
   return { id, created: true };
+}
+
+// Reparto automático por turnos entre los vendedores activos, para que ningún lead espere sin dueño.
+// Se puede apagar desde Configuración. Devuelve el nombre del vendedor asignado o null.
+function autoAssign(db, leadId) {
+  if (getSetting(db, 'auto_assign') === '0') return null;
+  const lead = db.prepare('SELECT l.assigned_to, u.active FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?').get(leadId);
+  if (!lead || (lead.assigned_to && lead.active)) return null;
+  const sellers = db.prepare("SELECT id, name FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY id").all();
+  if (!sellers.length) return null;
+  const last = Number(getSetting(db, 'rr_last') || 0);
+  const next = sellers.find((u) => u.id > last) || sellers[0];
+  const ts = now();
+  db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(next.id, ts, ts, leadId);
+  setSetting(db, 'rr_last', String(next.id));
+  addEvent(db, leadId, null, 'asignacion', `Asignado automáticamente a ${next.name}`);
+  return next.name;
 }
 
 /**
@@ -89,4 +111,4 @@ function resolveStatusProfile(current, changes) {
   return { status, profile };
 }
 
-module.exports = { ingestLead, campaignName, addEvent, resolveStatusProfile, now };
+module.exports = { ingestLead, campaignName, autoAssign, addEvent, resolveStatusProfile, now };

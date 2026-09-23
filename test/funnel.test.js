@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { openDb } = require('../src/db');
 const { createApp, seedAdmin } = require('../src/server');
 
-const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k' };
+const config = { adminEmail: 'g@t.com', adminPassword: 'clave-gerente', formApiKey: 'k', autoAssign: false };
 let server; let base; let gerente; let ana; let anaId;
 
 async function req(path, { method = 'GET', body, cookie } = {}) {
@@ -49,7 +49,7 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
   // L3: nada; L4: sin asignar
 
   const s = (await req('/api/stats', { cookie: gerente })).json;
-  assert.deepEqual(s.funnel, { recibidos: 5, contactados: 3, perfilados: 2, cotizados: 2, cerrados: 1, declinados: 1, ingresos: 45000 });
+  assert.deepEqual(s.funnel, { recibidos: 5, contactados: 3, perfilados: 2, cotizados: 2, cerrados: 1, declinados: 1, ingresos: 45000, en_cotizacion: 0, cotizando_ahora: 0 });
 
   const fb = s.campaignFunnel.find((c) => c.key === 'FB-Sep');
   assert.equal(fb.recibidos, 3); assert.equal(fb.cotizados, 2); assert.equal(fb.cerrados, 1);

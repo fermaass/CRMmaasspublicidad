@@ -1,4 +1,5 @@
-const state = { me: null, meta: null, users: [], catalog: { canal: [], producto: [] }, leads: [], view: 'board' };
+const state = { me: null, meta: null, users: [], catalog: { canal: [], producto: [], campana: [] }, leads: [], view: null, statsTab: null };
+const F = window.CRMFollowup;
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const label = (k) => state.meta.labels[k] || k;
@@ -36,6 +37,7 @@ const ICONS = {
   layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
   sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>',
 };
 const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -44,7 +46,13 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
 const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista' };
-const VIEW_TITLES = { board: 'Tablero', list: 'Lista de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', list: 'Lista de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+// Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
+const pref = {
+  get(k) { try { return localStorage.getItem(`crm:${k}`); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(`crm:${k}`, v); } catch { /* sin almacenamiento */ } },
+};
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 async function api(path, opts = {}) {
@@ -70,7 +78,7 @@ function toast(message, kind = '') {
 
 // Devuelve true/false, o el texto escrito si se pide un campo (null si se cancela).
 // Con `options` muestra una lista para elegir y devuelve la opción elegida.
-function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', danger = false, options = null } = {}) {
+function ask(message, { input = false, inputType = 'text', placeholder = '', okLabel = 'Aceptar', danger = false, options = null } = {}) {
   return new Promise((resolve) => {
     const modal = $('#modal');
     $('#modal-text').textContent = message;
@@ -80,6 +88,7 @@ function ask(message, { input = false, placeholder = '', okLabel = 'Aceptar', da
     const field = $('#modal-input');
     field.classList.toggle('hidden', !input);
     field.value = '';
+    field.type = inputType;
     field.placeholder = placeholder;
     const ok = $('#modal-ok');
     ok.textContent = okLabel;
@@ -128,7 +137,8 @@ async function start() {
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
   fillFilters();
-  setView(state.view);
+  // El vendedor arranca en su lista de pendientes; el analista, en el Resumen.
+  setView(state.view || (state.me.role === 'analista' ? 'stats' : 'today'));
 }
 
 function fillFilters() {
@@ -144,6 +154,22 @@ function fillFilters() {
   opts('#f-product', state.catalog.producto.map((i) => [i.id, i.name]));
   opts('#f-channel', state.catalog.canal.map((i) => [i.id, i.name]));
   opts('#f-campaign', state.catalog.campana.map((c) => [c.name, c.name]));
+  opts('#f-reason', state.meta.declineReasons.map((r) => [r, r]));
+}
+
+// "¿De dónde viene?": una sola lista con las campañas activas y los canales orgánicos.
+function originOptions(campaign, channelId) {
+  const camps = state.catalog.campana.filter((c) => c.active || c.name === campaign);
+  const chans = state.catalog.canal.filter((c) => c.active || c.id === channelId);
+  return `<option value="">Sin dato</option>
+    ${camps.length ? `<optgroup label="Campañas">${camps.map((c) => `<option value="camp:${esc(c.name)}" ${c.name === campaign ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
+    <optgroup label="Sin campaña (orgánico)">${chans.map((c) => `<option value="chan:${c.id}" ${!campaign && c.id === channelId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`;
+}
+// Convierte la opción elegida en campaña o canal para guardar.
+function originToFields(value) {
+  if (value?.startsWith('camp:')) return { campaign: value.slice(5), channel_id: null };
+  if (value?.startsWith('chan:')) return { campaign: null, channel_id: value.slice(5) };
+  return { campaign: null, channel_id: null };
 }
 
 // Opciones de un <select> de la lista; incluye el valor actual aunque ya no esté activo.
@@ -157,7 +183,7 @@ function filterQuery() {
   const p = new URLSearchParams();
   const add = (k, sel) => { const v = $(sel).value.trim(); if (v) p.set(k, v); };
   add('q', '#f-q'); add('profile', '#f-profile'); add('source', '#f-source'); add('assigned', '#f-assigned');
-  add('product', '#f-product'); add('channel', '#f-channel'); add('campaign', '#f-campaign');
+  add('product', '#f-product'); add('channel', '#f-channel'); add('campaign', '#f-campaign'); add('reason', '#f-reason');
   // Periodo: filtra por fecha en que se recibió el lead.
   const period = $('#f-period').value;
   if (period) {
@@ -172,9 +198,34 @@ function filterQuery() {
   return p.toString();
 }
 
+const EXTRA_FILTERS = ['#f-status', '#f-profile', '#f-source', '#f-product', '#f-channel', '#f-reason'];
+function updateMoreFiltersLabel() {
+  const n = EXTRA_FILTERS.filter((sel) => $(sel).value && !$(sel).classList.contains('hidden')).length;
+  $('#more-filters').textContent = n ? `Más filtros (${n})` : 'Más filtros';
+  $('#more-filters').classList.toggle('active-filters', n > 0);
+}
+$('#more-filters').addEventListener('click', () => {
+  const box = $('#extra-filters');
+  box.classList.toggle('hidden');
+  $('#more-filters').setAttribute('aria-expanded', String(!box.classList.contains('hidden')));
+});
+$('#clear-filters').addEventListener('click', () => {
+  ['#f-q', '#f-period', '#f-assigned', '#f-campaign', ...EXTRA_FILTERS].forEach((sel) => { $(sel).value = ''; });
+  updateMoreFiltersLabel(); refresh();
+});
+// Aplica un conjunto de filtros (audiencias listas) y abre la lista.
+function applyFilters(values) {
+  ['#f-q', '#f-period', '#f-assigned', '#f-campaign', ...EXTRA_FILTERS].forEach((sel) => { $(sel).value = ''; });
+  Object.entries(values).forEach(([sel, v]) => { $(sel).value = v; });
+  $('#extra-filters').classList.remove('hidden');
+  updateMoreFiltersLabel();
+  setView('list');
+}
+
 // ---------- Vistas ----------
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-campaign', '#f-period', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
+['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-campaign', '#f-period', '#f-assigned', '#f-status', '#f-reason']
+  .forEach((s) => $(s).addEventListener('change', () => { updateMoreFiltersLabel(); refresh(); }));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
 $('#export').addEventListener('click', () => {
@@ -190,8 +241,9 @@ function setView(view) {
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
+  updateMoreFiltersLabel();
   if (!['board', 'list'].includes(view)) $('#board-alert').classList.add('hidden');
   refresh();
 }
@@ -201,6 +253,8 @@ async function refresh() {
   if (state.view === 'users') return renderUsers();
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
+  // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
+  if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
   state.view === 'board' ? renderBoard() : renderList();
   renderBoardAlert();
@@ -221,10 +275,11 @@ function cardHtml(l) {
 function cardAction(l) {
   if (l.status === 'nuevo') return touchBadge(l) || '<span class="touch-badge">Sin toques</span>';
   if (l.status === 'nuevo_perfil') return touchBadge(l);
-  if (l.status === 'cotizando') {
-    return `<span class="touch-badge">${icon('file', 13)} ${l.quote_touch ? `Cotizado en el toque ${l.quote_touch}` : 'Cotizado'}</span>`;
+  if (l.status === 'cotizando') return touchBadge(l) || `<span class="touch-badge">${icon('file', 13)} Cotizado</span>`;
+  if (l.status === 'declinado') {
+    return l.recontact_at ? `<span class="touch-badge today">${icon('calendar', 13)} Volver a contactar ${shortDate(`${l.recontact_at}T12:00:00`)}</span>`
+      : `<span class="touch-badge late">${esc(l.decline_reason || 'Sin motivo')}</span>`;
   }
-  if (l.status === 'declinado') return `<span class="touch-badge late">${esc(l.decline_reason || 'Sin motivo')}</span>`;
   return `<span class="touch-badge ok">${icon('check', 13)} ${l.sale_amount ? money(l.sale_amount) : 'Vendido'}</span>`;
 }
 
@@ -242,39 +297,143 @@ function canEditLead(l) {
   return can('gerente', 'marketing') || (state.me.role === 'vendedor' && l.assigned_to === state.me.id);
 }
 
-// ---------- Toques y cadencia ----------
-const DAY = 86400e3;
-const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-// Siguiente toque según la cadencia de 12 días; solo mientras el cliente no ha respondido.
-function touchDue(l) {
-  const t = state.meta.touches;
-  if (l.status !== 'nuevo' || l.contacted_at || l.touch_count >= t.max) return null;
-  const base = new Date(l.assigned_at || l.created_at);
-  const due = new Date(base.getTime() + t.cadence[l.touch_count] * DAY);
-  const days = Math.round((startOfDay(due) - startOfDay(new Date())) / DAY);
-  return { n: l.touch_count + 1, due, days };
+// ---------- Toques, cadencia y pendientes ----------
+const DAY = F.DAY;
+// Siguiente acción del lead según public/followup.js, con los días que faltan (negativo = atrasado).
+function nextAction(l) {
+  const a = F.nextAction(l);
+  return a ? { ...a, days: F.dayDiff(a.due) } : null;
 }
+const whenText = (days) => (days < 0 ? `${-days} ${days === -1 ? 'día' : 'días'} tarde` : days === 0 ? 'toca hoy' : days === 1 ? 'mañana' : `en ${days} días`);
+const whenClass = (days) => (days < 0 ? 'late' : days === 0 ? 'today' : '');
 
+// Línea de acción de la tarjeta: lo siguiente que toca y cuándo.
 function touchBadge(l) {
-  const t = state.meta.touches;
-  if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
-  const d = touchDue(l);
-  if (!d) return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
-  const when = d.days < 0 ? `${-d.days} ${d.days === -1 ? 'día' : 'días'} tarde` : d.days === 0 ? 'toca hoy' : d.days === 1 ? 'mañana' : `en ${d.days} días`;
-  const cls = d.days < 0 ? 'late' : d.days === 0 ? 'today' : '';
-  return `<span class="touch-badge ${cls}">${icon('phone', 13)} Toque ${d.n}/${t.max} · ${when}</span>`;
+  const a = nextAction(l);
+  if (!a || a.kind === 'recontacto') {
+    if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
+    return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
+  }
+  return `<span class="touch-badge ${whenClass(a.days)}">${icon(a.kind === 'cotizacion' ? 'file' : 'phone', 13)} ${esc(a.label)} · ${whenText(a.days)}</span>`;
 }
 
-// Aviso arriba del tablero con los toques vencidos y los de hoy.
+// Aviso arriba del tablero con lo vencido y lo de hoy (toques, seguimientos y cotizaciones).
 function renderBoardAlert() {
   const el = $('#board-alert');
-  const dues = state.leads.map(touchDue).filter(Boolean);
+  const dues = state.leads.map(nextAction).filter((a) => a && a.kind !== 'recontacto');
   const late = dues.filter((d) => d.days < 0).length;
   const today = dues.filter((d) => d.days === 0).length;
   el.classList.toggle('hidden', !(late || today) || !['board', 'list'].includes(state.view));
-  el.innerHTML = `${late ? `<span class="alert-pill late">${icon('phone', 15)} ${late} ${late === 1 ? 'toque vencido' : 'toques vencidos'}</span>` : ''}
-    ${today ? `<span class="alert-pill today">${icon('calendar', 15)} ${today} ${today === 1 ? 'toque para hoy' : 'toques para hoy'}</span>` : ''}
-    <span class="muted">Cadencia: 5 toques en 12 días (día ${state.meta.touches.cadence.join(', ')}).</span>`;
+  el.innerHTML = `${late ? `<span class="alert-pill late">${icon('phone', 15)} ${late} ${late === 1 ? 'pendiente vencido' : 'pendientes vencidos'}</span>` : ''}
+    ${today ? `<span class="alert-pill today">${icon('calendar', 15)} ${today} para hoy</span>` : ''}
+    ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" class="ghost small" id="go-today">Ver Mi día</button>' : ''}`;
+  $('#go-today')?.addEventListener('click', () => setView('today'));
+}
+
+// ---------- Mi día: pendientes ordenados por urgencia, con el toque a un clic ----------
+function renderToday() {
+  const mine = (l) => (state.me.role === 'vendedor' ? l.assigned_to === state.me.id : true);
+  const items = state.leads.filter(mine).map((l) => ({ l, a: nextAction(l) }))
+    .filter((x) => x.a && x.a.days <= 0)
+    .sort((x, y) => x.a.due - y.a.due);
+  const upcoming = state.leads.filter(mine).map((l) => ({ l, a: nextAction(l) }))
+    .filter((x) => x.a && x.a.days > 0 && x.a.days <= 2 && x.a.kind !== 'recontacto').length;
+  const free = state.leads.filter((l) => !l.assigned_to && ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status));
+  const late = items.filter((x) => x.a.days < 0 && x.a.kind !== 'recontacto').length;
+  const groups = [
+    ['recontacto', 'Volver a contactar', 'Leads que pospusieron y ya llegó su fecha'],
+    ['cotizacion', 'Seguimiento de cotizaciones', 'Cotizaciones enviadas que esperan respuesta'],
+    ['seguimiento', 'Respondieron: siguiente paso', 'Ya contestaron; toca perfilar o enviar cotización'],
+    ['cadencia', 'Toques de la cadencia', 'Aún no contestan: 5 toques en 12 días'],
+  ];
+  const canTouch = (l) => canEditLead(l);
+  const row = ({ l, a }) => {
+    const outcomes = state.meta.touches.byStatus[l.status] || [];
+    return `<div class="today-row" data-id="${l.id}">
+      <div class="today-main">
+        <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
+        <span class="touch-badge ${whenClass(a.days)}">${esc(a.label)} · ${a.kind === 'recontacto' && a.days < 0 ? `desde el ${shortDate(a.due)}` : whenText(a.days)}</span>
+        ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
+        ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
+        ${l.phone ? `<a class="muted" href="https://wa.me/${esc(l.phone.replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(l.phone)}</a>` : ''}
+      </div>
+      ${!canTouch(l) ? '' : a.kind === 'recontacto'
+        ? '<div class="today-actions"><button type="button" class="small" data-reactivate>Reactivar lead</button></div>'
+        : `<div class="today-actions">
+          <select class="small-select" data-channel aria-label="Medio">${state.meta.touches.channels.map((c) => `<option value="${c}">${esc(label(c))}</option>`).join('')}</select>
+          ${outcomes.map((o) => `<button type="button" class="outcome small ${o}" data-outcome="${o}">${esc(state.meta.touches.outcomes[o])}</button>`).join('')}
+        </div>`}
+    </div>`;
+  };
+  const sections = groups.map(([kind, title, help]) => {
+    const list = items.filter((x) => x.a.kind === kind);
+    if (!list.length) return '';
+    return `<section class="card today-group">${cardTitle(kind === 'cotizacion' ? 'file' : kind === 'recontacto' ? 'calendar' : 'phone',
+      kind === 'cotizacion' ? 'var(--f-cotizados)' : kind === 'recontacto' ? 'var(--nuevo_perfil)' : kind === 'seguimiento' ? 'var(--f-contactados)' : 'var(--f-recibidos)',
+      `${title} (${list.length})`, help)}${list.map(row).join('')}</section>`;
+  }).join('');
+  $('#view-today').innerHTML = `
+    <div class="today-summary">
+      <span class="alert-pill ${late ? 'late' : 'ok'}">${late ? `${late} ${late === 1 ? 'vencido' : 'vencidos'}` : 'Nada vencido'}</span>
+      <span class="alert-pill today">${items.length - late} para hoy</span>
+      ${upcoming ? `<span class="muted">${upcoming} más en los próximos 2 días</span>` : ''}
+      <span class="spacer"></span>
+      ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
+    </div>
+    ${free.length && state.me.role === 'vendedor' ? `<section class="card today-group">${cardTitle('inbox', 'var(--accent)', `Leads sin dueño (${free.length})`, 'Tómalos para empezar su cadencia')}
+      ${free.map((l) => `<div class="today-row"><div class="today-main"><button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
+        <span class="muted">${timeAgo(l.created_at)}</span></div><div class="today-actions"><button type="button" class="small" data-take="${l.id}">Tomar</button></div></div>`).join('')}</section>` : ''}
+    ${sections || `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
+
+  const view = $('#view-today');
+  $('#today-new')?.addEventListener('click', openNewLead);
+  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  view.querySelectorAll('[data-take]').forEach((b) => b.addEventListener('click', async () => {
+    try { await api(`/api/leads/${b.dataset.take}/take`, { method: 'POST' }); toast('Lead tomado', 'ok'); refresh(); } catch (err) { toast(err.message, 'error'); }
+  }));
+  view.querySelectorAll('.today-row[data-id]').forEach((r) => {
+    const l = state.leads.find((x) => String(x.id) === r.dataset.id);
+    r.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', () => registerTouch(l, $('[data-channel]', r).value, b.dataset.outcome)));
+    $('[data-reactivate]', r)?.addEventListener('click', () => reactivate(l));
+  });
+}
+
+// Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
+async function registerTouch(l, channel, outcome) {
+  const body = { channel, outcome };
+  if (outcome === 'cotizado') {
+    const amount = await ask('¿De cuánto es la cotización? (opcional, sirve para ver cuánto dinero hay en juego)', { input: true, placeholder: 'Ej. 60000', okLabel: 'Registrar cotización' });
+    if (amount === null) return false;
+    if (amount) body.quote_amount = amount;
+  }
+  if (outcome === 'rechazo') {
+    const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== state.meta.noAnswer), okLabel: 'Declinar' });
+    if (reason === null) return false;
+    body.decline_reason = reason;
+    if (reason === state.meta.postponed) {
+      const date = await ask('¿Cuándo lo volvemos a contactar? (opcional)', { input: true, inputType: 'date', okLabel: 'Guardar' });
+      if (date) body.recontact_at = date;
+    }
+  }
+  if (outcome === 'vendido') {
+    const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional)', { input: true, placeholder: 'Ej. 45000', okLabel: 'Registrar venta' });
+    if (amount === null) return false;
+    if (amount) body.sale_amount = amount;
+  }
+  try {
+    const r = await api(`/api/leads/${l.id}/touches`, { method: 'POST', body });
+    toast(r.auto_declined ? 'Quinto toque sin respuesta: el lead pasó a Declinado' : `Toque ${r.n} registrado`, r.auto_declined ? '' : 'ok');
+    refresh();
+    return true;
+  } catch (err) { toast(err.message, 'error'); return false; }
+}
+
+async function reactivate(l) {
+  try {
+    await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { status: l.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo', recontact_at: null } });
+    toast('Lead reactivado: ya está en tus seguimientos', 'ok');
+    refresh();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 function renderBoard() {
@@ -311,6 +470,15 @@ async function changeStatus(lead, status) {
     const reason = await ask('¿Por qué se declina?', { options: state.meta.declineReasons, okLabel: 'Declinar' });
     if (reason === null) return;
     body.decline_reason = reason;
+    if (reason === state.meta.postponed) {
+      const date = await ask('¿Cuándo lo volvemos a contactar? (opcional)', { input: true, inputType: 'date', okLabel: 'Guardar' });
+      if (date) body.recontact_at = date;
+    }
+  }
+  if (status === 'cotizando') {
+    const amount = await ask('¿De cuánto es la cotización? (opcional)', { input: true, placeholder: 'Ej. 60000', okLabel: 'Mover a Cotizando' });
+    if (amount === null) return;
+    if (amount) body.quote_amount = amount;
   }
   if (status === 'vendido') {
     const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional, sirve para medir el retorno de cada campaña)',
@@ -334,10 +502,22 @@ function renderList() {
     <td>${esc(l.assigned_name || 'Sin asignar')}</td>
     <td class="muted">${fmtDate(l.created_at)}</td>
   </tr>`).join('');
-  $('#view-list').innerHTML = `<p class="muted">${state.leads.length} leads</p>
+  const audiences = can('gerente', 'marketing', 'analista') ? `<div class="audiences"><span class="muted">Audiencias listas:</span>
+      <button type="button" class="chip" data-aud="fit">Cumplen perfil y no compraron</button>
+      <button type="button" class="chip" data-aud="later">Lo pospusieron</button>
+      <button type="button" class="chip" data-aud="noanswer">Nunca contestaron</button>
+      <button type="button" class="chip" data-aud="clients">Clientes</button></div>` : '';
+  $('#view-list').innerHTML = `${audiences}<p class="muted">${state.leads.length} leads${can('gerente', 'marketing', 'analista') ? ' · "Exportar CSV" descarga exactamente esta lista' : ''}</p>
     <div class="table-wrap"><table><thead><tr><th>Contacto</th><th>Estado</th><th>Perfil</th><th>Origen / canal / campaña</th><th>Producto</th><th>Vendedor</th><th>Recibido</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="7" class="muted">Sin resultados</td></tr>'}</tbody></table></div>`;
   $('#view-list').querySelectorAll('tbody tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openLead(tr.dataset.id)));
+  const AUD = {
+    fit: { '#f-status': 'declinado', '#f-profile': 'cumple' },
+    later: { '#f-status': 'declinado', '#f-reason': state.meta.postponed },
+    noanswer: { '#f-status': 'declinado', '#f-reason': state.meta.noAnswer },
+    clients: { '#f-status': 'vendido' },
+  };
+  $('#view-list').querySelectorAll('[data-aud]').forEach((b) => b.addEventListener('click', () => applyFilters(AUD[b.dataset.aud])));
 }
 
 async function renderStats() {
@@ -354,37 +534,83 @@ async function renderStats() {
     <div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
 
   const f = s.funnel;
-  $('#view-stats').innerHTML = `<div class="dash">
-    ${insightBanner(s)}
-    <div class="kpis">
+  const tab = state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas');
+  state.statsTab = tab;
+  const tabs = `<div class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="ventas" class="${tab === 'ventas' ? 'active' : ''}">Ventas</button>
+    <button type="button" role="tab" data-tab="marketing" class="${tab === 'marketing' ? 'active' : ''}">Marketing</button></div>`;
+
+  let body;
+  if (tab === 'ventas') {
+    const speed = s.touches.speed;
+    body = `<div class="kpis" style="--cols:4">
       ${kpi('inbox', 'Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)')}
       ${kpi('chat', 'Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)')}
       ${kpi('file', 'Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
       ${kpi('check', 'Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
       ${kpi('trend', 'Conversión', pct(f.cerrados, f.recibidos), 'de los recibidos se cierra', 'var(--accent)', '%')}
-      ${f.ingresos ? `<div class="kpi-tile" style="--c:var(--f-cerrados)"><span class="kpi-ico">${icon('money', 24)}</span>
-        <div><div class="value money">${money(f.ingresos)}</div><div class="label">Ventas</div><div class="sub">de ${f.cerrados} cierres</div></div></div>` : ''}
+      ${textKpi('clock', 'Primer toque', speed == null ? '—' : hours(speed), 'promedio desde que llega el lead', speed != null && speed > 24 ? 'var(--declinado)' : 'var(--f-contactados)')}
+      ${textKpi('file', 'En cotización', money(f.en_cotizacion), `${f.cotizando_ahora} ${f.cotizando_ahora === 1 ? 'cotización abierta' : 'cotizaciones abiertas'}`, 'var(--f-cotizados)')}
+      ${f.ingresos ? textKpi('money', 'Ventas', money(f.ingresos), `de ${f.cerrados} cierres`, 'var(--f-cerrados)') : ''}
     </div>
     <div class="card chart-card span-8">${cardTitle('funnel', 'var(--accent)', 'Embudo de conversión', 'cuántos llegan a cada paso')}${funnelChart(f)}</div>
     <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
       <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
     <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
-    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Conversión por campaña', 'de dónde salen los cierres')}${campaignTable(s.campaignFunnel)}</div>
-    <div class="card chart-card">${cardTitle('money', 'var(--f-cerrados)', 'Eficiencia de campañas', 'cuánto cuesta y cuánto regresa cada una')}${campaignEfficiency(s.campaignFunnel)}</div>
-    <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
-    <div class="card chart-card span-4">${cardTitle('pie', 'var(--formulario)', 'Por origen')}${donut(sources, s.total)}</div>
-    <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
-    <div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>
-    <div class="card chart-card span-6">${cardTitle('radio', 'var(--whatsapp)', '¿Cómo se enteraron?', 'canal de percepción')}${categoryBars(s.byChannel)}</div>
     <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
       ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</div>
     <div class="card chart-card span-6">${cardTitle('file', 'var(--f-cotizados)', '¿En qué toque se cotiza?', 'toque en que se envió la cotización')}
       ${touchBars(s.touches.quote, null, 'f-cotizados', 'se cotizaron')}</div>
     <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
-    <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Perfil')}${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
-  </div>`;
+    <div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`;
+  } else {
+    const paid = s.campaignFunnel.filter((r) => r.inversion > 0);
+    const inv = paid.reduce((t, r) => t + r.inversion, 0);
+    const sum = (k) => paid.reduce((t, r) => t + (r[k] || 0), 0);
+    const perOrDash = (k) => (inv && sum(k) ? money(inv / sum(k)) : '—');
+    body = `<div class="kpis" style="--cols:3">
+      ${kpi('inbox', 'Leads', f.recibidos, 'con los filtros actuales', 'var(--f-recibidos)')}
+      ${kpi('userCheck', 'Cumplen perfil', pct(f.perfilados, f.recibidos), `${f.perfilados} de ${f.recibidos} leads`, 'var(--cumple)', '%')}
+      ${textKpi('money', 'Inversión', inv ? money(inv) : '—', inv ? `${paid.length} ${paid.length === 1 ? 'campaña' : 'campañas'} con inversión` : 'captúrala en Configuración', 'var(--llamada)')}
+      ${textKpi('inbox', 'Costo por lead', perOrDash('recibidos'), 'de las campañas con inversión', 'var(--f-recibidos)')}
+      ${textKpi('check', 'Costo por cierre', perOrDash('cerrados'), 'de las campañas con inversión', 'var(--f-cerrados)')}
+      ${textKpi('trend', 'Retorno', inv && sum('ingresos') ? `${(sum('ingresos') / inv).toFixed(1)}x` : '—', 'ventas ÷ inversión', 'var(--accent)')}
+    </div>
+    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Conversión por campaña', 'de dónde salen los cierres')}${campaignTable(s.campaignFunnel)}</div>
+    <div class="card chart-card">${cardTitle('money', 'var(--f-cerrados)', 'Eficiencia de campañas', 'cuánto cuesta y cuánto regresa cada una')}${campaignEfficiency(s.campaignFunnel)}</div>
+    <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Por anuncio', 'qué anuncio trae leads que cierran (utm_content)')}${adTable(s.adFunnel)}</div>
+    <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
+    <div class="card chart-card span-4">${cardTitle('pie', 'var(--formulario)', 'Por dónde escribieron')}${donut(sources, s.total)}</div>
+    <div class="card chart-card span-6">${cardTitle('radio', 'var(--whatsapp)', '¿De dónde vienen?', 'canal, incluido el de cada campaña')}${categoryBars(s.byChannel)}</div>
+    <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
+    <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Perfil', 'se conserva aunque el lead se decline')}${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
+    <div class="card chart-card span-6">${cardTitle('layers', 'var(--whatsapp)', 'Por canal', 'etapa de cada lead')}${stageRows(s.channelStages)}</div>`;
+  }
+  $('#view-stats').innerHTML = `<div class="dash">${tabs}${insightBanner(s)}${body}</div>`;
+  $('#view-stats').querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+    state.statsTab = b.dataset.tab; pref.set('statsTab', b.dataset.tab); renderStats();
+  }));
   animateIn($('#view-stats'));
+}
+
+// KPI con texto ya formateado (dinero, tiempo), sin animación de conteo.
+function textKpi(ico, title, value, sub, color) {
+  return `<div class="kpi-tile" style="--c:${color}"><span class="kpi-ico">${icon(ico, 24)}</span>
+    <div><div class="value money">${esc(value)}</div><div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
+}
+
+function adTable(rows) {
+  if (!rows.length) {
+    return `<p class="muted">Todavía no llegan leads con anuncio identificado. En cada anuncio pon el link de tu página con
+      <code>?utm_campaign=…&amp;utm_content=nombre-del-anuncio</code>; el formulario de Configuración ya lo lee solo.</p>`;
+  }
+  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+    <th>Anuncio</th><th>Campaña</th><th>Recibidos</th><th>Perfilados</th><th>Cotizados</th><th>Cerrados</th><th>Ventas</th>
+  </tr></thead><tbody>${rows.map((r) => `<tr>
+      <td><strong>${esc(r.key)}</strong></td><td class="muted">${esc((r.campaign || '—').split(',').join(', '))}</td><td class="num"><b>${r.recibidos}</b></td>
+      ${rateCell(r.perfilados, r.recibidos, 'perfilados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 // Aviso con degradado: la lectura rápida del periodo (dónde se pierden los leads, qué campaña y quién cierran más).
@@ -455,7 +681,7 @@ function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
   return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Toques a respuesta</th><th>Toques a cotizar</th><th>Toques vencidos</th><th>Tiempo hasta que contestan</th>
+    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Toques a respuesta</th><th>Toques a cotizar</th><th>Toques vencidos</th><th>Primer toque</th><th>Hasta que contestan</th>
   </tr></thead><tbody>${rows.map((r) => {
     const conv = pctOf(r.cerrados, r.recibidos);
     return `<tr class="${r.id ? '' : 'unassigned'}">
@@ -467,9 +693,10 @@ function sellerTable(rows) {
       <td class="num">${r.toques_respuesta ? r.toques_respuesta.toFixed(1) : '—'}</td>
       <td class="num">${r.toques_cotizacion ? r.toques_cotizacion.toFixed(1) : '—'}</td>
       <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td>
+      <td class="num">${r.horas_primer_toque != null && r.horas_primer_toque > 24 ? `<span class="conv bad">${hours(r.horas_primer_toque)}</span>` : hours(r.horas_primer_toque)}</td>
       <td class="num">${hours(r.horas_contacto)}</td></tr>`;
   }).join('')}</tbody></table></div>
-  <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. "Tiempo hasta que contestan" va de la asignación a que el cliente respondió.</p>`;
+  <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. Los tiempos se miden desde que llega el lead: "Primer toque" es cuánto tardó el vendedor en intentar el contacto (más de un día se marca en rojo) y "Hasta que contestan", cuánto tardó el cliente en responder.</p>`;
 }
 
 function campaignTable(rows) {
@@ -487,6 +714,10 @@ function campaignTable(rows) {
 function campaignEfficiency(rows) {
   const withBudget = rows.filter((r) => r.inversion > 0);
   if (!withBudget.length) {
+    if (rows.some((r) => r.falta_inversion_mes)) {
+      return `<p class="muted">Las campañas solo tienen inversión total y el filtro es por periodo. Captura la inversión de cada mes en
+        <strong>Configuración → Campañas</strong>, o elige "Todo el tiempo".</p>`;
+    }
     return `<p class="muted">Todavía no hay inversión capturada. En <strong>Configuración → Campañas</strong> marketing pone cuánto se invirtió en cada una
       y aquí aparece el costo por lead, por cotización y por cierre.</p>`;
   }
@@ -499,7 +730,9 @@ function campaignEfficiency(rows) {
     : (per(a, 'cerrados') ?? Infinity) - (per(b, 'cerrados') ?? Infinity)));
   const best = ranked.find((r) => (bySales ? r.ingresos : r.cerrados));
   const maxCpl = Math.max(...withBudget.map((r) => per(r, 'recibidos') || 0));
-  const periodNote = $('#f-period').value ? '<p class="muted small-note">Ojo: la inversión es el total de cada campaña y los leads son solo los del periodo elegido; para costos exactos usa "Todo el tiempo".</p>' : '';
+  const missing = rows.filter((r) => r.falta_inversion_mes).map((r) => r.key);
+  const periodNote = missing.length ? `<p class="muted small-note">Sin inversión por mes en ${missing.map(esc).join(', ')}: solo tienen el total, que no se puede repartir por periodo.
+    Captura la inversión de cada mes en Configuración → Campañas, o usa "Todo el tiempo".</p>` : '';
   return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
     <th>Campaña</th><th>Inversión</th><th>Costo por lead</th><th>Costo por cotización</th><th>Costo por cierre</th><th>Ventas</th><th>Retorno</th>
   </tr></thead><tbody>${ranked.map((r) => {
@@ -725,7 +958,7 @@ function touchesPanel(l, touches) {
   const slots = Math.max(t.max, touches.length + (t.byStatus[l.status] ? 1 : 0));
   const dots = Array.from({ length: slots }, (_, i) => {
     const tt = touches[i];
-    const planned = new Date(new Date(l.assigned_at || l.created_at).getTime() + (t.cadence[i] ?? t.cadence.at(-1)) * DAY);
+    const planned = new Date(new Date(l.created_at).getTime() + (t.cadence[i] ?? t.cadence.at(-1)) * DAY);
     if (tt) {
       const ok = tt.outcome !== 'sin_respuesta';
       return `<div class="tp ${ok ? 'ok' : 'miss'}" data-tip="${esc(`Toque ${tt.n} · ${label(tt.channel)} · ${fmtDate(tt.created_at)}
@@ -740,10 +973,10 @@ ${tt.user_name}` : ''}`)}">
   }).join('');
   const outcomes = t.byStatus[l.status];
   const n = touches.length + 1;
-  const d = touchDue(l);
+  const d = nextAction(l);
   const form = l.can_edit && outcomes ? `<div class="touch-form">
-      <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${d.days < 0 ? 'late' : d.days === 0 ? 'today' : ''}">
-        ${d.days < 0 ? `vencido hace ${-d.days} d` : d.days === 0 ? 'toca hoy' : `toca el ${d.due.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`}</span>` : ''}</div>
+      <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${whenClass(d.days)}">
+        ${esc(d.label)} · ${d.days < 0 ? whenText(d.days) : d.days === 0 ? 'toca hoy' : `el ${shortDate(d.due)}`}</span>` : ''}</div>
       <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c, i) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${i === 0 ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
       <div class="outcome-grid">${outcomes.map((o) => `<button type="button" class="outcome ${o}" data-outcome="${o}">${esc(t.outcomes[o])}</button>`).join('')}</div>
       ${!l.contacted_at && n === t.max ? '<p class="muted small-note">Es el último toque de la cadencia: si no contesta, el lead pasa a Declinado.</p>' : ''}
@@ -757,93 +990,96 @@ async function openLead(id) {
   const sellers = state.users.filter((u) => u.active && ['vendedor', 'gerente', 'marketing'].includes(u.role));
   const waLink = l.phone ? `https://wa.me/${l.phone.replace(/\D/g, '')}` : null;
 
+  const adLine = [l.utm_content && `Anuncio: ${l.utm_content}`, l.utm_source && [l.utm_source, l.utm_medium].filter(Boolean).join(' / ')].filter(Boolean).join(' · ');
   openDrawer(`
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>${esc(l.name || l.phone || l.email)}</h2>
     <p class="contact-line">${[l.phone && esc(l.phone), l.email && esc(l.email)].filter(Boolean).join(' · ')}
       ${waLink ? ` · <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
     <div class="tags">
-      <span class="tag ${l.source}">${esc(label(l.source))}</span>
+      <span class="tag status-tag" style="${colorVar(l.status)}">${esc(label(l.status))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
       ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
-      ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : ''}
+      ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : l.channel_name ? `<span class="tag">${esc(l.channel_name)}</span>` : ''}
+      ${l.quote_amount ? `<span class="tag">Cotizado ${money(l.quote_amount)}</span>` : ''}
+      ${l.sale_amount ? `<span class="tag cumple">Vendido ${money(l.sale_amount)}</span>` : ''}
     </div>
-    <p class="muted small-note">Recibido ${fmtDate(l.created_at)}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}</p>
+    <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${adLine ? ` · ${esc(adLine)}` : ''}</p>
+    ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
+      ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
+    ${state.me.role === 'vendedor' && !l.assigned_to ? '<button type="button" id="take" class="take-btn">Tomar este lead</button>' : ''}
     ${milestones(l)}
     ${touchesPanel(l, touches)}
-    ${l.message ? `<p class="card">${esc(l.message)}</p>` : ''}
+    ${l.message ? `<p class="card message">${esc(l.message)}</p>` : ''}
 
-    <form id="lead-form">
-      <div class="row">
-        <label>Estado <select name="status" class="status-select ${textClass(l.status)}" style="${colorVar(l.status)}" ${ro}>${state.meta.statuses.map((s) => `<option value="${s}" ${s === l.status ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
-        <label>Perfil <select name="profile" ${ro}>${state.meta.profiles.map((p) => `<option value="${p}" ${p === l.profile ? 'selected' : ''}>${esc(label(p))}</option>`).join('')}</select></label>
-      </div>
-      <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
-        <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
-      <label class="${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">Motivo declinado <select name="decline_reason" ${ro}>${[...new Set([...(l.decline_reason ? [l.decline_reason] : []), ...state.meta.declineReasons])]
-        .map((r) => `<option ${r === l.decline_reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
-      <label>Vendedor
-        <select name="assigned_to" ${can('gerente', 'marketing') ? '' : 'disabled'}>
-          <option value="">Sin asignar</option>
-          ${sellers.map((u) => `<option value="${u.id}" ${u.id === l.assigned_to ? 'selected' : ''}>${esc(u.name)} (${u.role})</option>`).join('')}
-        </select>
-      </label>
-      <div class="row">
-        <label>Nombre <input name="name" value="${esc(l.name)}" ${ro}></label>
-        <label>Teléfono <input name="phone" value="${esc(l.phone)}" ${ro}></label>
-      </div>
-      <div class="row">
+    ${l.can_edit ? `<form id="note-form" class="note-form"><textarea name="content" placeholder="Agregar nota (qué platicaron, acuerdos, siguiente paso)"></textarea>
+      <div class="actions"><button type="submit" class="small">Agregar nota</button></div></form>` : ''}
+
+    <details class="lead-data">
+      <summary>Datos del lead</summary>
+      <form id="lead-form">
+        <div class="row">
+          <label>Nombre <input name="name" value="${esc(l.name)}" ${ro}></label>
+          <label>Teléfono <input name="phone" value="${esc(l.phone)}" ${ro}></label>
+        </div>
         <label>Email <input name="email" value="${esc(l.email)}" ${ro}></label>
-        <label>Campaña <select name="campaign" ${ro}>${campaignOptions(l.campaign, 'Sin campaña')}</select></label>
-      </div>
-      <div class="row">
-        <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
-        <label>¿Cómo se enteró? <select name="channel_id" ${ro}>${catalogOptions('canal', l.channel_id, 'Sin dato')}</select></label>
-      </div>
-      <p class="error" id="lead-error"></p>
-      <div class="actions">
-        ${l.can_edit ? '<button type="submit">Guardar</button>' : ''}
-        ${state.me.role === 'vendedor' && !l.assigned_to ? '<button type="button" id="take">Tomar este lead</button>' : ''}
-        ${can('gerente') ? '<button type="button" class="danger" id="delete">Eliminar</button>' : ''}
-      </div>
-    </form>
+        <div class="row">
+          <label>¿De dónde viene? <select name="origin" ${ro}>${originOptions(l.campaign, l.channel_id)}</select></label>
+          <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
+        </div>
+        <label>Vendedor
+          <select name="assigned_to" ${can('gerente', 'marketing') ? '' : 'disabled'}>
+            <option value="">Sin asignar</option>
+            ${sellers.map((u) => `<option value="${u.id}" ${u.id === l.assigned_to ? 'selected' : ''}>${esc(u.name)} (${u.role})</option>`).join('')}
+          </select>
+        </label>
+        <div class="row">
+          <label>Etapa <select name="status" class="status-select ${textClass(l.status)}" style="${colorVar(l.status)}" ${ro}>${state.meta.statuses.map((st) => `<option value="${st}" ${st === l.status ? 'selected' : ''}>${esc(label(st))}</option>`).join('')}</select></label>
+          <label>Perfil <select name="profile" ${ro}>${state.meta.profiles.map((pr) => `<option value="${pr}" ${pr === l.profile ? 'selected' : ''}>${esc(label(pr))}</option>`).join('')}</select></label>
+        </div>
+        <div class="row">
+          <label id="quote-wrap" class="${['cotizando', 'vendido', 'declinado'].includes(l.status) ? '' : 'hidden'}">Monto cotizado (MXN)
+            <input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}" placeholder="Ej. 60000" ${ro}></label>
+          <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
+            <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
+        </div>
+        <div class="row ${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">
+          <label>Motivo <select name="decline_reason" ${ro}>${[...new Set([...(l.decline_reason ? [l.decline_reason] : []), ...state.meta.declineReasons])]
+            .map((r) => `<option ${r === l.decline_reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
+          <label>Volver a contactar el <input type="date" name="recontact_at" value="${esc(l.recontact_at || '')}" ${ro}></label>
+        </div>
+        <p class="muted small-note">La etapa normalmente se mueve sola con los toques; cámbiala aquí solo para corregir.</p>
+        <p class="error" id="lead-error"></p>
+        <div class="actions">
+          ${l.can_edit ? '<button type="submit">Guardar cambios</button>' : ''}
+          ${can('gerente') ? '<button type="button" class="danger" id="delete">Eliminar lead</button>' : ''}
+        </div>
+      </form>
+    </details>
 
     <h3>Historial</h3>
-    ${l.can_edit ? `<form id="note-form"><textarea name="content" placeholder="Agregar nota (llamada, cotización enviada, etc.)"></textarea>
-      <div class="actions"><button type="submit">Agregar nota</button></div></form>` : ''}
     <ul class="events">${l.events.map((e) => `<li class="${e.type}">${esc(e.content)}
       <small>${e.user_name ? esc(e.user_name) + ' · ' : ''}${fmtDate(e.created_at)}</small></li>`).join('')}</ul>
   `);
 
   document.querySelectorAll('#drawer-body .outcome').forEach((b) => b.addEventListener('click', async () => {
-    const outcome = b.dataset.outcome;
-    const body = { channel: $('#drawer-body input[name=touch-channel]:checked').value, outcome };
-    if (outcome === 'rechazo') {
-      const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== 'No contestó (5 toques)'), okLabel: 'Declinar' });
-      if (reason === null) return;
-      body.decline_reason = reason;
-    }
-    if (outcome === 'vendido') {
-      const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional)', { input: true, placeholder: 'Ej. 45000', okLabel: 'Registrar venta' });
-      if (amount === null) return;
-      if (amount) body.sale_amount = amount;
-    }
-    try {
-      const r = await api(`/api/leads/${l.id}/touches`, { method: 'POST', body });
-      toast(r.auto_declined ? 'Quinto toque sin respuesta: el lead pasó a Declinado' : `Toque ${r.n} registrado`, r.auto_declined ? '' : 'ok');
-      openLead(l.id); refresh();
-    } catch (err) { toast(err.message, 'error'); }
+    const ok = await registerTouch(l, $('#drawer-body input[name=touch-channel]:checked').value, b.dataset.outcome);
+    if (ok) openLead(l.id);
   }));
+  $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
   const form = $('#lead-form');
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
     $('#sale-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
+    $('#quote-wrap').classList.toggle('hidden', !['cotizando', 'vendido', 'declinado'].includes(form.status.value));
     form.status.setAttribute('style', colorVar(form.status.value));
     form.status.classList.toggle('dark-text', DARK_TEXT.has(form.status.value));
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'sale_amount', 'name', 'phone', 'email', 'campaign', 'product_id', 'channel_id'].map((k) => [k, form[k].value]));
+    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'name', 'phone', 'email', 'product_id']
+      .map((k) => [k, form[k].value]));
+    Object.assign(body, originToFields(form.origin.value));
     if (can('gerente', 'marketing')) body.assigned_to = form.assigned_to.value || null;
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body });
@@ -873,22 +1109,22 @@ function openNewLead() {
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>Nuevo lead</h2>
     <form id="new-form">
-      <label>¿Por dónde llegó?
-        <select name="source">${state.meta.manualSources.map((s) => `<option value="${s}">${esc(label(s))}</option>`).join('')}</select>
-      </label>
       <label>Teléfono <input name="phone" inputmode="tel" autofocus></label>
       <label>Nombre <input name="name"></label>
-      <label>Email <input name="email" type="email"></label>
+      <fieldset class="plain"><legend>¿Por dónde escribió?</legend>
+        <div class="seg-group">${state.meta.manualSources.map((src, i) => `<label class="seg"><input type="radio" name="source" value="${src}" ${i === 0 ? 'checked' : ''}><span>${esc(label(src))}</span></label>`).join('')}</div>
+      </fieldset>
+      <label>¿De dónde viene? <select name="origin">${originOptions(null, null)}</select></label>
       <label>Producto de interés <select name="product_id">${catalogOptions('producto', null, 'Sin definir')}</select></label>
-      <label>¿Cómo se enteró de nosotros? <select name="channel_id">${catalogOptions('canal', null, 'Sin dato')}</select></label>
-      <label>Campaña <select name="campaign">${campaignOptions(null, 'Sin campaña')}</select></label>
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
+      <details class="lead-data"><summary>Más datos</summary><label>Email <input name="email" type="email"></label></details>
       <p class="error" id="new-error"></p>
-      <button type="submit">Crear</button>
+      <button type="submit">Crear lead</button>
     </form>`);
   $('#new-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(new FormData(e.target));
+    const { origin, ...rest } = Object.fromEntries(new FormData(e.target));
+    const body = { ...rest, ...originToFields(origin) };
     try {
       const { id, existing } = await api('/api/leads', { method: 'POST', body });
       refresh();
@@ -980,6 +1216,10 @@ async function renderSettings() {
   const snippet = `<form action="${s.form_url}" method="post">
   <input type="hidden" name="key" value="${s.form_api_key}">
   <input type="hidden" name="campana" value="sitio-web">
+  <input type="hidden" name="utm_campaign">
+  <input type="hidden" name="utm_source">
+  <input type="hidden" name="utm_medium">
+  <input type="hidden" name="utm_content">
   <input type="hidden" name="redirect" value="https://TU-SITIO/gracias">
   <input name="website" style="display:none" tabindex="-1" autocomplete="off">
   <input name="nombre" placeholder="Nombre" required>
@@ -987,9 +1227,27 @@ async function renderSettings() {
   <input name="email" type="email" placeholder="Email">${selectFor('producto', 'producto', '¿Qué te interesa?')}${selectFor('canal', 'canal', '¿Cómo te enteraste de nosotros?')}
   <textarea name="mensaje" placeholder="¿En qué te podemos ayudar?"></textarea>
   <button>Enviar</button>
-</form>`;
+</form>
+<script>
+  // Toma la campaña y el anuncio del link (utm_...) y los recuerda aunque la persona navegue a otra página.
+  (function () {
+    var p = new URLSearchParams(location.search);
+    ['utm_campaign', 'utm_source', 'utm_medium', 'utm_content'].forEach(function (n) {
+      var v = p.get(n);
+      try { if (v) localStorage.setItem(n, v); else v = localStorage.getItem(n); } catch (e) {}
+      document.querySelectorAll('input[name=' + n + ']').forEach(function (i) { if (v) i.value = v; });
+    });
+  })();
+</script>`;
 
   $('#view-settings').innerHTML = `<div class="settings">
+    <div class="card">
+      ${cardTitle('users', 'var(--f-contactados)', 'Reparto de leads')}
+      <label class="switch-row"><input type="checkbox" id="auto-assign" ${s.auto_assign ? 'checked' : ''}>
+        <span><strong>Repartir leads automáticamente por turnos</strong><br>
+        <span class="muted">Cada lead que llega por formulario o que captura marketing se asigna al siguiente vendedor activo, para que ninguno espere sin dueño.
+        Apágalo si prefieres asignarlos a mano.</span></span></label>
+    </div>
     ${campaignEditor()}
     <div class="lists">
       ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
@@ -998,6 +1256,9 @@ async function renderSettings() {
     <div class="card">
       ${cardTitle('file', 'var(--accent)', 'Formulario de tu página web')}
       <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
+      <p class="muted">En cada anuncio usa el link de tu página con la campaña y el nombre del anuncio, por ejemplo
+        <code>https://TU-SITIO/?utm_campaign=FB-Espectaculares-Oct&amp;utm_source=facebook&amp;utm_content=video-carretera</code>.
+        El formulario los guarda solos y el Resumen te dice qué campaña y qué anuncio cierran.</p>
       <label>Dirección a donde se envía el formulario</label>${copyField(s.form_url)}
       <label>Clave del formulario</label>${copyField(s.form_api_key)}
       <label>Ejemplo de formulario listo para pegar en la página</label>${copyField(snippet, true)}
@@ -1043,15 +1304,28 @@ async function renderSettings() {
     const name = f.elements.name.value.trim();
     if (!name) return;
     try {
-      await api('/api/catalog', { method: 'POST', body: { kind: 'campana', name, budget: f.elements.budget.value } });
+      const { id } = await api('/api/catalog', { method: 'POST', body: { kind: 'campana', name, channel_id: f.elements.channel_id.value || null } });
+      if (f.elements.budget.value) await api(`/api/catalog/${id}/budgets`, { method: 'PUT', body: { month: monthKey(0), amount: f.elements.budget.value } });
       await reloadCatalog();
       toast(`Campaña "${name}" agregada`, 'ok');
     } catch (err) { toast(err.message, 'error'); }
   });
-  $('#view-settings').querySelectorAll('[data-budget]').forEach((b) => b.addEventListener('click', async () => {
-    const value = await ask('Inversión total de la campaña (MXN). Déjalo vacío para quitarla.', { input: true, placeholder: 'Ej. 15000', okLabel: 'Guardar' });
-    if (value === null) return;
-    try { await api(`/api/catalog/${b.dataset.budget}`, { method: 'PATCH', body: { budget: value } }); await reloadCatalog(); } catch (err) { toast(err.message, 'error'); }
+  $('#auto-assign').addEventListener('change', async (e) => {
+    try {
+      await api('/api/settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
+      toast(e.target.checked ? 'Reparto automático encendido' : 'Reparto automático apagado', 'ok');
+    } catch (err) { toast(err.message, 'error'); e.target.checked = !e.target.checked; }
+  });
+  $('#view-settings').querySelectorAll('[data-camp-channel]').forEach((sel) => sel.addEventListener('change', async () => {
+    try { await api(`/api/catalog/${sel.dataset.campChannel}`, { method: 'PATCH', body: { channel_id: sel.value || null } }); toast('Canal guardado', 'ok'); } catch (err) { toast(err.message, 'error'); }
+  }));
+  $('#view-settings').querySelectorAll('[data-month]').forEach((inp) => inp.addEventListener('change', async () => {
+    const id = inp.closest('[data-item]').dataset.item;
+    try {
+      await api(`/api/catalog/${id}/budgets`, { method: 'PUT', body: { month: inp.dataset.month, amount: inp.value } });
+      await reloadCatalog();
+      toast('Inversión guardada', 'ok');
+    } catch (err) { toast(err.message, 'error'); }
   }));
   $('#regen').addEventListener('click', async () => {
     if (!await ask('El formulario de tu página dejará de funcionar hasta que se actualice con la nueva clave. ¿Continuar?', { okLabel: 'Cambiar clave', danger: true })) return;
@@ -1060,25 +1334,47 @@ async function renderSettings() {
   });
 }
 
+// 'YYYY-MM' de hace `back` meses, en hora local.
+function monthKey(back) {
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - back);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+const monthName = (key) => new Date(`${key}-15T12:00:00`).toLocaleDateString('es-MX', { month: 'short', year: '2-digit' });
+
 function campaignEditor() {
   const items = state.catalog.campana;
+  const months = [0, 1, 2, 3, 4, 5].map(monthKey);
+  const channelSelect = (i) => `<select data-camp-channel="${i.id}" aria-label="Canal de ${esc(i.name)}" class="small-select">
+    <option value="">Canal…</option>${state.catalog.canal.filter((c) => c.active || c.id === i.channel_id)
+      .map((c) => `<option value="${c.id}" ${c.id === i.channel_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+  const budgetOf = (i, m) => (i.budgets || []).find((b) => b.month === m)?.amount;
   return `<div class="card">
     ${cardTitle('megaphone', 'var(--llamada)', 'Campañas')}
-    <p class="muted">Las que el vendedor puede elegir en cada lead. Con la inversión, el Resumen calcula cuánto cuesta cada lead, cada cotización y cada cierre.
-      Si llega una campaña nueva desde un formulario o anuncio, se agrega sola aquí.</p>
+    <p class="muted">Las que el vendedor puede elegir en cada lead. A cada campaña ponle su canal (Facebook, Google…) y lo que se invirtió cada mes:
+      con eso el Resumen calcula cuánto cuesta cada lead y cada cierre en el periodo que elijas. Si llega una campaña nueva desde un anuncio, se agrega sola aquí.</p>
     <form id="campaign-form" class="list-form">
       <input name="name" placeholder="Ej. FB Espectaculares Octubre" aria-label="Nombre de la campaña" maxlength="120">
-      <input name="budget" inputmode="decimal" placeholder="Inversión (MXN)" aria-label="Inversión" style="max-width:170px">
+      <select name="channel_id" aria-label="Canal" class="small-select"><option value="">Canal…</option>
+        ${state.catalog.canal.filter((c) => c.active).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <input name="budget" inputmode="decimal" placeholder="Inversión de ${monthName(months[0])}" aria-label="Inversión de este mes" style="max-width:170px">
       <button type="submit">Agregar</button>
     </form>
-    <ul class="items">
-      ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
+    <ul class="items campaigns">
+      ${items.map((i) => {
+        const cur = budgetOf(i, months[0]);
+        const noMonthly = !(i.budgets || []).length;
+        return `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
         <span>${esc(i.name)}${i.active ? '' : ' <small>(quitada)</small>'}</span>
-        <span class="budget ${i.budget == null ? 'missing' : ''}">${i.budget == null ? 'Sin inversión' : money(i.budget)}</span>
-        <button type="button" class="ghost small" data-budget="${i.id}">Inversión</button>
+        ${channelSelect(i)}
+        <span class="budget ${cur == null ? 'missing' : ''}">${cur == null ? `Sin inversión en ${monthName(months[0])}` : `${money(cur)} en ${monthName(months[0])}`}</span>
         <button type="button" class="ghost small" data-rename>Renombrar</button>
         <button type="button" class="ghost small" data-toggle>${i.active ? 'Quitar' : 'Volver a usar'}</button>
-      </li>`).join('') || '<li class="muted">Todavía no hay campañas. Agrega la primera arriba.</li>'}
+        <details class="months"><summary>Inversión por mes</summary>
+          <div class="month-grid">${months.map((m) => `<label>${monthName(m)}<input data-month="${m}" inputmode="decimal" value="${budgetOf(i, m) ?? ''}" placeholder="$0"></label>`).join('')}</div>
+          ${noMonthly && i.budget ? `<p class="muted small-note">Tiene una inversión total de ${money(i.budget)} de antes; al capturar meses, se usan los meses.</p>` : ''}
+        </details>
+      </li>`;
+      }).join('') || '<li class="muted">Todavía no hay campañas. Agrega la primera arriba.</li>'}
     </ul>
   </div>`;
 }

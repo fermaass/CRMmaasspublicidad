@@ -5,7 +5,7 @@ const { createApp, seedAdmin } = require('../src/server');
 
 const config = {
   adminEmail: 'gerente@test.com', adminPassword: 'clave-gerente', adminName: 'Gerente',
-  formApiKey: 'form-key', cookieSecure: false,
+  formApiKey: 'form-key', autoAssign: false, cookieSecure: false,
 };
 let server; let base; let db;
 

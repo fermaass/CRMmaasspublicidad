@@ -17,9 +17,10 @@ const LABELS = {
 const CATALOG_KINDS = ['canal', 'producto', 'campana'];
 
 // Toques: cada intento de contacto del vendedor. Su resultado mueve al lead de etapa.
-const MAX_TOUCHES = 5;
-// Cadencia de 12 días: día en que toca cada toque, contado desde que se asigna el lead.
-const CADENCE_DAYS = [0, 1, 3, 7, 12];
+// La cadencia (qué toca y cuándo) vive en public/followup.js para que servidor y navegador usen la misma regla.
+const FOLLOWUP = require('../public/followup.js');
+const MAX_TOUCHES = FOLLOWUP.MAX;
+const CADENCE_DAYS = FOLLOWUP.CADENCE;
 const TOUCH_CHANNELS = ['llamada', 'whatsapp', 'correo', 'visita'];
 const TOUCH_OUTCOMES = {
   sin_respuesta: 'No contestó',
@@ -38,7 +39,8 @@ const OUTCOMES_BY_STATUS = {
   cotizando: ['sin_respuesta', 'seguimiento', 'vendido', 'rechazo'],
 };
 const NO_ANSWER = 'No contestó (5 toques)';
-const DECLINE_REASONS = [NO_ANSWER, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', 'Lo pospuso / sin presupuesto ahora', 'Otro'];
+const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
+const DECLINE_REASONS = [NO_ANSWER, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
@@ -49,7 +51,8 @@ function catalogDDL(table) {
       kind TEXT NOT NULL CHECK (kind IN (${CATALOG_KINDS.map((k) => `'${k}'`).join(',')})),
       name TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1,
-      budget REAL, -- inversión total (solo campañas)
+      budget REAL, -- inversión total (solo campañas; se usa si no hay inversión por mes)
+      channel_id INTEGER, -- canal al que pertenece la campaña (p. ej. Facebook)
       UNIQUE (kind, name)
     );`;
 }
@@ -131,6 +134,21 @@ function openDb(dbPath) {
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('sale_amount')) db.exec('ALTER TABLE leads ADD COLUMN sale_amount REAL');
+  const catCols = db.prepare('PRAGMA table_info(catalog_items)').all().map((c) => c.name);
+  if (!catCols.includes('budget')) db.exec('ALTER TABLE catalog_items ADD COLUMN budget REAL');
+  if (!catCols.includes('channel_id')) db.exec('ALTER TABLE catalog_items ADD COLUMN channel_id INTEGER');
+  // Monto cotizado, fecha para volver a contactar, primer toque y de qué anuncio viene.
+  for (const [col, type] of [['quote_amount', 'REAL'], ['recontact_at', 'TEXT'], ['first_touch_at', 'TEXT'],
+    ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_content', 'TEXT']]) {
+    if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
+  }
+  // Inversión de cada campaña por mes ('AAAA-MM').
+  db.exec(`CREATE TABLE IF NOT EXISTS campaign_budgets (
+      campaign_id INTEGER NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+      month TEXT NOT NULL,
+      amount REAL NOT NULL,
+      PRIMARY KEY (campaign_id, month)
+    );`);
   if (!leadCols.includes('touch_count')) {
     db.exec(`ALTER TABLE leads ADD COLUMN touch_count INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE leads ADD COLUMN response_touch INTEGER; -- en qué toque respondió por primera vez
@@ -187,6 +205,7 @@ function ensureSettings(db, config = {}) {
   const initial = {
     form_api_key: config.formApiKey,
   };
+  if (config.autoAssign === false) setSetting(db, 'auto_assign', '0');
   for (const [key, fromEnv] of Object.entries(initial)) {
     if (fromEnv) setSetting(db, key, fromEnv);
     else if (!getSetting(db, key)) setSetting(db, key, random());
@@ -201,5 +220,5 @@ function phoneKey(phone) {
 
 module.exports = {
   openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, DECLINE_REASONS, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };

@@ -2,17 +2,25 @@
 
 CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
 
+## Mi día
+
+Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, ordenado por urgencia: volver a contactar a quien lo pospuso, seguimiento de cotizaciones, siguiente paso con quien ya contestó y toques de la cadencia. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. El vendedor ve además los leads sin dueño para tomarlos.
+
+## Reparto automático
+
+Cada lead que llega por formulario o que captura marketing o el gerente se asigna por turnos al siguiente vendedor activo. Si lo captura un vendedor, se queda con él. Se apaga en **Configuración → Reparto de leads**.
+
 ## Embudo de conversión y eficiencia por vendedor
 
 Cada lead guarda la fecha en que pasó por cada paso: **recibido → contestó → perfilado (cumple perfil) → cotizado → cerrado**. Esos pasos no se borran aunque el lead se decline, así que un lead que cotizó y luego se perdió sigue contando como cotizado. El embudo es acumulado: llegar a un paso cuenta también los anteriores (si se cotizó, el cliente contestó).
 
 - Que el cliente contestó se registra con los toques (ver abajo).
-- El **Resumen** muestra el embudo, la conversión por campaña y la eficiencia por vendedor (cuántos recibe, cuántos le contestan, cuántos perfila, cotiza y cierra, y el tiempo promedio desde la asignación hasta que el cliente contesta).
+- El **Resumen** tiene dos pestañas. **Ventas**: embudo, velocidad al primer toque, dinero en cotización, eficiencia por vendedor (cuántos recibe, le contestan, perfila, cotiza y cierra; cuánto tarda en dar el primer toque y cuánto tarda el cliente en contestar, ambos desde que llega el lead), en qué toque responden y se cotiza, y por qué se pierden. **Marketing**: costo por lead, costo por cierre, retorno, % que cumple perfil, conversión y eficiencia por campaña, resultados por anuncio y de dónde vienen los leads.
 - Todo se puede filtrar por periodo (este mes, mes pasado, 30/90 días, este año) y por campaña.
 
 ## Toques y cadencia
 
-Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una cadencia de **12 días**: día 0, 1, 3, 7 y 12 desde que se asigna. En la ficha del lead se registra cada toque con su medio (llamada, WhatsApp, correo o visita) y su resultado, y **el resultado mueve al lead de etapa**:
+Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una cadencia de **12 días**: día 0, 1, 3, 7 y 12 desde que llega el lead. En la ficha del lead se registra cada toque con su medio (llamada, WhatsApp, correo o visita) y su resultado, y **el resultado mueve al lead de etapa**:
 
 | Etapa | Resultados posibles |
 |---|---|
@@ -22,19 +30,29 @@ Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una c
 
 Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". Cuando el cliente ya respondió, los toques siguen contando (para saber en cuál se cotizó y cerró) sin límite. Las tarjetas muestran el siguiente toque y si está vencido, y arriba del tablero aparece cuántos toques están vencidos o tocan hoy.
 
+Después de contestar, el seguimiento es cada 3 días hasta cotizar. Ya cotizado, los seguimientos tocan a los **2, 5 y 10 días** de enviada la cotización y luego cada 7 días. Al registrar la cotización se pide el monto (opcional) para saber cuánto dinero hay en juego. Si el cliente "lo pospuso", se puede poner una **fecha para volver a contactarlo** y ese día aparece en Mi día.
+
+La regla de qué toca y cuándo vive en un solo archivo (`public/followup.js`) que usan el servidor y el navegador.
+
 Los motivos de declinado son una lista fija: No contestó (5 toques), No cumple perfil, Precio, Eligió a otro proveedor, Lo pospuso / sin presupuesto ahora, Otro.
 
 El Resumen muestra **en qué toque responden** los leads, **en qué toque se cotiza**, **por qué se pierden** y, por vendedor, los toques promedio hasta respuesta y cotización y sus toques vencidos.
 
 ## Campañas y su eficiencia
 
-En **Configuración → Campañas** marketing da de alta sus campañas con la **inversión** de cada una. El vendedor solo puede elegir campañas de esa lista al capturar un lead. Si llega por formulario una campaña que no está (por ejemplo un `utm_campaign` nuevo), se agrega sola para que marketing le ponga su inversión. Renombrar una campaña actualiza sus leads.
+En **Configuración → Campañas** marketing da de alta sus campañas, el **canal** de cada una (Facebook, Google…) y su **inversión por mes**. Así, al filtrar por periodo, el costo por lead y por cierre usa solo la inversión de esos meses. El vendedor solo puede elegir campañas de esa lista al capturar un lead. Si llega por formulario una campaña que no está (por ejemplo un `utm_campaign` nuevo), se agrega sola para que marketing le ponga su inversión. Renombrar una campaña actualiza sus leads.
 
-Al marcar un lead como **vendido** se puede capturar el **monto de venta** (opcional). Con eso, el Resumen muestra por campaña: costo por lead, costo por cotización, costo por cierre, ventas y **retorno** (ventas ÷ inversión). La campaña más eficiente es la de mayor retorno; si no hay montos capturados, la de menor costo por cierre. La inversión es el total de la campaña, así que los costos son exactos con el filtro "Todo el tiempo".
+Al marcar un lead como **vendido** se puede capturar el **monto de venta** (opcional). Con eso, el Resumen muestra por campaña: costo por lead, costo por cotización, costo por cierre, ventas y **retorno** (ventas ÷ inversión). La campaña más eficiente es la de mayor retorno; si no hay montos capturados, la de menor costo por cierre. Las campañas de antes que solo tienen inversión total se cuentan únicamente con "Todo el tiempo".
+
+Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola lista con campañas y canales orgánicos; si eliges una campaña, el canal se toma de la campaña.
 
 ## Listas: productos y canales de percepción
 
 En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.
+
+## Audiencias
+
+En la **Lista** hay atajos para armar audiencias y exportarlas en CSV: cumplen perfil y no compraron, lo pospusieron, nunca contestaron y clientes. Cada atajo solo aplica filtros; "Exportar CSV" descarga lo que se ve.
 
 ## Roles
 
@@ -76,6 +94,7 @@ La dirección y la clave aparecen en **Configuración**, junto con un formulario
 - `email` / `correo`
 - `mensaje` / `message`
 - `campana` / `campaign` / `utm_campaign`
+- `utm_source`, `utm_medium`, `utm_content` (o `anuncio`): el formulario de ejemplo los toma solos del link del anuncio y los recuerda aunque la persona navegue a otra página. Con `utm_content` el Resumen muestra qué anuncio trae leads que cierran.
 - `producto`: nombre de un producto de la lista (el formulario de ejemplo ya trae el selector)
 - `canal` / `como_se_entero`: nombre de un canal de percepción de la lista
 - `redirect` (opcional): URL a la que se manda al visitante después de enviar

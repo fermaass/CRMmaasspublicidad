@@ -37,6 +37,7 @@
     <header class="topbar">
       <strong class="brand">CRM Maass</strong>
       <nav id="nav">
+        <button data-view="today" data-role="gerente,marketing,vendedor">Mi día</button>
         <button data-view="board">Tablero</button>
         <button data-view="list">Lista</button>
         <button data-view="stats">Resumen</button>
@@ -54,25 +55,31 @@
     </div>
 
     <div class="toolbar">
-      <input id="f-q" type="search" placeholder="Buscar nombre, teléfono, email, campaña">
+      <input id="f-q" type="search" placeholder="Buscar nombre, teléfono, email, campaña" aria-label="Buscar">
       <select id="f-period" aria-label="Periodo">
         <option value="">Todo el tiempo</option><option value="mes">Este mes</option><option value="mes_pasado">Mes pasado</option>
         <option value="30">Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="anio">Este año</option>
       </select>
-      <select id="f-campaign"><option value="">Todas las campañas</option></select>
-      <select id="f-profile"><option value="">Todo perfil</option></select>
-      <select id="f-source"><option value="">Todo origen</option></select>
-      <select id="f-product"><option value="">Todo producto</option><option value="none">Sin producto</option></select>
-      <select id="f-channel"><option value="">Todo canal</option><option value="none">Sin dato de canal</option></select>
-      <select id="f-assigned"><option value="">Todos los vendedores</option><option value="none">Sin asignar</option></select>
-      <select id="f-status" class="list-only"><option value="">Todo estado</option></select>
+      <select id="f-assigned" aria-label="Vendedor"><option value="">Todos los vendedores</option><option value="none">Sin asignar</option></select>
+      <select id="f-campaign" aria-label="Campaña"><option value="">Todas las campañas</option></select>
+      <button type="button" id="more-filters" class="ghost" aria-expanded="false" aria-controls="extra-filters">Más filtros</button>
       <span class="spacer"></span>
       <button id="export" class="ghost" data-role="gerente,marketing,analista">Exportar CSV</button>
       <button id="new-lead" data-role="gerente,marketing,vendedor">+ Lead</button>
+      <div id="extra-filters" class="extra-filters hidden">
+        <select id="f-status" aria-label="Etapa"><option value="">Toda etapa</option></select>
+        <select id="f-profile" aria-label="Perfil"><option value="">Todo perfil</option></select>
+        <select id="f-source" aria-label="Origen"><option value="">Todo origen</option></select>
+        <select id="f-product" aria-label="Producto"><option value="">Todo producto</option><option value="none">Sin producto</option></select>
+        <select id="f-channel" aria-label="Canal"><option value="">Todo canal</option><option value="none">Sin dato de canal</option></select>
+        <select id="f-reason" aria-label="Motivo"><option value="">Todo motivo</option></select>
+        <button type="button" id="clear-filters" class="ghost small">Limpiar filtros</button>
+      </div>
     </div>
 
     <main>
       <div id="board-alert" class="board-alert hidden" role="status"></div>
+      <div id="view-today" class="view"></div>
       <div id="view-board" class="board view"></div>
       <div id="view-list" class="view"></div>
       <div id="view-stats" class="view"></div>
@@ -89,7 +96,7 @@
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-text">
     <div class="card modal-box">
       <p id="modal-text"></p>
-      <input id="modal-input" class="hidden">
+      <input id="modal-input" class="hidden" aria-label="Respuesta">
       <select id="modal-select" class="hidden" aria-label="Opción"></select>
       <div class="actions">
         <button type="button" id="modal-ok">Aceptar</button>
@@ -100,6 +107,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
   <div id="tip" class="tip hidden" role="tooltip"></div>
 
+  <script src="followup.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

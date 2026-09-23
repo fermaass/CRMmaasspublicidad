@@ -1,5 +1,5 @@
 const express = require('express');
-const { ingestLead, campaignName } = require('./leads');
+const { ingestLead, campaignName, autoAssign } = require('./leads');
 const { getSetting } = require('./db');
 
 const pick = (body, ...keys) => {
@@ -53,8 +53,11 @@ function webhooksRouter(db) {
         email: pick(body, 'email', 'correo'),
         message,
         // Una campaña nueva (p. ej. un utm_campaign) se agrega sola a la lista para que marketing le ponga su inversión.
-        campaign: campaignName(db, pick(body, 'campana', 'campaña', 'campaign', 'utm_campaign'), { create: true }),
+        // El utm_campaign del anuncio manda sobre la campaña fija del formulario.
+        campaign: campaignName(db, pick(body, 'utm_campaign', 'campana', 'campaña', 'campaign'), { create: true }),
+        utm_source: pick(body, 'utm_source'), utm_medium: pick(body, 'utm_medium'), utm_content: pick(body, 'utm_content', 'anuncio'),
       });
+      autoAssign(db, result.id);
       const redirect = pick(body, 'redirect');
       if (redirect && /^https?:\/\//.test(redirect)) return res.redirect(303, redirect);
       res.status(result.created ? 201 : 200).json({ ok: true, ...result });
