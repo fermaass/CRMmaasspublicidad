@@ -50,6 +50,11 @@
 
     <div class="toolbar">
       <input id="f-q" type="search" placeholder="Buscar nombre, teléfono, email, campaña">
+      <select id="f-period" aria-label="Periodo">
+        <option value="">Todo el tiempo</option><option value="mes">Este mes</option><option value="mes_pasado">Mes pasado</option>
+        <option value="30">Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="anio">Este año</option>
+      </select>
+      <select id="f-campaign"><option value="">Todas las campañas</option></select>
       <select id="f-profile"><option value="">Todo perfil</option></select>
       <select id="f-source"><option value="">Todo origen</option></select>
       <select id="f-product"><option value="">Todo producto</option><option value="none">Sin producto</option></select>

@@ -87,6 +87,11 @@ function createApp({ db, config }) {
   });
 
   // ---------- Listas: canales de percepción y productos ----------
+  app.get('/api/campaigns', auth.requireUser, (req, res) => {
+    res.json(db.prepare(`SELECT DISTINCT campaign FROM leads WHERE campaign IS NOT NULL ORDER BY campaign COLLATE NOCASE`)
+      .all().map((r) => r.campaign));
+  });
+
   app.get('/api/catalog', auth.requireUser, (req, res) => {
     const items = db.prepare('SELECT id, kind, name, active FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
     res.json(Object.fromEntries(CATALOG_KINDS.map((k) => [k, items.filter((i) => i.kind === k)])));
@@ -255,7 +260,9 @@ function createApp({ db, config }) {
         }
         return res.json({ id: result.id, existing: true });
       }
-      if (req.user.role === 'vendedor') db.prepare('UPDATE leads SET assigned_to = ? WHERE id = ?').run(req.user.id, result.id);
+      if (req.user.role === 'vendedor') {
+        db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
+      }
       res.status(201).json({ id: result.id });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -290,10 +297,31 @@ function createApp({ db, config }) {
     const phone = field('phone');
     const declineReason = next.status === 'declinado' ? field('decline_reason') : null;
 
+    // Hitos del embudo: se fijan la primera vez que el lead llega a cada paso.
+    const ts = now();
+    const m = {
+      assigned_at: assigned !== lead.assigned_to ? (assigned ? ts : null) : lead.assigned_at,
+      contacted_at: b.contacted === false && !lead.quoted_at && !lead.won_at ? null : lead.contacted_at,
+      profiled_at: lead.profiled_at, quoted_at: lead.quoted_at, won_at: lead.won_at,
+      declined_at: next.status === 'declinado' && lead.status !== 'declinado' ? ts : lead.declined_at,
+    };
+    if (b.contacted === true && !m.contacted_at) m.contacted_at = ts;
+    if (next.profile === 'cumple' && !m.profiled_at) m.profiled_at = ts;
+    if (['cotizando', 'vendido'].includes(next.status)) {
+      m.quoted_at ||= ts;
+      m.contacted_at ||= ts; // si ya cotizó, el cliente contestó
+    }
+    if (next.status === 'vendido') m.won_at ||= ts;
+
     db.prepare(`UPDATE leads SET name = ?, phone = ?, phone_key = ?, email = ?, campaign = ?, status = ?, profile = ?,
-      decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, updated_at = ? WHERE id = ?`)
+      decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, assigned_at = ?, contacted_at = ?,
+      profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, updated_at = ? WHERE id = ?`)
       .run(field('name'), phone, phoneKey(phone), field('email'), field('campaign'), next.status, next.profile,
-        declineReason, assigned, channelId, productId, now(), lead.id);
+        declineReason, assigned, channelId, productId, m.assigned_at, m.contacted_at,
+        m.profiled_at, m.quoted_at, m.won_at, m.declined_at, ts, lead.id);
+
+    if (m.contacted_at && !lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'El cliente contestó');
+    if (!m.contacted_at && lead.contacted_at) addEvent(db, lead.id, req.user.id, 'contacto', 'Se desmarcó "El cliente contestó"');
 
     const itemName = (id) => (id ? db.prepare('SELECT name FROM catalog_items WHERE id = ?').get(id).name : 'ninguno');
     if (productId !== lead.product_id) addEvent(db, lead.id, req.user.id, 'perfil', `Producto: ${itemName(productId)}`);
@@ -315,7 +343,8 @@ function createApp({ db, config }) {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     if (lead.assigned_to) return res.status(409).json({ error: 'Este lead ya tiene vendedor' });
-    db.prepare('UPDATE leads SET assigned_to = ?, updated_at = ? WHERE id = ? AND assigned_to IS NULL').run(req.user.id, now(), lead.id);
+    db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ? AND assigned_to IS NULL')
+      .run(req.user.id, now(), now(), lead.id);
     addEvent(db, lead.id, req.user.id, 'asignacion', `${req.user.name} tomó el lead`);
     res.json({ ok: true });
   });
@@ -356,7 +385,26 @@ function createApp({ db, config }) {
     const byDay = db.prepare(`SELECT substr(l.created_at, 1, 10) AS day, COUNT(*) AS n FROM leads l
       ${sql ? `${sql} AND` : 'WHERE'} l.created_at >= ? GROUP BY 1 ORDER BY 1`).all(...params, since);
     const total = db.prepare(`SELECT COUNT(*) AS n FROM leads l ${sql}`).get(...params).n;
+
+    // Embudo acumulado: cada paso cuenta a quien llegó ahí o más adelante, así nunca crece hacia abajo.
+    const funnelCols = `COUNT(*) AS recibidos,
+      COALESCE(SUM(COALESCE(l.contacted_at, l.profiled_at, l.quoted_at, l.won_at) IS NOT NULL), 0) AS contactados,
+      COALESCE(SUM(COALESCE(l.profiled_at, l.quoted_at, l.won_at) IS NOT NULL), 0) AS perfilados,
+      COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados,
+      COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
+      COALESCE(SUM(l.status = 'declinado'), 0) AS declinados`;
+    const funnel = db.prepare(`SELECT ${funnelCols} FROM leads l ${sql}`).get(...params);
+    const campaignFunnel = db.prepare(`SELECT COALESCE(l.campaign, 'Sin campaña') AS key, ${funnelCols}
+      FROM leads l ${sql} GROUP BY 1 ORDER BY cerrados DESC, recibidos DESC`).all(...params);
+    // Eficiencia por vendedor: lo que recibe, cuántos contestan, cotiza y cierra, y horas promedio hasta que el cliente contesta.
+    const sellerFunnel = db.prepare(`SELECT l.assigned_to AS id, COALESCE(u.name, 'Sin asignar') AS key, ${funnelCols},
+      AVG(CASE WHEN l.contacted_at IS NOT NULL
+        THEN (julianday(l.contacted_at) - julianday(COALESCE(l.assigned_at, l.created_at))) * 24 END) AS horas_contacto
+      FROM leads l LEFT JOIN users u ON u.id = l.assigned_to ${sql} GROUP BY l.assigned_to
+      ORDER BY l.assigned_to IS NULL, cerrados DESC, recibidos DESC`).all(...params);
+
     res.json({
+      funnel, campaignFunnel, sellerFunnel,
       byDay,
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", 'LEFT JOIN catalog_items c ON c.id = l.channel_id'),

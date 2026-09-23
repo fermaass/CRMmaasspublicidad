@@ -2,6 +2,14 @@
 
 CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
 
+## Embudo de conversión y eficiencia por vendedor
+
+Cada lead guarda la fecha en que pasó por cada paso: **recibido → contestó → perfilado (cumple perfil) → cotizado → cerrado**. Esos pasos no se borran aunque el lead se decline, así que un lead que cotizó y luego se perdió sigue contando como cotizado. El embudo es acumulado: llegar a un paso cuenta también los anteriores (si se cotizó, el cliente contestó).
+
+- En la ficha del lead se marca **"El cliente ya contestó"**.
+- El **Resumen** muestra el embudo, la conversión por campaña y la eficiencia por vendedor (cuántos recibe, cuántos le contestan, cuántos perfila, cotiza y cierra, y el tiempo promedio desde la asignación hasta que el cliente contesta).
+- Todo se puede filtrar por periodo (este mes, mes pasado, 30/90 días, este año) y por campaña.
+
 ## Listas: productos y canales de percepción
 
 En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.

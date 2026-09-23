@@ -87,7 +87,7 @@ async function start() {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
-  [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
+  [state.users, state.catalog, state.campaigns] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/campaigns')]);
   fillFilters();
   setView(state.view);
 }
@@ -104,6 +104,7 @@ function fillFilters() {
   opts('#f-assigned', state.users.filter((u) => u.active).map((u) => [u.id, u.name]));
   opts('#f-product', state.catalog.producto.map((i) => [i.id, i.name]));
   opts('#f-channel', state.catalog.canal.map((i) => [i.id, i.name]));
+  opts('#f-campaign', (state.campaigns || []).map((c) => [c, c]));
 }
 
 // Opciones de un <select> de la lista; incluye el valor actual aunque ya no esté activo.
@@ -117,14 +118,24 @@ function filterQuery() {
   const p = new URLSearchParams();
   const add = (k, sel) => { const v = $(sel).value.trim(); if (v) p.set(k, v); };
   add('q', '#f-q'); add('profile', '#f-profile'); add('source', '#f-source'); add('assigned', '#f-assigned');
-  add('product', '#f-product'); add('channel', '#f-channel');
+  add('product', '#f-product'); add('channel', '#f-channel'); add('campaign', '#f-campaign');
+  // Periodo: filtra por fecha en que se recibió el lead.
+  const period = $('#f-period').value;
+  if (period) {
+    const d = new Date();
+    const first = (y, m) => new Date(y, m, 1).toISOString();
+    if (period === 'mes') p.set('from', first(d.getFullYear(), d.getMonth()));
+    if (period === 'mes_pasado') { p.set('from', first(d.getFullYear(), d.getMonth() - 1)); p.set('to', first(d.getFullYear(), d.getMonth())); }
+    if (period === '30' || period === '90') p.set('from', new Date(Date.now() - Number(period) * 86400e3).toISOString());
+    if (period === 'anio') p.set('from', first(d.getFullYear(), 0));
+  }
   if (state.view !== 'board') add('status', '#f-status');
   return p.toString();
 }
 
 // ---------- Vistas ----------
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
+['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-campaign', '#f-period', '#f-assigned', '#f-status'].forEach((s) => $(s).addEventListener('change', refresh));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
 $('#export').addEventListener('click', () => {
@@ -231,38 +242,104 @@ async function renderStats() {
   const s = await api(`/api/stats?${filterQuery()}`);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-  const sold = n(s.byStatus, 'vendido');
-  const fit = n(s.byProfile, 'cumple');
-  const quoting = n(s.byStatus, 'cotizando');
   const stages = state.meta.statuses.map((k) => ({ key: k, n: n(s.byStatus, k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
   const profiles = state.meta.profiles.map((k) => ({ key: k, n: n(s.byProfile, k), label: label(k), color: `var(--${k})` }));
   const sources = state.meta.sources.map((k) => ({ key: k, n: n(s.bySource, k), label: label(k), color: `var(--${k})` }));
 
-  const kpi = (title, value, sub, color) => `<div class="kpi-tile" style="--c:${color}">
+  const kpi = (title, value, sub, color, unit = '') => `<div class="kpi-tile" style="--c:${color}">
     <div class="label"><span class="dot"></span>${esc(title)}</div>
-    <div class="value" data-count="${value}">0</div><div class="sub">${esc(sub)}</div></div>`;
+    <div class="value"><span data-count="${value}">0</span>${unit}</div><div class="sub">${esc(sub)}</div></div>`;
 
+  const f = s.funnel;
   $('#view-stats').innerHTML = `<div class="dash">
     <div class="kpis">
-      ${kpi('Leads', s.total, 'con los filtros actuales', 'var(--accent)')}
-      ${kpi('Cumplen perfil', fit, `${pct(fit, s.total)}% del total`, 'var(--nuevo_perfil)')}
-      ${kpi('Cotizando', quoting, `${pct(quoting, s.total)}% del total`, 'var(--cotizando)')}
-      ${kpi('Vendidos', sold, `${pct(sold, fit)}% de los que cumplen perfil`, 'var(--vendido)')}
+      ${kpi('Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)')}
+      ${kpi('Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)')}
+      ${kpi('Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
+      ${kpi('Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
+      ${kpi('Conversión', pct(f.cerrados, f.recibidos), 'de cada 100 recibidos se cierran', 'var(--accent)', '%')}
     </div>
-    <div class="card chart-card"><h3>Embudo <small>cómo se reparten los leads por etapa</small></h3>
-      ${battery(stages, s.total, true)}${legend(stages, s.total)}</div>
+    <div class="card chart-card span-8"><h3>Embudo de conversión <small>cuántos llegan a cada paso</small></h3>${funnelChart(f)}</div>
+    <div class="card chart-card span-4"><h3>Dónde están hoy <small>etapa actual</small></h3>
+      ${battery(stages, s.total, true)}${legend(stages, s.total)}
+      <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
+    <div class="card chart-card"><h3>Eficiencia por vendedor <small>de lo que recibe cada uno, cuánto avanza</small></h3>${sellerTable(s.sellerFunnel)}</div>
+    <div class="card chart-card"><h3>Conversión por campaña <small>de dónde salen los cierres</small></h3>${campaignTable(s.campaignFunnel)}</div>
     <div class="card chart-card span-8"><h3>Leads recibidos <small>últimos 30 días</small></h3>${areaChart(s.byDay)}</div>
     <div class="card chart-card span-4"><h3>Por origen</h3>${donut(sources, s.total)}</div>
     <div class="card chart-card span-6"><h3>Por producto <small>etapa de cada lead</small></h3>${stageRows(s.productStages)}</div>
     <div class="card chart-card span-6"><h3>Por vendedor <small>etapa de cada lead</small></h3>${stageRows(s.sellerStages)}</div>
     <div class="card chart-card span-6"><h3>¿Cómo se enteraron? <small>canal de percepción</small></h3>${categoryBars(s.byChannel)}</div>
     <div class="card chart-card span-6"><h3>Perfil</h3>${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
-    <div class="card chart-card"><h3>Por campaña</h3><div class="table-wrap">
-      <table><thead><tr><th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Vendidos</th></tr></thead><tbody>
-      ${s.byCampaign.map((r) => `<tr><td>${esc(r.key)}</td><td class="num">${r.n}</td><td class="num">${r.cumple}</td><td class="num">${r.vendidos}</td></tr>`).join('')}
-      </tbody></table></div></div>
   </div>`;
   animateIn($('#view-stats'));
+}
+
+const FUNNEL = [
+  ['recibidos', 'Recibidos'], ['contactados', 'Contestaron'], ['perfilados', 'Perfilados'], ['cotizados', 'Cotizados'], ['cerrados', 'Cerrados'],
+];
+const pctOf = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+
+// Embudo: barras centradas que se angostan; a la derecha el total y entre pasos cuántos avanzan.
+function funnelChart(f) {
+  const top = f.recibidos || 1;
+  return `<div class="funnel">${FUNNEL.map(([k, name], i) => {
+    const prev = i ? f[FUNNEL[i - 1][0]] : null;
+    const step = i ? `<div class="f-step"><span>↓ ${pctOf(f[k], prev)}% avanza</span></div>` : '';
+    const w = Math.max((f[k] / top) * 100, f[k] ? 3 : 0);
+    return `${step}<div class="f-row">
+      <span class="f-name">${name}</span>
+      <div class="f-track"><div class="f-bar ${k === 'cotizados' ? 'dark-text' : ''}" style="--w:${w}%; --c:var(--f-${k})"
+        data-tip="${esc(`${name}: ${f[k]}
+${pctOf(f[k], f.recibidos)}% de los recibidos${i ? `
+${pctOf(f[k], prev)}% del paso anterior` : ''}`)}">
+        <b data-count="${f[k]}">0</b></div></div>
+      <span class="f-pct">${pctOf(f[k], f.recibidos)}%</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// Celda con número, porcentaje sobre la base y una barrita.
+function rateCell(value, base, key) {
+  const p = pctOf(value, base);
+  return `<td class="rate"><div><b class="num">${value}</b> <span class="muted num">${base ? `${p}%` : ''}</span></div>
+    <div class="mini"><i style="--w:${p}%; --c:var(--f-${key})"></i></div></td>`;
+}
+
+function hours(h) {
+  if (h == null) return '—';
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} min`;
+  if (h < 48) return `${Math.round(h)} h`;
+  return `${Math.round(h / 24)} días`;
+}
+
+function sellerTable(rows) {
+  if (!rows.length) return '<p class="muted">Sin datos</p>';
+  const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
+  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Tiempo hasta que contestan</th>
+  </tr></thead><tbody>${rows.map((r) => {
+    const conv = pctOf(r.cerrados, r.recibidos);
+    return `<tr class="${r.id ? '' : 'unassigned'}">
+      <td>${r.id ? `<span class="avatar" aria-hidden="true">${esc(initials(r.key))}</span>` : ''}<strong>${esc(r.key)}</strong></td>
+      <td class="num"><b>${r.recibidos}</b></td>
+      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
+      ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      <td><span class="conv ${r.id && conv === best && best > 0 ? 'top' : ''}">${conv}%</span></td>
+      <td class="num">${hours(r.horas_contacto)}</td></tr>`;
+  }).join('')}</tbody></table></div>
+  <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. "Tiempo hasta que contestan" va de la asignación a que el cliente respondió.</p>`;
+}
+
+function campaignTable(rows) {
+  if (!rows.length) return '<p class="muted">Sin datos</p>';
+  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+    <th>Campaña</th><th>Recibidos</th><th>Contestaron</th><th>Perfilados</th><th>Cotizados</th><th>Cerrados</th><th>Conversión</th>
+  </tr></thead><tbody>${rows.map((r) => `<tr>
+      <td><strong>${esc(r.key)}</strong></td><td class="num"><b>${r.recibidos}</b></td>
+      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
+      ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      <td><span class="conv">${pctOf(r.cerrados, r.recibidos)}%</span></td></tr>`).join('')}</tbody></table></div>`;
 }
 
 // Barra tipo "batería": segmentos proporcionales con 2px de separación.
@@ -417,6 +494,23 @@ function closeDrawer() { $('#drawer').classList.add('hidden'); }
 $('#drawer').addEventListener('click', (e) => { if (e.target.dataset.close !== undefined) closeDrawer(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
+// Pasos del embudo en la ficha del lead, con la fecha en que se alcanzó cada uno.
+function milestones(l) {
+  // Igual que el embudo: llegar a un paso cuenta los anteriores; la fecha es la propia de cada paso si se registró.
+  const reached = [true, !!(l.contacted_at || l.profiled_at || l.quoted_at || l.won_at),
+    !!(l.profiled_at || l.quoted_at || l.won_at), !!(l.quoted_at || l.won_at), !!l.won_at];
+  const dates = [l.created_at, l.contacted_at, l.profiled_at, l.quoted_at, l.won_at];
+  const steps = [['recibidos', 'Recibido'], ['contactados', 'Contestó'], ['perfilados', 'Perfilado'], ['cotizados', 'Cotizado'], ['cerrados', 'Cerrado']]
+    .map(([k, name], i) => [k, name, reached[i] && (dates[i] || true)]);
+  const canMark = l.can_edit && !l.quoted_at && !l.won_at;
+  return `<div class="tracker">${steps.map(([k, name, at]) => `<div class="t-step ${at ? 'done' : ''}" style="--c:var(--f-${k})">
+      <span class="t-dot">${at ? '✓' : ''}</span><span class="t-name">${name}</span>
+      <span class="t-date">${at && typeof at === 'string' ? new Date(at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : ''}</span></div>`).join('')}
+    </div>
+    ${canMark ? `<button type="button" class="${l.contacted_at ? 'ghost small' : 'contact-btn'}" id="contacted">
+      ${l.contacted_at ? 'Desmarcar "contestó"' : '✓ El cliente ya contestó'}</button>` : ''}`;
+}
+
 async function openLead(id) {
   const l = await api(`/api/leads/${id}`);
   const ro = l.can_edit ? '' : 'disabled';
@@ -428,6 +522,7 @@ async function openLead(id) {
     <h2>${esc(l.name || l.phone || l.email)}</h2>
     <p class="muted">Recibido ${fmtDate(l.created_at)} por <span class="tag ${l.source}">${esc(label(l.source))}</span>
       ${waLink ? `· <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
+    ${milestones(l)}
     ${l.message ? `<p class="card">${esc(l.message)}</p>` : ''}
 
     <form id="lead-form">
@@ -469,6 +564,13 @@ async function openLead(id) {
       <small>${e.user_name ? esc(e.user_name) + ' · ' : ''}${fmtDate(e.created_at)}</small></li>`).join('')}</ul>
   `);
 
+  $('#contacted')?.addEventListener('click', async () => {
+    try {
+      await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { contacted: !l.contacted_at } });
+      if (!l.contacted_at) toast('Marcado: el cliente contestó', 'ok');
+      openLead(l.id); refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  });
   const form = $('#lead-form');
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');

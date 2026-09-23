@@ -15,6 +15,7 @@ const LABELS = {
 };
 
 const CATALOG_KINDS = ['canal', 'producto'];
+const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
 
@@ -89,6 +90,18 @@ function openDb(dbPath) {
   const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
+  // Hitos del embudo: la fecha en que el lead pasó por cada paso. No se borran aunque el lead retroceda o se decline.
+  if (!leadCols.includes('won_at')) {
+    for (const col of MILESTONES) db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
+    // Datos anteriores: se reconstruye lo que se sabe por la etapa y el perfil actuales.
+    db.exec(`
+      UPDATE leads SET assigned_at = created_at WHERE assigned_to IS NOT NULL;
+      UPDATE leads SET profiled_at = updated_at WHERE profile = 'cumple';
+      UPDATE leads SET quoted_at = updated_at, contacted_at = updated_at WHERE status IN ('cotizando', 'vendido');
+      UPDATE leads SET won_at = updated_at WHERE status = 'vendido';
+      UPDATE leads SET declined_at = updated_at WHERE status = 'declinado';
+    `);
+  }
 
   if (!db.prepare("SELECT 1 FROM catalog_items WHERE kind = 'canal'").get()) {
     const add = db.prepare("INSERT INTO catalog_items (kind, name) VALUES ('canal', ?)");
