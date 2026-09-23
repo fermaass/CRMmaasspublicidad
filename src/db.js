@@ -222,7 +222,16 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
+// Mensajes de WhatsApp según lo que toque con el lead. {nombre}, {vendedor} y {producto} se reemplazan al enviar.
+const WA_TEMPLATES = {
+  cadencia: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Vi que nos escribiste por {producto}. ¿Te puedo llamar o prefieres que te comparta opciones por aquí?',
+  seguimiento: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Para prepararte una propuesta de {producto}, ¿me confirmas zona, fechas y presupuesto aproximado?',
+  cotizacion: 'Hola {nombre}, ¿pudiste revisar la cotización de {producto} que te enviamos? Con gusto resolvemos cualquier duda.',
+  recontacto: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
+};
+
 module.exports = {
+  WA_TEMPLATES,
   openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
   MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };

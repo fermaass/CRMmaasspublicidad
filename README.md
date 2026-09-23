@@ -16,6 +16,14 @@ Los vendedores no toman leads: los asigna quien administra los leads. Ese es un 
 
 Si un vendedor captura un lead que le escribió directo, se queda con él. En la ficha, quien administra puede cambiar el vendedor en cualquier momento. En **Configuración → Reparto de leads** se puede encender la asignación automática: cada lead que llegue sin vendedor se asigna solo al de menor carga. De fábrica está apagada.
 
+Si un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan **sin asignar** (con una nota en su historial) para repartirlos; antes de hacerlo, la app avisa cuántos son. La pestaña Asignación muestra cuántos leads esperan vendedor y se pone en rojo si alguno lleva más de 2 horas esperando.
+
+## Botón de WhatsApp
+
+En la ficha y en Mi día hay un botón que abre WhatsApp (en el celular o en WhatsApp Web) con el chat del cliente y un mensaje ya escrito según lo que toque: primer contacto, seguimiento, seguimiento de la cotización o volver a contactar. Quien lo envía puede cambiarlo antes. Los mensajes se editan en **Configuración → Mensajes de WhatsApp** con `{nombre}` (primer nombre del cliente), `{vendedor}` (quien envía) y `{producto}`.
+
+El número se arregla solo: a 10 dígitos se le pone la lada de México (52) y a `+52 1 …` se le quita el 1. Usa las ligas `wa.me`, sin API ni costo, así que el mensaje no se envía solo ni la app se entera: después de enviarlo se registra el toque (ya queda seleccionado WhatsApp como medio).
+
 ## Embudo de conversión y eficiencia por vendedor
 
 Cada lead guarda la fecha en que pasó por cada paso: **recibido → contestó → perfilado (cumple perfil) → cotizado → cerrado**. Esos pasos no se borran aunque el lead se decline, así que un lead que cotizó y luego se perdió sigue contando como cotizado. El embudo es acumulado: llegar a un paso cuenta también los anteriores (si se cotizó, el cliente contestó).

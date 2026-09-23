@@ -149,4 +149,15 @@ function resolveStatusProfile(current, changes) {
   return { status, profile };
 }
 
-module.exports = { ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };
+// Cuando un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan sin asignar para repartirlos.
+function releaseLeads(db, userId, byUserId, name) {
+  const ids = db.prepare(`SELECT id FROM leads WHERE assigned_to = ? AND status IN ${ACTIVE}`).all(userId);
+  const ts = now();
+  for (const { id } of ids) {
+    db.prepare('UPDATE leads SET assigned_to = NULL, assigned_at = NULL, updated_at = ? WHERE id = ?').run(ts, id);
+    addEvent(db, id, byUserId, 'asignacion', `Quedó sin vendedor: ${name} ya no está activo`);
+  }
+  return ids.length;
+}
+
+module.exports = { releaseLeads, ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };

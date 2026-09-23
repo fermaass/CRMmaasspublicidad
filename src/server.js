@@ -2,10 +2,10 @@ const path = require('node:path');
 const express = require('express');
 const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
-  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP,
+  MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, NO_ANSWER, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
 } = require('./db');
 const auth = require('./auth');
-const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned } = require('./leads');
+const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
 
 const EDITORS = ['gerente', 'marketing'];
@@ -98,12 +98,26 @@ function createApp({ db, config }) {
       form_url: `${base}/webhooks/form`,
       form_api_key: getSetting(db, 'form_api_key'),
       auto_assign: getSetting(db, 'auto_assign') === '1',
+      wa_templates: waTemplates(),
     });
   });
+
+  // Plantillas de WhatsApp: todos las usan; gerente y marketing las editan en Configuración.
+  function waTemplates() {
+    let saved = {};
+    try { saved = JSON.parse(getSetting(db, 'wa_templates') || '{}'); } catch { /* se usan las de fábrica */ }
+    return Object.fromEntries(Object.keys(WA_TEMPLATES).map((k) => [k, typeof saved[k] === 'string' && saved[k].trim() ? saved[k] : WA_TEMPLATES[k]]));
+  }
+  app.get('/api/wa-templates', auth.requireUser, (req, res) => res.json(waTemplates()));
 
   app.patch('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const b = req.body || {};
     if (b.auto_assign !== undefined) setSetting(db, 'auto_assign', b.auto_assign ? '1' : '0');
+    if (b.wa_templates && typeof b.wa_templates === 'object') {
+      const clean = Object.fromEntries(Object.keys(WA_TEMPLATES).filter((k) => typeof b.wa_templates[k] === 'string')
+        .map((k) => [k, b.wa_templates[k].trim().slice(0, 1000)]));
+      setSetting(db, 'wa_templates', JSON.stringify({ ...waTemplates(), ...clean }));
+    }
     if (b.regenerate_form_key) setSetting(db, 'form_api_key', require('node:crypto').randomBytes(18).toString('base64url'));
     res.json({ ok: true });
   });
@@ -195,7 +209,9 @@ function createApp({ db, config }) {
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
-    res.json(db.prepare('SELECT id, name, email, role, active, can_assign, created_at FROM users ORDER BY active DESC, name').all());
+    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at,
+      (SELECT COUNT(*) FROM leads l WHERE l.assigned_to = users.id AND l.status IN ('nuevo', 'nuevo_perfil', 'cotizando')) AS en_curso
+      FROM users ORDER BY active DESC, name`).all());
   });
 
   app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
@@ -229,7 +245,10 @@ function createApp({ db, config }) {
       password ? auth.hashPassword(String(password)) : user.password_hash, id);
     if (assigner !== undefined) db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(assigner ? 1 : 0, id);
     if (active === false || password) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
-    res.json({ ok: true });
+    // Si deja de ser vendedor activo, sus leads en curso vuelven a "Sin asignar" para no perderse.
+    const leftSales = user.role === 'vendedor' && user.active && (active === false || (role && role !== 'vendedor'));
+    const released = leftSales ? releaseLeads(db, id, req.user.id, user.name) : 0;
+    res.json({ ok: true, released });
   });
 
   // ---------- Leads ----------
@@ -353,8 +372,8 @@ function createApp({ db, config }) {
 
   // Carga por vendedor y a quién le toca el siguiente lead.
   app.get('/api/workload', requireAssigner, (req, res) => {
-    const unassigned = db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n;
-    res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned });
+    const u = db.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get();
+    res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned: u.n, oldest_unassigned_at: u.oldest });
   });
   app.post('/api/leads/balance', requireAssigner, (req, res) => {
     res.json({ assigned: balanceUnassigned(db, req.user.id) });

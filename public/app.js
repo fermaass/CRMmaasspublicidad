@@ -1,4 +1,4 @@
-const state = { me: null, meta: null, users: [], catalog: { canal: [], producto: [], campana: [] }, leads: [], view: null, statsTab: null };
+const state = { waTemplates: {}, me: null, meta: null, users: [], catalog: { canal: [], producto: [], campana: [] }, leads: [], view: null, statsTab: null };
 const F = window.CRMFollowup;
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -138,7 +138,7 @@ async function start() {
   });
   document.querySelectorAll('[data-assigner]').forEach((el) => el.classList.toggle('hidden', !canAssign()));
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
-  [state.users, state.catalog] = await Promise.all([api('/api/users'), api('/api/catalog')]);
+  [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
   fillFilters();
   // El vendedor arranca en su lista de pendientes; el analista, en el Resumen.
   setView(state.view || (state.me.role === 'analista' ? 'stats' : 'today'));
@@ -243,8 +243,22 @@ function setView(view) {
   refresh();
 }
 
+// Aviso en la pestaña Asignación: cuántos leads esperan vendedor. En rojo si alguno lleva más de WAIT_HOURS.
+const WAIT_HOURS = 2;
+const waitingTooLong = (iso) => iso && Date.now() - new Date(iso).getTime() > WAIT_HOURS * 3600e3;
+async function updateAssignBadge() {
+  const btn = $('#nav [data-view=assign]');
+  if (!canAssign()) return;
+  try {
+    const w = await api('/api/workload');
+    btn.innerHTML = `Asignación${w.unassigned ? ` <span class="nav-badge ${waitingTooLong(w.oldest_unassigned_at) ? 'late' : ''}">${w.unassigned}</span>` : ''}`;
+    btn.title = w.unassigned ? `${w.unassigned} sin asignar${waitingTooLong(w.oldest_unassigned_at) ? `; alguno lleva más de ${WAIT_HOURS} h esperando` : ''}` : '';
+  } catch { /* el aviso no es crítico */ }
+}
+
 async function refresh() {
   if (!state.me) return;
+  updateAssignBadge();
   if (state.view === 'users') return renderUsers();
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
@@ -301,6 +315,18 @@ function nextAction(l) {
   return a ? { ...a, days: F.dayDiff(a.due) } : null;
 }
 const whenText = (days) => (days < 0 ? `${-days} ${days === -1 ? 'día' : 'días'} tarde` : days === 0 ? 'toca hoy' : days === 1 ? 'mañana' : `en ${days} días`);
+// Liga de WhatsApp con el mensaje de lo que toca (primer contacto, seguimiento, cotización o recontacto).
+// {vendedor} es quien da clic: el mensaje sale de su WhatsApp.
+function waHref(l) {
+  const a = nextAction(l);
+  const kind = a ? a.kind : l.status === 'declinado' || l.status === 'vendido' ? null : l.contacted_at ? 'seguimiento' : 'cadencia';
+  return F.waLink(l.phone, kind ? state.waTemplates[kind] : '', { nombre: l.name, vendedor: state.me.name, producto: l.product_name });
+}
+const WA_ICON = '<svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.8-1.2.2-.6.2-1.1.1-1.2l-.5-.3Z"/></svg>';
+const waButton = (l, small = false) => {
+  const href = waHref(l);
+  return href ? `<a class="wa-btn ${small ? 'small' : ''}" href="${esc(href)}" target="_blank" rel="noopener" data-wa>${WA_ICON}<span>WhatsApp</span></a>` : '';
+};
 const whenClass = (days) => (days < 0 ? 'late' : days === 0 ? 'today' : '');
 
 // Línea de acción de la tarjeta: lo siguiente que toca y cuándo.
@@ -351,11 +377,12 @@ function renderToday() {
         <span class="touch-badge ${whenClass(a.days)}">${esc(a.label)} · ${a.kind === 'recontacto' && a.days < 0 ? `desde el ${shortDate(a.due)}` : whenText(a.days)}</span>
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
-        ${l.phone ? `<a class="muted" href="https://wa.me/${esc(l.phone.replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(l.phone)}</a>` : ''}
+        ${l.phone ? `<span class="muted">${esc(l.phone)}</span>` : ''}
       </div>
       ${!canTouch(l) ? '' : a.kind === 'recontacto'
-        ? '<div class="today-actions"><button type="button" class="small" data-reactivate>Reactivar lead</button></div>'
+        ? `<div class="today-actions">${waButton(l, true)}<button type="button" class="small" data-reactivate>Reactivar lead</button></div>`
         : `<div class="today-actions">
+          ${waButton(l, true)}
           <select class="small-select" data-channel aria-label="Medio">${state.meta.touches.channels.map((c) => `<option value="${c}">${esc(label(c))}</option>`).join('')}</select>
           ${outcomes.map((o) => `<button type="button" class="outcome small ${o}" data-outcome="${o}">${esc(state.meta.touches.outcomes[o])}</button>`).join('')}
         </div>`}
@@ -387,6 +414,8 @@ function renderToday() {
     const l = state.leads.find((x) => String(x.id) === r.dataset.id);
     r.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', () => registerTouch(l, $('[data-channel]', r).value, b.dataset.outcome)));
     $('[data-reactivate]', r)?.addEventListener('click', () => reactivate(l));
+    // Al abrir WhatsApp, el toque que se registre después queda como WhatsApp.
+    $('[data-wa]', r)?.addEventListener('click', () => { const sel = $('[data-channel]', r); if (sel) sel.value = 'whatsapp'; });
   });
 }
 
@@ -980,14 +1009,13 @@ async function openLead(id) {
   const [l, touches] = await Promise.all([api(`/api/leads/${id}`), api(`/api/leads/${id}/touches`)]);
   const ro = l.can_edit ? '' : 'disabled';
   const sellers = state.users.filter((u) => (u.active && u.role === 'vendedor') || u.id === l.assigned_to);
-  const waLink = l.phone ? `https://wa.me/${l.phone.replace(/\D/g, '')}` : null;
 
   const adLine = [l.utm_content && `Anuncio: ${l.utm_content}`, l.utm_source && [l.utm_source, l.utm_medium].filter(Boolean).join(' / ')].filter(Boolean).join(' · ');
   openDrawer(`
     <button class="ghost" data-close style="float:right">Cerrar</button>
     <h2>${esc(l.name || l.phone || l.email)}</h2>
-    <p class="contact-line">${[l.phone && esc(l.phone), l.email && esc(l.email)].filter(Boolean).join(' · ')}
-      ${waLink ? ` · <a href="${waLink}" target="_blank" rel="noopener">Abrir WhatsApp</a>` : ''}</p>
+    <div class="contact-line">${[l.phone && esc(l.phone), l.email && esc(l.email)].filter(Boolean).join(' · ')}
+      ${waButton(l)}</div>
     <div class="tags">
       <span class="tag status-tag" style="${colorVar(l.status)}">${esc(label(l.status))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
@@ -1058,6 +1086,9 @@ async function openLead(id) {
     if (ok) openLead(l.id);
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
+  $('#drawer-body [data-wa]')?.addEventListener('click', () => {
+    const r = $('#drawer-body input[name=touch-channel][value=whatsapp]'); if (r) r.checked = true;
+  });
   const form = $('#lead-form');
   // El vendedor se cambia al momento, aparte de "Guardar": quien asigna no siempre edita el lead.
   form.assigned_to.addEventListener('change', async () => {
@@ -1146,6 +1177,7 @@ async function openNewLead() {
 async function renderAssign() {
   const ACTIVE = ['nuevo', 'nuevo_perfil', 'cotizando'];
   const [w, all] = await Promise.all([api('/api/workload'), api('/api/leads?assigned=none')]);
+  const late = all.filter((l) => ACTIVE.includes(l.status) && waitingTooLong(l.created_at)).length;
   const open = all.filter((l) => ACTIVE.includes(l.status)).sort((a, b) => a.created_at.localeCompare(b.created_at));
   const max = Math.max(1, ...w.sellers.map((u) => u.activos));
   const sug = w.sellers.find((u) => u.id === w.suggested);
@@ -1167,7 +1199,7 @@ async function renderAssign() {
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
         <span class="muted">${esc(label(l.source))}${l.campaign ? ` · ${esc(l.campaign)}` : ''}${l.product_name ? ` · ${esc(l.product_name)}` : ''}</span>
-        <span class="muted">${timeAgo(l.created_at)}</span>
+        <span class="${waitingTooLong(l.created_at) ? 'touch-badge late' : 'muted'}">${timeAgo(l.created_at) === 'ahora' ? 'recién llegó' : `esperando ${timeAgo(l.created_at).replace(/^hace /, '')}`}</span>
       </div>
       ${w.sellers.length ? `<div class="today-actions"><select class="small-select" data-seller aria-label="Vendedor">${options(w.suggested)}</select>
         <button type="button" class="small" data-assign>Asignar</button></div>` : ''}
@@ -1179,7 +1211,7 @@ async function renderAssign() {
       ${sug ? `<p class="muted small-note">Sugerencia: el siguiente lead a <strong>${esc(sug.name)}</strong>, que tiene menos leads en curso${w.sellers.filter((u) => u.activos === sug.activos).length > 1 ? ' (y recibió menos esta semana)' : ''}. Tú decides; la sugerencia solo viene preseleccionada.</p>` : ''}
     </section>
     <section class="card">
-      <div class="assign-head">${cardTitle('inbox', 'var(--accent)', `Sin asignar (${open.length})`, 'del más viejo al más nuevo')}
+      <div class="assign-head">${cardTitle('inbox', 'var(--accent)', `Sin asignar (${open.length})`, late ? `${late} ${late === 1 ? 'lleva' : 'llevan'} más de ${WAIT_HOURS} h esperando: entre más rápido el primer contacto, más cierres` : 'del más viejo al más nuevo')}
         ${open.length > 1 && w.sellers.length ? '<button type="button" class="ghost" id="balance">Repartir todos parejo</button>' : ''}</div>
       ${rows || `<div class="empty-today">${icon('check', 28)}<h3>Todo asignado</h3><p class="muted">Cada lead en curso ya tiene quién le dé seguimiento.</p></div>`}
     </section>
@@ -1227,7 +1259,7 @@ async function renderUsers() {
     </div>
     <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Administra leads</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
-      <td>${esc(u.name)}</td><td>${esc(u.email)}</td>
+      <td>${esc(u.name)}${u.role === 'vendedor' && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
       <td><select data-f="role">${roleOpts(u.role)}</select></td>
       <td>${u.role === 'gerente' ? '<span class="muted">siempre</span>' : `<input type="checkbox" data-f="can_assign" aria-label="Administra leads" ${u.can_assign ? 'checked' : ''}>`}</td>
       <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''}></td>
@@ -1246,11 +1278,28 @@ async function renderUsers() {
   });
   $('#view-users').querySelectorAll('tbody tr').forEach((tr) => {
     const patch = async (body) => {
-      try { await api(`/api/users/${tr.dataset.id}`, { method: 'PATCH', body }); } catch (err) { toast(err.message, 'error'); }
+      let r = null;
+      try { r = await api(`/api/users/${tr.dataset.id}`, { method: 'PATCH', body }); } catch (err) { toast(err.message, 'error'); }
       renderUsers();
+      return r;
     };
-    $('[data-f=role]', tr).addEventListener('change', (e) => patch({ role: e.target.value }));
-    $('[data-f=active]', tr).addEventListener('change', (e) => patch({ active: e.target.checked }));
+    const u = state.users.find((x) => String(x.id) === tr.dataset.id);
+    // Si deja de ser vendedor activo y tiene leads en curso, se avisa que quedarán sin asignar.
+    const confirmRelease = async (el, restore) => {
+      if (u.role !== 'vendedor' || !u.active || !u.en_curso) return true;
+      const ok = await ask(`${u.name} tiene ${u.en_curso} ${u.en_curso === 1 ? 'lead en curso' : 'leads en curso'}. Quedarán sin asignar para repartirlos en Asignación. ¿Continuar?`, { okLabel: 'Continuar' });
+      if (!ok) restore(el);
+      return ok;
+    };
+    const released = (r) => { if (r?.released) toast(`${r.released} ${r.released === 1 ? 'lead quedó' : 'leads quedaron'} sin asignar; repártelos en Asignación`, 'ok'); };
+    $('[data-f=role]', tr).addEventListener('change', async (e) => {
+      if (e.target.value !== 'vendedor' && !await confirmRelease(e.target, (el) => { el.value = u.role; })) return;
+      released(await patch({ role: e.target.value }));
+    });
+    $('[data-f=active]', tr).addEventListener('change', async (e) => {
+      if (!e.target.checked && !await confirmRelease(e.target, (el) => { el.checked = true; })) return;
+      released(await patch({ active: e.target.checked }));
+    });
     $('[data-f=can_assign]', tr)?.addEventListener('change', (e) => patch({ can_assign: e.target.checked }));
     $('[data-f=password]', tr).addEventListener('click', async () => {
       const password = await ask('Nueva contraseña (mínimo 8 caracteres):', { input: true, okLabel: 'Cambiar' });
@@ -1324,6 +1373,17 @@ async function renderSettings() {
         Encendido, cada lead que llega sin vendedor se asigna solo al que tiene menos leads en curso.</span></span></label>
     </div>
     ${campaignEditor()}
+    <div class="card">
+      ${cardTitle('chat', 'var(--whatsapp)', 'Mensajes de WhatsApp')}
+      <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
+        Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code> y <code>{producto}</code>.</p>
+      <form id="wa-form" class="wa-form">
+        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)']]
+          .map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000">${esc(s.wa_templates[k])}</textarea></label>`).join('')}
+        <p class="muted small-note">Si dejas uno vacío, vuelve al mensaje de fábrica.</p>
+        <button type="submit">Guardar mensajes</button>
+      </form>
+    </div>
     <div class="lists">
       ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
       ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
@@ -1383,6 +1443,15 @@ async function renderSettings() {
       if (f.elements.budget.value) await api(`/api/catalog/${id}/budgets`, { method: 'PUT', body: { month: monthKey(0), amount: f.elements.budget.value } });
       await reloadCatalog();
       toast(`Campaña "${name}" agregada`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('#wa-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/settings', { method: 'PATCH', body: { wa_templates: Object.fromEntries(new FormData(e.target)) } });
+      state.waTemplates = await api('/api/wa-templates');
+      toast('Mensajes guardados', 'ok');
+      renderSettings();
     } catch (err) { toast(err.message, 'error'); }
   });
   $('#auto-assign').addEventListener('change', async (e) => {

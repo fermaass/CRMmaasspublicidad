@@ -46,7 +46,30 @@
     return Math.round((a - b) / DAY);
   }
 
-  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, nextAction, dayDiff };
+  // Número para wa.me: solo dígitos y con lada de país. 10 dígitos se toman como México (52);
+  // el "1" viejo de celulares mexicanos (52 1 ...) se quita. Devuelve null si no parece un teléfono.
+  function waNumber(phone) {
+    let d = String(phone || '').replace(/\D/g, '');
+    if (d.startsWith('00')) d = d.slice(2);
+    if (d.length === 10) d = `52${d}`;
+    if (d.length === 13 && d.startsWith('521')) d = `52${d.slice(3)}`;
+    return d.length >= 11 && d.length <= 15 ? d : null;
+  }
+
+  // Liga para abrir WhatsApp con el mensaje ya escrito. vars: { nombre, vendedor, producto }.
+  function waLink(phone, template, vars = {}) {
+    const n = waNumber(phone);
+    if (!n) return null;
+    const first = String(vars.nombre || '').trim().split(/\s+/)[0] || '';
+    const text = String(template || '')
+      .replace(/\{nombre\}/g, first)
+      .replace(/\{vendedor\}/g, vars.vendedor || '')
+      .replace(/\{producto\}/g, vars.producto || 'nuestros espacios')
+      .replace(/ {2,}/g, ' ').replace(/ ,/g, ',').trim();
+    return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+  }
+
+  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);
