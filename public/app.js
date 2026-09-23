@@ -17,6 +17,33 @@ function campaignOptions(current, emptyLabel) {
   return `<option value="">${esc(emptyLabel)}</option>`
     + items.map((c) => `<option value="${esc(c.name)}" ${c.name === current ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
 }
+// Íconos de línea (estilo Lucide), en el color del texto que los rodea.
+const ICONS = {
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  check: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  trend: '<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
+  money: '<path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  funnel: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
+  pie: '<path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5"/>',
+  radio: '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>',
+};
+const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+// Título de tarjeta con su cuadrito de color, como en el panel de referencia.
+const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
+  <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
+const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista' };
+const VIEW_TITLES = { board: 'Tablero', list: 'Lista de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 async function api(path, opts = {}) {
@@ -89,7 +116,7 @@ $('#logout').addEventListener('click', async () => { await api('/api/logout', { 
 async function start() {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  $('#me').textContent = `${state.me.name} · ${state.me.role}`;
+  $('#me').innerHTML = `<span class="avatar big" aria-hidden="true">${esc(initials(state.me.name))}</span>${esc(state.me.name)}`;
   document.querySelectorAll('[data-role]').forEach((el) => {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
@@ -153,6 +180,9 @@ $('#new-lead').addEventListener('click', openNewLead);
 
 function setView(view) {
   state.view = view;
+  $('#page-title').textContent = VIEW_TITLES[view] || '';
+  const today = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+  $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
   $('.toolbar').classList.toggle('hidden', ['users', 'settings'].includes(view));
@@ -259,36 +289,57 @@ async function renderStats() {
   const profiles = state.meta.profiles.map((k) => ({ key: k, n: n(s.byProfile, k), label: label(k), color: `var(--${k})` }));
   const sources = state.meta.sources.map((k) => ({ key: k, n: n(s.bySource, k), label: label(k), color: `var(--${k})` }));
 
-  const kpi = (title, value, sub, color, unit = '') => `<div class="kpi-tile" style="--c:${color}">
-    <div class="label"><span class="dot"></span>${esc(title)}</div>
-    <div class="value"><span data-count="${value}">0</span>${unit}</div><div class="sub">${esc(sub)}</div></div>`;
+  const kpi = (ico, title, value, sub, color, unit = '') => `<div class="kpi-tile" style="--c:${color}">
+    <span class="kpi-ico">${icon(ico, 24)}</span>
+    <div><div class="value"><span data-count="${value}">0</span>${unit}</div>
+    <div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
 
   const f = s.funnel;
   $('#view-stats').innerHTML = `<div class="dash">
+    ${insightBanner(s)}
     <div class="kpis">
-      ${kpi('Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)')}
-      ${kpi('Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)')}
-      ${kpi('Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
-      ${kpi('Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
-      ${kpi('Conversión', pct(f.cerrados, f.recibidos), 'de cada 100 recibidos se cierran', 'var(--accent)', '%')}
-      ${f.ingresos ? `<div class="kpi-tile" style="--c:var(--f-cerrados)"><div class="label"><span class="dot"></span>Ventas</div>
-        <div class="value">${money(f.ingresos)}</div><div class="sub">de ${f.cerrados} cierres</div></div>` : ''}
+      ${kpi('inbox', 'Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)')}
+      ${kpi('chat', 'Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)')}
+      ${kpi('file', 'Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
+      ${kpi('check', 'Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
+      ${kpi('trend', 'Conversión', pct(f.cerrados, f.recibidos), 'de los recibidos se cierra', 'var(--accent)', '%')}
+      ${f.ingresos ? `<div class="kpi-tile" style="--c:var(--f-cerrados)"><span class="kpi-ico">${icon('money', 24)}</span>
+        <div><div class="value money">${money(f.ingresos)}</div><div class="label">Ventas</div><div class="sub">de ${f.cerrados} cierres</div></div></div>` : ''}
     </div>
-    <div class="card chart-card span-8"><h3>Embudo de conversión <small>cuántos llegan a cada paso</small></h3>${funnelChart(f)}</div>
-    <div class="card chart-card span-4"><h3>Dónde están hoy <small>etapa actual</small></h3>
+    <div class="card chart-card span-8">${cardTitle('funnel', 'var(--accent)', 'Embudo de conversión', 'cuántos llegan a cada paso')}${funnelChart(f)}</div>
+    <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
       <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
-    <div class="card chart-card"><h3>Eficiencia por vendedor <small>de lo que recibe cada uno, cuánto avanza</small></h3>${sellerTable(s.sellerFunnel)}</div>
-    <div class="card chart-card"><h3>Conversión por campaña <small>de dónde salen los cierres</small></h3>${campaignTable(s.campaignFunnel)}</div>
-    <div class="card chart-card"><h3>Eficiencia de campañas <small>cuánto cuesta y cuánto regresa cada una</small></h3>${campaignEfficiency(s.campaignFunnel)}</div>
-    <div class="card chart-card span-8"><h3>Leads recibidos <small>últimos 30 días</small></h3>${areaChart(s.byDay)}</div>
-    <div class="card chart-card span-4"><h3>Por origen</h3>${donut(sources, s.total)}</div>
-    <div class="card chart-card span-6"><h3>Por producto <small>etapa de cada lead</small></h3>${stageRows(s.productStages)}</div>
-    <div class="card chart-card span-6"><h3>Por vendedor <small>etapa de cada lead</small></h3>${stageRows(s.sellerStages)}</div>
-    <div class="card chart-card span-6"><h3>¿Cómo se enteraron? <small>canal de percepción</small></h3>${categoryBars(s.byChannel)}</div>
-    <div class="card chart-card span-6"><h3>Perfil</h3>${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
+    <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
+    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Conversión por campaña', 'de dónde salen los cierres')}${campaignTable(s.campaignFunnel)}</div>
+    <div class="card chart-card">${cardTitle('money', 'var(--f-cerrados)', 'Eficiencia de campañas', 'cuánto cuesta y cuánto regresa cada una')}${campaignEfficiency(s.campaignFunnel)}</div>
+    <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
+    <div class="card chart-card span-4">${cardTitle('pie', 'var(--formulario)', 'Por origen')}${donut(sources, s.total)}</div>
+    <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
+    <div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>
+    <div class="card chart-card span-6">${cardTitle('radio', 'var(--whatsapp)', '¿Cómo se enteraron?', 'canal de percepción')}${categoryBars(s.byChannel)}</div>
+    <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Perfil')}${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
   </div>`;
   animateIn($('#view-stats'));
+}
+
+// Aviso con degradado: la lectura rápida del periodo (dónde se pierden los leads, qué campaña y quién cierran más).
+function insightBanner(s) {
+  const f = s.funnel;
+  if (!f.recibidos) {
+    return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>Todavía no hay leads con estos filtros.</p></div></div>`;
+  }
+  const steps = FUNNEL.slice(1).map(([k, name], i) => ({ from: FUNNEL[i][1], to: name, rate: pctOf(f[k], f[FUNNEL[i][0]]), base: f[FUNNEL[i][0]] }))
+    .filter((x) => x.base > 0);
+  const leak = steps.sort((a, b) => a.rate - b.rate)[0];
+  const campaigns = s.campaignFunnel.filter((c) => c.key !== 'Sin campaña' && c.cerrados > 0)
+    .sort((a, b) => pctOf(b.cerrados, b.recibidos) - pctOf(a.cerrados, a.recibidos) || b.cerrados - a.cerrados);
+  const seller = s.sellerFunnel.filter((r) => r.id && r.cerrados > 0).sort((a, b) => b.cerrados - a.cerrados)[0];
+  const parts = [`De <b>${f.recibidos}</b> leads se cerraron <b>${f.cerrados}</b> (${pctOf(f.cerrados, f.recibidos)}%).`];
+  if (leak) parts.push(`La mayor fuga está de <b>${esc(leak.from)}</b> a <b>${esc(leak.to)}</b>: solo avanza el ${leak.rate}%.`);
+  if (campaigns[0]) parts.push(`Campaña que mejor convierte: <b>${esc(campaigns[0].key)}</b> (${pctOf(campaigns[0].cerrados, campaigns[0].recibidos)}%).`);
+  if (seller) parts.push(`Más cierres: <b>${esc(seller.key)}</b> con ${seller.cerrados}.`);
+  return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>${parts.join(' ')}</p></div></div>`;
 }
 
 const FUNNEL = [
@@ -787,7 +838,7 @@ async function renderSettings() {
       ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
     </div>
     <div class="card">
-      <h3>Formulario de tu página web</h3>
+      ${cardTitle('file', 'var(--accent)', 'Formulario de tu página web')}
       <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
       <label>Dirección a donde se envía el formulario</label>${copyField(s.form_url)}
       <label>Clave del formulario</label>${copyField(s.form_api_key)}
@@ -854,7 +905,7 @@ async function renderSettings() {
 function campaignEditor() {
   const items = state.catalog.campana;
   return `<div class="card">
-    <h3>Campañas</h3>
+    ${cardTitle('megaphone', 'var(--llamada)', 'Campañas')}
     <p class="muted">Las que el vendedor puede elegir en cada lead. Con la inversión, el Resumen calcula cuánto cuesta cada lead, cada cotización y cada cierre.
       Si llega una campaña nueva desde un formulario o anuncio, se agrega sola aquí.</p>
     <form id="campaign-form" class="list-form">
@@ -877,7 +928,7 @@ function campaignEditor() {
 function listEditor(kind, title, help, placeholder) {
   const items = state.catalog[kind];
   return `<div class="card">
-    <h3>${esc(title)}</h3>
+    ${kind === 'producto' ? cardTitle('tag', 'var(--nuevo_perfil)', title) : cardTitle('radio', 'var(--whatsapp)', title)}
     <p class="muted">${esc(help)}</p>
     <form class="list-form" data-kind="${kind}">
       <input name="name" placeholder="${esc(placeholder)}" aria-label="Agregar a ${esc(title)}" maxlength="120">
