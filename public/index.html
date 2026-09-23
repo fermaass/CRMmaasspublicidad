@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CRM Maass Publicidad</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="login" class="login hidden">
+    <form id="login-form" class="card">
+      <h1>CRM Maass</h1>
+      <p class="muted">Leads de marketing y ventas</p>
+      <label>Email <input type="email" name="email" required autocomplete="username"></label>
+      <label>Contraseña <input type="password" name="password" required autocomplete="current-password"></label>
+      <p id="login-error" class="error"></p>
+      <button type="submit">Entrar</button>
+    </form>
+  </section>
+
+  <section id="app" class="hidden">
+    <header class="topbar">
+      <strong class="brand">CRM Maass</strong>
+      <nav id="nav">
+        <button data-view="board">Tablero</button>
+        <button data-view="list">Lista</button>
+        <button data-view="stats">Resumen</button>
+        <button data-view="users" data-role="gerente">Usuarios</button>
+      </nav>
+      <span class="spacer"></span>
+      <span id="me" class="muted"></span>
+      <button id="logout" class="ghost">Salir</button>
+    </header>
+
+    <div class="toolbar">
+      <input id="f-q" type="search" placeholder="Buscar nombre, teléfono, email, campaña">
+      <select id="f-profile"><option value="">Todo perfil</option></select>
+      <select id="f-source"><option value="">Todo origen</option></select>
+      <select id="f-assigned"><option value="">Todos los vendedores</option><option value="none">Sin asignar</option></select>
+      <select id="f-status" class="list-only"><option value="">Todo estado</option></select>
+      <span class="spacer"></span>
+      <button id="export" class="ghost" data-role="gerente,marketing,analista">Exportar CSV</button>
+      <button id="new-lead" data-role="gerente,marketing,vendedor">+ Lead</button>
+    </div>
+
+    <main>
+      <div id="view-board" class="board view"></div>
+      <div id="view-list" class="view"></div>
+      <div id="view-stats" class="view"></div>
+      <div id="view-users" class="view"></div>
+    </main>
+  </section>
+
+  <div id="drawer" class="drawer hidden">
+    <div class="drawer-backdrop" data-close></div>
+    <aside class="drawer-panel" id="drawer-body"></aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

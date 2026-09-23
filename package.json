@@ -1,0 +1,17 @@
+{
+  "name": "crm-maass-publicidad",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CRM simple de leads para marketing y ventas",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
