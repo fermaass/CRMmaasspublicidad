@@ -21,11 +21,17 @@ const AUDIENCES = {
   pospuso: ["l.status = 'declinado' AND l.decline_reason = ?", [POSTPONED]],
   clientes: ["l.status = 'vendido'", []],
 };
-// Asignar leads: el gerente y quien tenga el permiso "Administra leads".
-const canAssign = (user) => Boolean(user && (user.role === 'gerente' || user.can_assign));
+// Asignar leads es trabajo del Operador. El gerente solo puede reasignar desde la ficha (emergencias).
+const canAssign = (user) => Boolean(user && user.role === 'operador');
+const canReassign = (user) => Boolean(user && ['operador', 'gerente'].includes(user.role));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
-  if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo quien administra los leads puede asignarlos' });
+  if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo el operador asigna los leads' });
+  next();
+};
+const requireReassigner = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
+  if (!canReassign(req.user)) return res.status(403).json({ error: 'Solo el operador o el gerente reasignan leads' });
   next();
 };
 // Canal efectivo del lead: el suyo o, si no tiene, el de su campaña.
@@ -83,7 +89,7 @@ function createApp({ db, config }) {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' });
     }
     startSession(req, res, user.id);
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: user.role === 'gerente' || user.can_assign ? 1 : 0 });
+    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: user.role === 'operador' ? 1 : 0 });
   });
 
   app.post('/api/logout', (req, res) => {
@@ -103,7 +109,6 @@ function createApp({ db, config }) {
     res.json({
       form_url: `${base}/webhooks/form`,
       form_api_key: getSetting(db, 'form_api_key'),
-      auto_assign: getSetting(db, 'auto_assign') === '1',
       wa_templates: waTemplates(),
     });
   });
@@ -118,10 +123,7 @@ function createApp({ db, config }) {
 
   app.patch('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const b = req.body || {};
-    if (b.auto_assign !== undefined) {
-      if (!canAssign(req.user)) return res.status(403).json({ error: 'El reparto lo decide quien administra los leads' });
-      setSetting(db, 'auto_assign', b.auto_assign ? '1' : '0');
-    }
+    if (b.auto_assign !== undefined) return res.status(403).json({ error: 'El reparto se configura en Asignación' });
     if (b.wa_templates && typeof b.wa_templates === 'object') {
       const clean = Object.fromEntries(Object.keys(WA_TEMPLATES).filter((k) => typeof b.wa_templates[k] === 'string')
         .map((k) => [k, b.wa_templates[k].trim().slice(0, 1000)]));
@@ -218,18 +220,18 @@ function createApp({ db, config }) {
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
-    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at,
+    res.json(db.prepare(`SELECT id, name, email, role, active, created_at,
       (SELECT COUNT(*) FROM leads l WHERE l.assigned_to = users.id AND l.status IN ('nuevo', 'nuevo_perfil', 'cotizando')) AS en_curso
       FROM users ORDER BY active DESC, name`).all());
   });
 
   app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
-    const { name, email, password, role, can_assign: assigner } = req.body || {};
+    const { name, email, password, role } = req.body || {};
     if (!name || !email || !password || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
     if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     try {
-      const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
-        .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), role, assigner ? 1 : 0);
+      const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
+        .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), role);
       res.status(201).json({ id: Number(lastInsertRowid) });
     } catch {
       res.status(409).json({ error: 'Ya existe un usuario con ese email' });
@@ -240,7 +242,7 @@ function createApp({ db, config }) {
     const id = Number(req.params.id);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     if (!user) return res.status(404).json({ error: 'No existe' });
-    const { name, role, active, password, can_assign: assigner } = req.body || {};
+    const { name, role, active, password } = req.body || {};
     if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: 'Rol inválido' });
     if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
       return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de gerente' });
@@ -252,7 +254,6 @@ function createApp({ db, config }) {
       name ? String(name).trim() : user.name, role || user.role,
       active === undefined ? user.active : (active ? 1 : 0),
       password ? auth.hashPassword(String(password)) : user.password_hash, id);
-    if (assigner !== undefined) db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(assigner ? 1 : 0, id);
     if (active === false || password) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     // Si deja de ser vendedor activo, sus leads en curso vuelven a "Sin asignar" para no perderse.
     const leftSales = user.role === 'vendedor' && user.active && (active === false || (role && role !== 'vendedor'));
@@ -273,7 +274,7 @@ function createApp({ db, config }) {
     const q = req.query;
     // El vendedor ve solo sus leads (si además administra leads, también los que no tienen dueño, para asignarlos).
     if (req.user.role === 'vendedor') {
-      where.push(canAssign(req.user) ? '(l.assigned_to = ? OR l.assigned_to IS NULL)' : 'l.assigned_to = ?'); params.push(req.user.id);
+      where.push('l.assigned_to = ?'); params.push(req.user.id);
     }
     if (STATUSES.includes(q.status)) { where.push('l.status = ?'); params.push(q.status); }
     if (FOLLOWUP.STAGES.includes(q.stage)) { where.push(`${STAGE_SQL} = ?`); params.push(q.stage); }
@@ -301,17 +302,19 @@ function createApp({ db, config }) {
   function getLead(req, id) {
     const lead = db.prepare(`${leadSelect} WHERE l.id = ?`).get(id);
     if (!lead) return null;
-    if (req.user.role === 'vendedor' && lead.assigned_to !== req.user.id && !(canAssign(req.user) && !lead.assigned_to)) return null;
+    if (req.user.role === 'vendedor' && lead.assigned_to !== req.user.id) return null;
     return lead;
   }
 
   // Avance de ventas (etapa, toques, montos): el gerente y el vendedor dueño del lead.
   // Marketing no registra toques ni mueve etapas, para no ensuciar los números de ventas; solo corrige el origen y los datos de contacto.
+  // El gerente puede corregir (etapa, montos), pero los toques solo los registra el vendedor dueño del lead.
   function canEdit(user, lead) {
     if (user.role === 'gerente') return true;
     return user.role === 'vendedor' && lead.assigned_to === user.id;
   }
-  const canEditOrigin = (user) => EDITORS.includes(user.role);
+  const canTouch = (user, lead) => user.role === 'vendedor' && lead.assigned_to === user.id;
+  const canEditOrigin = (user) => [...EDITORS, 'operador'].includes(user.role);
   const ORIGIN_FIELDS = ['campaign', 'channel_id', 'product_id', 'name', 'phone', 'email'];
 
   app.get('/api/leads', auth.requireUser, (req, res) => {
@@ -351,10 +354,11 @@ function createApp({ db, config }) {
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const events = db.prepare(`SELECT e.*, u.name AS user_name FROM lead_events e
       LEFT JOIN users u ON u.id = e.user_id WHERE e.lead_id = ? ORDER BY e.id DESC`).all(lead.id);
-    res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user) });
+    res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_touch: canTouch(req.user, lead),
+      can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) });
   });
 
-  app.post('/api/leads', auth.requireRole('gerente', 'marketing', 'vendedor'), (req, res) => {
+  app.post('/api/leads', auth.requireRole('gerente', 'marketing', 'vendedor', 'operador'), (req, res) => {
     const b = req.body || {};
     try {
       if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
@@ -362,7 +366,7 @@ function createApp({ db, config }) {
       if (!b.campaign && !b.channel_id) return res.status(400).json({ error: 'Indica de dónde viene el lead' });
       // Quien administra los leads elige al capturarlo quién le da seguimiento.
       let seller = null;
-      if (b.assigned_to && canAssign(req.user)) {
+      if (b.assigned_to && canReassign(req.user)) {
         seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(Number(b.assigned_to));
         if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
       }
@@ -401,14 +405,21 @@ function createApp({ db, config }) {
   // Carga por vendedor y a quién le toca el siguiente lead.
   app.get('/api/workload', requireAssigner, (req, res) => {
     const u = db.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get();
-    res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned: u.n, oldest_unassigned_at: u.oldest });
+    res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned: u.n, oldest_unassigned_at: u.oldest,
+      auto_assign: getSetting(db, 'auto_assign') === '1' });
   });
+  // Reparto automático al de menor carga: lo decide el operador (o el gerente).
+  app.patch('/api/assign-settings', requireReassigner, (req, res) => {
+    if (req.body?.auto_assign !== undefined) setSetting(db, 'auto_assign', req.body.auto_assign ? '1' : '0');
+    res.json({ ok: true, auto_assign: getSetting(db, 'auto_assign') === '1' });
+  });
+
   app.post('/api/leads/balance', requireAssigner, (req, res) => {
     res.json({ assigned: balanceUnassigned(db, req.user.id) });
   });
 
   // Asignar o reasignar un lead (quien administra los leads).
-  app.post('/api/leads/:id/assign', requireAssigner, (req, res) => {
+  app.post('/api/leads/:id/assign', requireReassigner, (req, res) => {
     const lead = db.prepare('SELECT id, assigned_to FROM leads WHERE id = ?').get(Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const to = req.body?.assigned_to;
@@ -423,6 +434,54 @@ function createApp({ db, config }) {
     if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
     if (seller.id !== lead.assigned_to) assignLead(lead.id, seller, req.user.id);
     res.json({ ok: true });
+  });
+
+  // "Pedir seguimiento": el gerente le deja al vendedor una instrucción sobre un lead; sale arriba en su Mi día hasta que registre un toque.
+  app.post('/api/leads/:id/request', auth.requireRole('gerente'), (req, res) => {
+    const lead = db.prepare('SELECT id, assigned_to FROM leads WHERE id = ?').get(Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: 'No existe' });
+    const text = String(req.body?.text || '').trim().slice(0, 300);
+    if (text && !lead.assigned_to) return res.status(400).json({ error: 'Primero hay que asignar el lead a un vendedor' });
+    db.prepare('UPDATE leads SET manager_request = ?, manager_request_at = ? WHERE id = ?').run(text || null, text ? now() : null, lead.id);
+    addEvent(db, lead.id, req.user.id, 'nota', text ? `Seguimiento pedido por el gerente: ${text}` : 'El gerente quitó el pedido de seguimiento');
+    res.json({ ok: true });
+  });
+
+  // Equipo hoy: una fila por vendedor con lo que requiere atención del gerente.
+  const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
+  app.get('/api/team', auth.requireRole('gerente', 'analista'), (req, res) => {
+    const nowMs = Date.now();
+    const sellers = db.prepare("SELECT id, name FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY name").all();
+    const leads = db.prepare(`SELECT * FROM leads WHERE assigned_to IS NOT NULL AND (status IN ('nuevo', 'nuevo_perfil', 'cotizando')
+      OR (status = 'declinado' AND recontact_at IS NOT NULL) OR status = 'vendido')`).all();
+    const touches = Object.fromEntries(db.prepare('SELECT user_id, COUNT(*) AS n FROM lead_touches WHERE created_at >= ? GROUP BY user_id')
+      .all(new Date(nowMs - 7 * 86400e3).toISOString()).map((r) => [r.user_id, r.n]));
+    const rows = sellers.map((u) => {
+      const mine = leads.filter((l) => l.assigned_to === u.id);
+      const active = mine.filter((l) => ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status));
+      const r = { id: u.id, name: u.name, en_curso: active.length, vencidos: 0, hoy: 0, sin_primer_toque: 0, frias: 0, acuerdos_vencidos: 0,
+        pedidos: 0, en_cotizacion: 0, toques_7d: touches[u.id] || 0, alertas: [] };
+      for (const l of mine) {
+        const a = FOLLOWUP.nextAction(l);
+        const d = a ? FOLLOWUP.dayDiff(a.due) : null;
+        const alert = (why) => r.alertas.push({ id: l.id, name: l.name || l.phone || l.email, why });
+        if (d != null && d < 0) r.vencidos++;
+        if (d === 0) r.hoy++;
+        if (l.status === 'nuevo' && !l.touch_count && nowMs - new Date(l.created_at).getTime() > FIRST_TOUCH_HOURS * 3600e3) { r.sin_primer_toque++; alert(`sin primer toque desde hace ${Math.round((nowMs - new Date(l.created_at).getTime()) / 3600e3)} h`); }
+        if (l.status === 'cotizando') {
+          r.en_cotizacion += l.quote_amount || 0;
+          const last = new Date(l.last_touch_at || l.quoted_at || l.updated_at).getTime();
+          if (nowMs - last > COLD_DAYS * 86400e3) { r.frias++; alert(`cotización fría: ${Math.round((nowMs - last) / 86400e3)} días sin contacto`); }
+        }
+        if (l.next_step_at && new Date(l.next_step_at).getTime() < nowMs - 3600e3) { r.acuerdos_vencidos++; alert(`acuerdo vencido: ${l.next_step || 'dar seguimiento'}`); }
+        if (l.manager_request) r.pedidos++;
+        if (d != null && d < -2 && !r.alertas.some((x) => x.id === l.id)) alert(`${a.label}: ${-d} días tarde`);
+      }
+      r.alertas = r.alertas.slice(0, 8);
+      return r;
+    });
+    const unassigned = db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n;
+    res.json({ sellers: rows, unassigned, first_touch_hours: FIRST_TOUCH_HOURS, cold_days: COLD_DAYS });
   });
 
   app.patch('/api/leads/:id', auth.requireUser, (req, res) => {
@@ -482,7 +541,7 @@ function createApp({ db, config }) {
 
     let assigned = lead.assigned_to;
     if (b.assigned_to !== undefined) {
-      if (!canAssign(user)) return { status: 403, error: 'Solo quien administra los leads puede asignarlos' };
+      if (!canReassign(user)) return { status: 403, error: 'Solo el operador o el gerente asignan leads' };
       assigned = b.assigned_to ? Number(b.assigned_to) : null;
       if (assigned && !db.prepare("SELECT 1 FROM users WHERE id = ? AND active = 1").get(assigned)) {
         return { status: 400, error: 'Usuario inválido' };
@@ -570,7 +629,7 @@ function createApp({ db, config }) {
   app.post('/api/leads/:id/touches', auth.requireUser, (req, res) => {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
-    if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'Toma el lead primero para registrar toques' });
+    if (!canTouch(req.user, lead)) return res.status(403).json({ error: 'Los toques los registra el vendedor que atiende el lead' });
     const { channel, outcome } = req.body || {};
     if (!TOUCH_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Indica por qué medio fue el toque' });
     const allowed = OUTCOMES_BY_STATUS[lead.status];
@@ -624,6 +683,10 @@ function createApp({ db, config }) {
     addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
     const note = String(req.body.note || '').trim();
     if (note) addEvent(db, lead.id, req.user.id, 'nota', note.slice(0, 5000));
+    if (lead.manager_request) {
+      db.prepare('UPDATE leads SET manager_request = NULL, manager_request_at = NULL WHERE id = ?').run(lead.id);
+      addEvent(db, lead.id, req.user.id, 'estado', 'Atendió el seguimiento que pidió el gerente');
+    }
     if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);
     if (outcome === 'no_renueva') db.prepare('UPDATE leads SET renewal_for = campaign_end WHERE id = ?').run(lead.id);
     if (outcome === 'renovo') {
@@ -656,7 +719,7 @@ function createApp({ db, config }) {
   });
 
   // ---------- Resumen ----------
-  app.get('/api/stats', auth.requireUser, (req, res) => {
+  app.get('/api/stats', auth.requireRole('gerente', 'marketing', 'vendedor', 'analista'), (req, res) => {
     const { sql, params } = leadFilters(req);
     const group = (col) => db.prepare(`SELECT ${col} AS key, COUNT(*) AS n FROM leads l ${sql} GROUP BY ${col}`).all(...params);
     const bySeller = db.prepare(`SELECT COALESCE(u.name, 'Sin asignar') AS key, COUNT(*) AS n,
@@ -716,7 +779,9 @@ function createApp({ db, config }) {
     const sellerFunnel = db.prepare(`SELECT l.assigned_to AS id, COALESCE(u.name, 'Sin asignar') AS key, ${funnelCols},
       AVG(CASE WHEN l.contacted_at IS NOT NULL THEN (julianday(l.contacted_at) - julianday(l.created_at)) * 24 END) AS horas_contacto,
       AVG(CASE WHEN l.first_touch_at IS NOT NULL THEN (julianday(l.first_touch_at) - julianday(l.created_at)) * 24 END) AS horas_primer_toque,
-      AVG(l.response_touch) AS toques_respuesta, AVG(l.quote_touch) AS toques_cotizacion
+      AVG(l.response_touch) AS toques_respuesta, AVG(l.quote_touch) AS toques_cotizacion,
+      AVG(CASE WHEN l.won_at IS NOT NULL AND l.sale_amount > 0 THEN l.sale_amount END) AS ticket,
+      AVG(CASE WHEN l.won_at IS NOT NULL AND l.quote_amount > 0 AND l.sale_amount > 0 THEN (l.quote_amount - l.sale_amount) / l.quote_amount END) AS descuento
       FROM leads l LEFT JOIN users u ON u.id = l.assigned_to ${sql} GROUP BY l.assigned_to
       ORDER BY l.assigned_to IS NULL, cerrados DESC, recibidos DESC`).all(...params);
 
@@ -746,6 +811,11 @@ function createApp({ db, config }) {
     campaignFunnel.forEach((r) => { r.descartes = campReasons[r.key] || []; });
     const adReasons = reasonsBy('l.utm_content');
     adFunnel.forEach((r) => { r.descartes = adReasons[r.key] || []; });
+    // Actividad de la última semana (toques registrados) y por qué pierde cada vendedor.
+    const weekTouches = Object.fromEntries(db.prepare('SELECT user_id, COUNT(*) AS n FROM lead_touches WHERE created_at >= ? GROUP BY user_id')
+      .all(new Date(Date.now() - 7 * 86400e3).toISOString()).map((r) => [r.user_id, r.n]));
+    const sellerReasons = reasonsBy('l.assigned_to');
+    sellerFunnel.forEach((r) => { r.toques_7d = r.id ? weekTouches[r.id] || 0 : null; r.pierde_por = sellerReasons[r.id] || []; });
     sellerFunnel.forEach((r) => { r.toques_vencidos = touches.overdueBySeller[r.id ?? 'none'] || 0; });
     // Audiencias para remarketing con los filtros actuales (los que nunca contestaron no se incluyen).
     const audiences = Object.fromEntries(Object.entries(AUDIENCES).map(([k, [cond, extra]]) => [k,
@@ -753,8 +823,28 @@ function createApp({ db, config }) {
     // Al vendedor no se le muestra la inversión de marketing.
     if (req.user.role === 'vendedor') campaignFunnel.forEach((r) => { r.inversion = null; });
 
+    // Pipeline: cotizaciones abiertas hoy (sin importar cuándo llegó el lead), vivas y frías, y venta esperada con la tasa histórica de cierre.
+    const cur = leadFilters({ user: req.user, query: { ...req.query, from: undefined, to: undefined } });
+    const open = db.prepare(`SELECT l.assigned_to AS id, COALESCE(u.name, 'Sin asignar') AS name, l.quote_amount, l.last_touch_at, l.quoted_at, l.updated_at
+      FROM leads l LEFT JOIN users u ON u.id = l.assigned_to ${cur.sql ? `${cur.sql} AND` : 'WHERE'} l.status = 'cotizando'`).all(...cur.params);
+    const rates = Object.fromEntries(db.prepare(`SELECT assigned_to AS id, SUM(status = 'vendido') AS won, COUNT(*) AS closed FROM leads
+      WHERE quoted_at IS NOT NULL AND status IN ('vendido', 'declinado') GROUP BY assigned_to`).all().map((r) => [r.id, r]));
+    const coldMs = 15 * 86400e3;
+    const pipeMap = new Map();
+    for (const l of open) {
+      const p = pipeMap.get(l.id) || { id: l.id, key: l.name, vivas: 0, vivas_monto: 0, frias: 0, frias_monto: 0 };
+      const cold = Date.now() - new Date(l.last_touch_at || l.quoted_at || l.updated_at).getTime() > coldMs;
+      if (cold) { p.frias++; p.frias_monto += l.quote_amount || 0; } else { p.vivas++; p.vivas_monto += l.quote_amount || 0; }
+      pipeMap.set(l.id, p);
+    }
+    const pipeline = [...pipeMap.values()].map((p) => {
+      const r = rates[p.id];
+      const tasa = r && r.closed >= 3 ? r.won / r.closed : null; // con menos de 3 cotizaciones cerradas no hay historial suficiente
+      return { ...p, tasa, cerradas: r ? r.closed : 0, esperado: tasa == null ? null : p.vivas_monto * tasa };
+    }).sort((a, b) => b.vivas_monto - a.vivas_monto);
+
     res.json({
-      funnel, campaignFunnel, sellerFunnel, touches, adFunnel, audiences,
+      funnel, campaignFunnel, sellerFunnel, touches, adFunnel, audiences, pipeline,
       byDay,
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", `LEFT JOIN catalog_items c ON c.id = ${CHANNEL_EXPR}`),

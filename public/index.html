@@ -37,10 +37,11 @@
     <header class="topbar">
       <strong class="brand">CRM Maass</strong>
       <nav id="nav">
-        <button data-view="today" data-role="gerente,vendedor">Mi día</button>
+        <button data-view="today" data-role="vendedor">Mi día</button>
+        <button data-view="team" data-role="gerente,analista">Equipo hoy</button>
         <button data-view="board">Tablero</button>
         <button data-view="assign" data-assigner>Asignación</button>
-        <button data-view="stats">Resumen</button>
+        <button data-view="stats" data-role="gerente,marketing,vendedor,analista">Resumen</button>
         <button data-view="users" data-role="gerente">Usuarios</button>
         <button data-view="settings" data-role="gerente,marketing">Configuración</button>
       </nav>
@@ -65,7 +66,7 @@
       <button type="button" id="more-filters" class="ghost" aria-expanded="false" aria-controls="extra-filters">Más filtros</button>
       <span class="spacer"></span>
       <button id="export" class="ghost" data-role="gerente,marketing,analista">Exportar CSV</button>
-      <button id="new-lead" data-role="gerente,marketing,vendedor">+ Lead</button>
+      <button id="new-lead" data-role="gerente,marketing,vendedor,operador">+ Lead</button>
       <div id="extra-filters" class="extra-filters hidden">
         <select id="f-status" aria-label="Etapa"><option value="">Toda etapa</option></select>
         <select id="f-profile" aria-label="Perfil"><option value="">Todo perfil</option></select>
@@ -80,6 +81,7 @@
     <main>
       <div id="board-alert" class="board-alert hidden" role="status"></div>
       <div id="view-today" class="view"></div>
+      <div id="view-team" class="view"></div>
       <div id="view-board" class="board view"></div>
       <div id="view-assign" class="view"></div>
       <div id="view-stats" class="view"></div>

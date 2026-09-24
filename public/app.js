@@ -5,8 +5,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const label = (k) => state.meta.labels[k] || k;
 const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 const can = (...roles) => state.me && roles.includes(state.me.role);
-// Quien administra los leads: el gerente o quien tenga ese permiso (no depende del rol).
-const canAssign = () => Boolean(state.me && (state.me.role === 'gerente' || state.me.can_assign));
+// Asignar es trabajo del Operador; el gerente solo reasigna desde la ficha.
+const canAssign = () => Boolean(state.me && state.me.role === 'operador');
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
 const DARK_TEXT = new Set(['cotizando', 'declinado_sin']);
 const stageOf = (l) => F.stageOf(l);
@@ -48,8 +48,8 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 // Título de tarjeta con su cuadrito de color, como en el panel de referencia.
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
-const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Operador' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -161,8 +161,9 @@ async function start() {
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
   fillFilters();
-  // Vendedor y gerente arrancan en sus pendientes; marketing y analista, en el Resumen.
-  setView(state.view || (['analista', 'marketing'].includes(state.me.role) ? 'stats' : 'today'));
+  // Cada rol arranca en lo suyo: vendedor en Mi día, gerente en Equipo hoy, operador en Asignación, marketing y analista en el Resumen.
+  const home = { vendedor: 'today', gerente: 'team', operador: 'assign', marketing: 'stats', analista: 'stats' };
+  setView(state.view || home[state.me.role] || 'board');
 }
 
 function fillFilters() {
@@ -257,7 +258,7 @@ function setView(view) {
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
   if (view !== 'board') $('#board-alert').classList.add('hidden');
@@ -284,6 +285,7 @@ async function refresh() {
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
   if (state.view === 'assign') return renderAssign();
+  if (state.view === 'team') return renderTeam();
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
@@ -391,7 +393,10 @@ function renderBoardAlert() {
 // ---------- Mi día: pendientes ordenados por urgencia, con el toque a un clic ----------
 function renderToday() {
   const mine = (l) => (state.me.role === 'vendedor' ? l.assigned_to === state.me.id : true);
-  const items = state.leads.filter(mine).map((l) => ({ l, a: nextAction(l) }))
+  // Lo que pidió el gerente va primero y no se repite abajo.
+  const requested = state.leads.filter(mine).filter((l) => l.manager_request)
+    .map((l) => ({ l, a: nextAction(l) || { kind: 'seguimiento', label: 'Seguimiento', days: 0, due: new Date() }, req: true }));
+  const items = state.leads.filter(mine).filter((l) => !l.manager_request).map((l) => ({ l, a: nextAction(l) }))
     .filter((x) => x.a && x.a.days <= 0)
     .sort((x, y) => x.a.due - y.a.due);
   const upcoming = state.leads.filter(mine).map((l) => ({ l, a: nextAction(l) }))
@@ -410,18 +415,19 @@ function renderToday() {
     declinado_sin: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
   };
   const canTouch = (l) => canEditLead(l);
-  const row = ({ l, a }) => {
+  const row = ({ l, a, req }) => {
     const outcomes = outcomesFor(l);
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
-        <span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>
+        ${req ? `<span class="request-pill">${icon('sparkles', 13)} Pedido del gerente: ${esc(l.manager_request)}</span>`
+          : `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>`}
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
         ${l.phone ? `<span class="muted">${esc(l.phone)}</span>` : ''}
         ${l.last_note && l.last_note !== l.next_step ? `<span class="today-note" title="${esc(l.last_note)}">“${esc(l.last_note)}”</span>` : ''}
       </div>
-      ${!canTouch(l) ? '' : a.kind === 'recontacto'
+      ${!canTouch(l) ? '' : a.kind === 'recontacto' && !req
         ? `<div class="today-actions">${waButton(l, true)}<button type="button" class="small" data-reactivate>Reactivar lead</button></div>`
         : `<div class="today-actions">
           ${waButton(l, true)}
@@ -449,9 +455,11 @@ function renderToday() {
       ${upcoming ? `<span class="muted">${upcoming} más en los próximos 2 días</span>` : ''}
       ${free.length && canAssign() ? `<button type="button" class="ghost small" id="today-assign">${free.length} sin asignar · Asignar</button>` : ''}
       <span class="spacer"></span>
-      ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
+      ${can('vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
-    ${items.length ? sections : `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
+    ${requested.length ? `<section class="card today-group requests">${cardTitle('sparkles', 'var(--accent)', `Pedidos del gerente (${requested.length})`,
+      'Se quitan solos al registrar el toque')}${requested.map(row).join('')}</section>` : ''}
+    ${items.length ? sections : requested.length ? '' : `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
 
   const view = $('#view-today');
   $('#today-new')?.addEventListener('click', openNewLead);
@@ -631,7 +639,7 @@ function delta(cur, old, text, { lowerIsBetter = false, points = false, neutral 
 }
 
 async function renderStats() {
-  const prevQ = state.me.role !== 'vendedor' && (state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas')) === 'marketing' ? prevPeriodQuery() : null;
+  const prevQ = prevPeriodQuery();
   const [s, prev] = await Promise.all([api(`/api/stats?${filterQuery()}`), prevQ ? api(`/api/stats?${prevQ.query}`) : null]);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -639,10 +647,10 @@ async function renderStats() {
   const profiles = state.meta.profiles.map((k) => ({ key: k, n: n(s.byProfile, k), label: label(k), color: `var(--${k})` }));
   const sources = state.meta.sources.map((k) => ({ key: k, n: n(s.bySource, k), label: label(k), color: `var(--${k})` }));
 
-  const kpi = (ico, title, value, sub, color, unit = '') => `<div class="kpi-tile" style="--c:${color}">
+  const kpi = (ico, title, value, sub, color, unit = '', extra = '') => `<div class="kpi-tile" style="--c:${color}">
     <span class="kpi-ico">${icon(ico, 24)}</span>
     <div><div class="value"><span data-count="${value}">0</span>${unit}</div>
-    <div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
+    <div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div>${extra}</div></div>`;
 
   const f = s.funnel;
   // El vendedor ve solo su Resumen de ventas; lo de marketing (inversión, costos) no le aplica.
@@ -656,29 +664,32 @@ async function renderStats() {
   let body;
   if (tab === 'ventas') {
     const speed = s.touches.speed;
+    const pf = prev?.funnel; const vs = prevQ?.text || '';
+    const dv = (cur, old, opts) => (prev ? delta(cur, old, vs, opts) : '');
+    const conv = (x) => (x && x.recibidos ? (x.cerrados / x.recibidos) * 100 : null);
     body = `<div class="kpis" style="--cols:4">
-      ${kpi('inbox', 'Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)')}
-      ${kpi('chat', 'Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)')}
-      ${kpi('file', 'Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)')}
-      ${kpi('check', 'Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)')}
-      ${kpi('trend', 'Conversión', pct(f.cerrados, f.recibidos), 'de los recibidos se cierra', 'var(--accent)', '%')}
-      ${textKpi('clock', 'Primer toque', speed == null ? '—' : hours(speed), 'promedio desde que llega el lead', speed != null && speed > 24 ? 'var(--declinado)' : 'var(--f-contactados)')}
+      ${kpi('inbox', 'Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)', '', dv(f.recibidos, pf?.recibidos))}
+      ${kpi('chat', 'Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)', '', dv(f.contactados, pf?.contactados))}
+      ${kpi('file', 'Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)', '', dv(f.cotizados, pf?.cotizados))}
+      ${kpi('check', 'Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)', '', dv(f.cerrados, pf?.cerrados))}
+      ${kpi('trend', 'Conversión', pct(f.cerrados, f.recibidos), 'de los recibidos se cierra', 'var(--accent)', '%', dv(conv(f), conv(pf), { points: true }))}
+      ${textKpi('clock', 'Primer toque', speed == null ? '—' : hours(speed), 'promedio desde que llega el lead', speed != null && speed > 24 ? 'var(--declinado)' : 'var(--f-contactados)', dv(speed, prev?.touches.speed, { lowerIsBetter: true }))}
       ${textKpi('file', 'En cotización', money(f.en_cotizacion), `${f.cotizando_ahora} ${f.cotizando_ahora === 1 ? 'cotización abierta' : 'cotizaciones abiertas'}`, 'var(--f-cotizados)')}
-      ${f.ingresos ? textKpi('money', 'Ventas', money(f.ingresos), `de ${f.cerrados} cierres`, 'var(--f-cerrados)') : ''}
+      ${textKpi('money', 'Ventas', f.ingresos ? money(f.ingresos) : '—', `de ${f.cerrados} ${f.cerrados === 1 ? 'cierre' : 'cierres'}`, 'var(--f-cerrados)', dv(f.ingresos, pf?.ingresos))}
     </div>
+    ${!prevQ ? '<p class="muted small-note stats-hint">Elige un periodo arriba (por ejemplo "Este mes") para comparar contra el periodo anterior.</p>' : ''}
     <div class="card chart-card span-8">${cardTitle('funnel', 'var(--accent)', 'Embudo de conversión', 'cuántos llegan a cada paso')}${funnelChart(f)}</div>
     <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
       <p class="muted" style="margin-bottom:0">${n(s.byStage, 'nuevo')} sin tocar; ${n(s.byStage, 'declinado_perfil')} ${n(s.byStage, 'declinado_perfil') === 1 ? 'declinado' : 'declinados'} con perfil para campañas futuras.</p></div>
     <div class="card chart-card">${seller ? cardTitle('users', 'var(--f-contactados)', 'Tu eficiencia', 'de lo que te asignan, cuánto avanza')
       : cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
+    <div class="card chart-card">${cardTitle('money', 'var(--f-cotizados)', seller ? 'Tu pipeline' : 'Pipeline', 'cotizaciones abiertas hoy y venta esperada')}${pipelineTable(s.pipeline)}</div>
     <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
       ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</div>
-    <div class="card chart-card span-6">${cardTitle('file', 'var(--f-cotizados)', '¿En qué toque se cotiza?', 'toque en que se envió la cotización')}
-      ${touchBars(s.touches.quote, null, 'f-cotizados', 'se cotizaron')}</div>
     <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
-    ${seller ? `<div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>`
-      : `<div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`}`;
+    ${seller ? `<div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>`
+      : `<div class="card chart-card">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`}`;
   } else {
     const m = marketingMetrics(s); const o = prev ? marketingMetrics(prev) : null; const vs = prevQ?.text || '';
     const d = (k, opts) => (o ? delta(m[k], o[k], vs, opts) : '');
@@ -824,23 +835,46 @@ function hours(h) {
 function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
-  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Perfilados</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Toques a respuesta</th><th>Toques a cotizar</th><th>Toques vencidos</th><th>Primer toque</th><th>Hasta que contestan</th>
+  const pct1 = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+  return `<div class="table-wrap"><table class="funnel-table sellers-table"><thead><tr>
+    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Cierra de lo cotizado</th>
+    <th>Ticket promedio</th><th>Descuento</th><th>Primer toque</th><th>Toques 7 días</th><th>Vencidos</th><th>Pierde por</th>
   </tr></thead><tbody>${rows.map((r) => {
     const conv = pctOf(r.cerrados, r.recibidos);
     return `<tr class="${r.id ? '' : 'unassigned'}">
       <td>${r.id ? `<span class="avatar" aria-hidden="true">${esc(initials(r.key))}</span>` : ''}<strong>${esc(r.key)}</strong></td>
       <td class="num"><b>${r.recibidos}</b></td>
-      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
-      ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
       <td><span class="conv ${r.id && conv === best && best > 0 ? 'top' : ''}">${conv}%</span></td>
-      <td class="num">${r.toques_respuesta ? r.toques_respuesta.toFixed(1) : '—'}</td>
-      <td class="num">${r.toques_cotizacion ? r.toques_cotizacion.toFixed(1) : '—'}</td>
-      <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td>
+      <td class="num">${r.cotizados ? `${pctOf(r.cerrados, r.cotizados)}%` : '—'}</td>
+      <td class="num">${r.ticket ? money(r.ticket) : '—'}</td>
+      <td class="num">${r.descuento == null ? '—' : r.descuento > 0.1 ? `<span class="conv bad" data-tip="Vende en promedio ${pct1(r.descuento)} abajo de lo que cotiza">${pct1(r.descuento)}</span>` : pct1(r.descuento)}</td>
       <td class="num">${r.horas_primer_toque != null && r.horas_primer_toque > 24 ? `<span class="conv bad">${hours(r.horas_primer_toque)}</span>` : hours(r.horas_primer_toque)}</td>
-      <td class="num">${hours(r.horas_contacto)}</td></tr>`;
+      <td class="num">${r.toques_7d ?? '—'}</td>
+      <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td>
+      ${discardCell({ descartes: r.pierde_por })}</tr>`;
   }).join('')}</tbody></table></div>
-  <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. Los tiempos se miden desde que llega el lead: "Primer toque" es cuánto tardó el vendedor en intentar el contacto (más de un día se marca en rojo) y "Hasta que contestan", cuánto tardó el cliente en responder.</p>`;
+  <p class="muted small-note">"Cierra de lo cotizado" dice qué tan bien remata; "Descuento" es cuánto abajo de lo cotizado vende en promedio (más de 10% se marca en rojo);
+    "Toques 7 días" es su actividad de la semana: separa al que no trabaja del que trabaja y no tiene suerte. "Pierde por" es su motivo principal de pérdida.
+    Los tiempos se miden desde que llega el lead.</p>`;
+}
+
+// Pipeline: lo que hay en cotización hoy, vivo o frío, y la venta esperada con la tasa real de cierre de cada vendedor.
+function pipelineTable(rows) {
+  if (!rows?.length) return '<p class="muted">No hay cotizaciones abiertas.</p>';
+  const tot = rows.reduce((t, r) => ({ vivas: t.vivas + r.vivas, vivas_monto: t.vivas_monto + r.vivas_monto, frias: t.frias + r.frias,
+    frias_monto: t.frias_monto + r.frias_monto, esperado: t.esperado + (r.esperado || 0) }), { vivas: 0, vivas_monto: 0, frias: 0, frias_monto: 0, esperado: 0 });
+  const line = (r, strong) => `<td class="num">${strong ? '<b>' : ''}${r.vivas} · ${money(r.vivas_monto)}${strong ? '</b>' : ''}</td>
+    <td class="num">${r.frias ? `<span class="conv bad">${r.frias} · ${money(r.frias_monto)}</span>` : '<span class="muted">0</span>'}</td>`;
+  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+    <th>Vendedor</th><th>Cotizaciones vivas</th><th>Frías (más de 15 días sin contacto)</th><th>Cierra de sus cotizaciones</th><th>Venta esperada</th>
+  </tr></thead><tbody>${rows.map((r) => `<tr><td><strong>${esc(r.key)}</strong></td>${line(r)}
+      <td class="num">${r.tasa == null ? `<span class="muted" data-tip="Necesita al menos 3 cotizaciones cerradas para calcularlo">sin historial</span>` : `${Math.round(r.tasa * 100)}% <span class="muted">de ${r.cerradas}</span>`}</td>
+      <td class="num"><b>${r.esperado == null ? '—' : money(r.esperado)}</b></td></tr>`).join('')}
+    ${rows.length > 1 ? `<tr class="total-row"><td><strong>Total</strong></td>${line(tot, true)}<td></td><td class="num"><b>${money(tot.esperado)}</b></td></tr>` : ''}
+  </tbody></table></div>
+  <p class="muted small-note">Venta esperada = monto de las cotizaciones vivas × el % real con que ese vendedor cierra sus cotizaciones. No es una meta: sale de su historial.
+    Las frías no se cuentan en la venta esperada; conviene reactivarlas o cerrarlas.</p>`;
 }
 
 // Una sola tabla por campaña: calidad del lead, costo y retorno. Con ventas manda el retorno; sin ventas, el costo por lead con perfil.
@@ -1103,7 +1137,7 @@ ${tt.user_name}` : ''}`)}">
   const outcomes = outcomesFor(l).length ? outcomesFor(l) : null;
   const n = touches.length + 1;
   const d = nextAction(l);
-  const form = l.can_edit && outcomes ? `<div class="touch-form">
+  const form = l.can_touch && outcomes ? `<div class="touch-form">
       <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${whenClass(d.days)}">
         ${esc(d.label)} · ${d.agreed ? whenLabel(d) : d.days < 0 ? whenText(d.days) : d.days === 0 ? 'toca hoy' : `el ${shortDate(d.due)}`}</span>` : ''}</div>
       <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c, i) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${i === 0 ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
@@ -1135,6 +1169,10 @@ async function openLead(id) {
       ${l.campaign_end ? `<span class="tag">Campaña hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
       ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
     </div>
+    ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido del gerente:</b> ${esc(l.manager_request)}
+      <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('gerente') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
+    ${can('gerente') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
+      ? `<button type="button" class="ghost small ask-followup" id="req-ask">${icon('sparkles', 14)} Pedir seguimiento a ${esc(l.assigned_name)}</button>` : ''}
     ${quickProfileStrip(l)}
     ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
       ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
@@ -1161,7 +1199,7 @@ async function openLead(id) {
           <label>Producto <select name="product_id" ${roOrigin}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
         </div>
         <label>Vendedor
-          <select name="assigned_to" ${canAssign() ? '' : 'disabled'}>
+          <select name="assigned_to" ${l.can_reassign ? '' : 'disabled'}>
             <option value="">Sin asignar</option>
             ${sellers.map((u) => `<option value="${u.id}" ${u.id === l.assigned_to ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
           </select>
@@ -1203,6 +1241,14 @@ async function openLead(id) {
     if (ok) openLead(l.id);
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
+  const sendRequest = async (text) => {
+    try { await api(`/api/leads/${l.id}/request`, { method: 'POST', body: { text } }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
+  };
+  $('#req-ask')?.addEventListener('click', async () => {
+    const text = await ask(`¿Qué le pides a ${l.assigned_name}? Le aparecerá hasta arriba en su Mi día.`, { input: true, placeholder: 'Ej. Llámale hoy y ofrécele 2 caras en Periférico', okLabel: 'Pedir' });
+    if (text) { await sendRequest(text); toast('Pedido enviado al vendedor', 'ok'); }
+  });
+  $('#req-clear')?.addEventListener('click', () => sendRequest(''));
   document.querySelectorAll('#drawer-body [data-qp]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { [b.dataset.qp]: l[b.dataset.qp] === b.dataset.v ? null : b.dataset.v } });
@@ -1297,6 +1343,48 @@ async function openNewLead() {
   });
 }
 
+// ---------- Equipo hoy: lo que el gerente tiene que atender de cada vendedor ----------
+async function renderTeam() {
+  const t = await api('/api/team');
+  const light = (r) => (r.vencidos || r.sin_primer_toque || r.acuerdos_vencidos ? 'red' : r.frias || r.hoy > 8 ? 'yellow' : 'green');
+  const LIGHT_TEXT = { red: 'Atender hoy', yellow: 'Vigilar', green: 'Al día' };
+  const num = (n, bad) => `<td class="num">${n ? `<span class="conv ${bad ? 'bad' : ''}">${n}</span>` : '<span class="muted">0</span>'}</td>`;
+  const rows = t.sellers.map((r) => `<tr data-seller="${r.id}">
+      <td><span class="light ${light(r)}" title="${LIGHT_TEXT[light(r)]}"></span><span class="avatar" aria-hidden="true">${esc(initials(r.name))}</span><strong>${esc(r.name)}</strong>
+        <span class="muted small">${LIGHT_TEXT[light(r)]}</span></td>
+      <td class="num"><b>${r.en_curso}</b></td>
+      ${num(r.vencidos, true)}${num(r.sin_primer_toque, true)}${num(r.acuerdos_vencidos, true)}${num(r.frias, false)}
+      <td class="num">${r.hoy}</td>
+      <td class="num">${r.en_cotizacion ? money(r.en_cotizacion) : '—'}</td>
+      <td class="num">${r.toques_7d}</td>
+      <td class="num">${r.pedidos ? `<span class="conv">${r.pedidos}</span>` : '<span class="muted">0</span>'}</td>
+      <td><button type="button" class="ghost small" data-board="${r.id}">Ver sus leads</button></td>
+    </tr>
+    ${r.alertas.length ? `<tr class="alerts-row"><td colspan="11"><div class="team-alerts">${r.alertas.map((a) => `<button type="button" class="chip-alert" data-open="${a.id}">
+      <b>${esc(a.name)}</b> · ${esc(a.why)}</button>`).join('')}</div></td></tr>` : ''}`).join('');
+  $('#view-team').innerHTML = `<div class="team">
+    <div class="today-summary">
+      ${t.unassigned ? `<span class="alert-pill late">${t.unassigned} sin asignar (el operador los reparte)</span>` : '<span class="alert-pill ok">Todo asignado</span>'}
+      <span class="muted">Rojo: algo vencido o un lead sin primer toque después de ${t.first_touch_hours} h. Amarillo: cotizaciones frías (más de ${t.cold_days} días sin contacto).</span>
+    </div>
+    <section class="card">
+      ${cardTitle('users', 'var(--f-contactados)', 'Tu equipo hoy', 'a quién hablarle y de qué lead')}
+      ${t.sellers.length ? `<div class="table-wrap"><table class="funnel-table team-table"><thead><tr>
+        <th>Vendedor</th><th>En curso</th><th>Vencidos</th><th>Sin primer toque</th><th>Acuerdos vencidos</th><th>Cotizaciones frías</th>
+        <th>Para hoy</th><th>En cotización</th><th>Toques 7 días</th><th>Pedidos tuyos</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted small-note">Da clic en un lead de la lista para abrir su ficha y, si hace falta, "Pedir seguimiento": le aparece hasta arriba al vendedor.</p>`
+        : '<p class="muted">No hay vendedores activos.</p>'}
+    </section>
+  </div>`;
+  const view = $('#view-team');
+  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  view.querySelectorAll('[data-board]').forEach((b) => b.addEventListener('click', () => {
+    $('#f-assigned').value = b.dataset.board; updateMoreFiltersLabel(); setView('board');
+  }));
+  animateIn(view);
+}
+
 // ---------- Asignación: carga por vendedor y leads sin dueño ----------
 async function renderAssign() {
   const ACTIVE = ['nuevo', 'nuevo_perfil', 'cotizando'];
@@ -1330,6 +1418,9 @@ async function renderAssign() {
     </div>`).join('');
 
   $('#view-assign').innerHTML = `<div class="assign">
+    <label class="switch-row card compact-card"><input type="checkbox" id="auto-assign" ${w.auto_assign ? 'checked' : ''}>
+      <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
+      <span class="muted">Apagado, asignas tú cada lead aquí o al capturarlo, con la sugerencia de a quién le toca. Encendido, cada lead que llega sin vendedor se asigna solo.</span></span></label>
     <section class="card">${cardTitle('users', 'var(--f-contactados)', 'Carga por vendedor', 'leads en curso de cada uno: nuevos, perfilados y cotizando')}
       ${load}
       ${sug ? `<p class="muted small-note">Sugerencia: el siguiente lead a <strong>${esc(sug.name)}</strong>, que tiene menos leads en curso${w.sellers.filter((u) => u.activos === sug.activos).length > 1 ? ' (y recibió menos esta semana)' : ''}. Tú decides; la sugerencia solo viene preseleccionada.</p>` : ''}
@@ -1342,6 +1433,12 @@ async function renderAssign() {
   </div>`;
 
   const view = $('#view-assign');
+  $('#auto-assign').addEventListener('change', async (e) => {
+    try {
+      await api('/api/assign-settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
+      toast(e.target.checked ? 'Asignación automática encendida' : 'Asignación manual', 'ok');
+    } catch (err) { toast(err.message, 'error'); e.target.checked = !e.target.checked; }
+  });
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('.today-row[data-id]').forEach((r) => $('[data-assign]', r)?.addEventListener('click', async () => {
     const sel = $('[data-seller]', r);
@@ -1365,7 +1462,7 @@ async function renderAssign() {
 // ---------- Usuarios ----------
 async function renderUsers() {
   state.users = await api('/api/users');
-  const roleOpts = (sel) => state.meta.roles.map((r) => `<option value="${r}" ${r === sel ? 'selected' : ''}>${r}</option>`).join('');
+  const roleOpts = (sel) => state.meta.roles.map((r) => `<option value="${r}" ${r === sel ? 'selected' : ''}>${ROLE_NAMES[r] || r}</option>`).join('');
   $('#view-users').innerHTML = `
     <div class="card" style="margin: 12px 0">
       <h3 style="margin-top:0">Agregar usuario</h3>
@@ -1374,18 +1471,17 @@ async function renderUsers() {
         <label>Email <input name="email" type="email" required></label>
         <label>Contraseña <input name="password" type="text" minlength="8" required></label>
         <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
-        <label class="inline-check"><input type="checkbox" name="can_assign"> Administra leads</label>
         <button type="submit" style="flex:0">Crear</button>
       </form>
       <p class="error" id="user-error"></p>
-      <p class="muted">Gerente: todo, incluidos usuarios. Marketing: ve y edita todos los leads, campañas y listas. Vendedor: ve y trabaja solo los leads que le asignan, y su propio Resumen. Analista: solo lectura y reportes.
-        <strong>Administra leads</strong> es un permiso aparte: quien lo tenga asigna los leads a los vendedores, sea cual sea su rol. El gerente siempre puede.</p>
+      <p class="muted"><b>Gerente:</b> dirige; ve Equipo hoy, el Resumen y todos los leads, pide seguimientos y corrige; reasigna solo en emergencias.
+        <b>Operador:</b> captura y asigna leads y corrige datos; no ve reportes. <b>Vendedor:</b> trabaja los leads que le asignan y ve su propio Resumen.
+        <b>Marketing:</b> Resumen de marketing, campañas y audiencias. <b>Analista:</b> solo lectura.</p>
     </div>
-    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Administra leads</th><th>Activo</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
       <td>${esc(u.name)}${u.role === 'vendedor' && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
       <td><select data-f="role">${roleOpts(u.role)}</select></td>
-      <td>${u.role === 'gerente' ? '<span class="muted">siempre</span>' : `<input type="checkbox" data-f="can_assign" aria-label="Administra leads" ${u.can_assign ? 'checked' : ''}>`}</td>
       <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''}></td>
       <td><button class="ghost" data-f="password">Cambiar contraseña</button></td>
     </tr>`).join('')}
@@ -1395,7 +1491,6 @@ async function renderUsers() {
     e.preventDefault();
     try {
       const body = Object.fromEntries(new FormData(e.target));
-      body.can_assign = e.target.can_assign.checked;
       await api('/api/users', { method: 'POST', body });
       state.users = await api('/api/users'); fillFilters(); renderUsers();
     } catch (err) { $('#user-error').textContent = err.message; }
@@ -1424,7 +1519,6 @@ async function renderUsers() {
       if (!e.target.checked && !await confirmRelease(e.target, (el) => { el.checked = true; })) return;
       released(await patch({ active: e.target.checked }));
     });
-    $('[data-f=can_assign]', tr)?.addEventListener('change', (e) => patch({ can_assign: e.target.checked }));
     $('[data-f=password]', tr).addEventListener('click', async () => {
       const password = await ask('Nueva contraseña (mínimo 8 caracteres):', { input: true, okLabel: 'Cambiar' });
       if (password) patch({ password });
@@ -1489,13 +1583,6 @@ async function renderSettings() {
 </script>`;
 
   $('#view-settings').innerHTML = `<div class="settings">
-    ${canAssign() ? `<div class="card">
-      ${cardTitle('users', 'var(--f-contactados)', 'Reparto de leads')}
-      <label class="switch-row"><input type="checkbox" id="auto-assign" ${s.auto_assign ? 'checked' : ''}>
-        <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
-        <span class="muted">Apagado, quien gestiona el CRM asigna cada lead a mano desde <strong>Asignación</strong> o al capturarlo, con la sugerencia de a quién le toca.
-        Encendido, cada lead que llega sin vendedor se asigna solo al que tiene menos leads en curso.</span></span></label>
-    </div>` : ''}
     ${campaignEditor()}
     ${linkBuilder()}
     <div class="card">
@@ -1580,12 +1667,6 @@ async function renderSettings() {
     } catch (err) { toast(err.message, 'error'); }
   });
   wireLinkBuilder();
-  $('#auto-assign')?.addEventListener('change', async (e) => {
-    try {
-      await api('/api/settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
-      toast(e.target.checked ? 'Asignación automática encendida' : 'Asignación manual', 'ok');
-    } catch (err) { toast(err.message, 'error'); e.target.checked = !e.target.checked; }
-  });
   $('#view-settings').querySelectorAll('[data-camp-channel]').forEach((sel) => sel.addEventListener('change', async () => {
     try { await api(`/api/catalog/${sel.dataset.campChannel}`, { method: 'PATCH', body: { channel_id: sel.value || null } }); toast('Canal guardado', 'ok'); } catch (err) { toast(err.message, 'error'); }
   }));
@@ -1733,6 +1814,6 @@ async function reloadCatalog() {
   }
   // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
   setInterval(() => {
-    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign'].includes(state.view)) refresh();
+    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign', 'team'].includes(state.view)) refresh();
   }, 30000);
 })();

@@ -484,3 +484,23 @@ button.qp:disabled { opacity: 1; }
 .audience-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .link-form { display: grid; gap: 10px; }
 .link-form label { display: grid; gap: 4px; }
+
+/* Gerente: Equipo hoy, pedidos de seguimiento y pipeline */
+.team { display: grid; gap: 14px; }
+.light { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+.light.red { background: #e2445c; box-shadow: 0 0 0 3px #ffe3ec; }
+.light.yellow { background: #f59e0b; box-shadow: 0 0 0 3px #fff1d6; }
+.light.green { background: #037f4c; box-shadow: 0 0 0 3px #d9f4f1; }
+.team-table td, .team-table th, .sellers-table td, .sellers-table th { white-space: nowrap; }
+.alerts-row td { padding-top: 0 !important; border-top: 0 !important; }
+.team-alerts { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 24px; }
+button.chip-alert { background: #fff6f8; color: #7a1633; border: 1px solid #ffc9d8; box-shadow: none; padding: 3px 10px; font-size: 12px; font-weight: 500; border-radius: 999px; }
+button.chip-alert:hover { border-color: #e2445c; filter: none; box-shadow: none; }
+.request-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: #0b4a9c; font-size: 12px; font-weight: 700; }
+.request-note { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); color: #0b4a9c; margin: 8px 0; }
+.request-note > span { flex: 1; }
+.ask-followup { margin: 6px 0; display: inline-flex; align-items: center; gap: 6px; }
+.today-group.requests { border: 2px solid var(--accent); }
+.compact-card { padding: 14px 18px; }
+.total-row td { border-top: 2px solid var(--line); background: #fafbfe; }
+.team > *, .assign > * { min-width: 0; }

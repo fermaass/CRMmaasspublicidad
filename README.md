@@ -25,13 +25,12 @@ Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy
 
 ## Asignación de leads
 
-Los vendedores no toman leads: los asigna quien administra los leads. Ese es un permiso aparte, **Administra leads**, que el gerente le da a quien quiera en **Usuarios**, sea cual sea su rol. El gerente siempre lo tiene.
+Los vendedores no toman leads: los asigna el **Operador**, un rol pensado para quien captura leads, los reparte y corrige datos (no ve reportes ni registra toques).
 
-- Al capturar un lead con **+ Lead**, quien administra elige al vendedor. Viene preseleccionado el que tiene menos carga.
-- En la pestaña **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana. Abajo están los leads sin dueño, del más viejo al más nuevo, cada uno con su selector y el botón Asignar. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga en ese momento.
+- Al capturar un lead con **+ Lead**, el operador elige al vendedor; viene preseleccionado el que tiene menos carga.
+- En **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana, y abajo los leads sin dueño, del más viejo al más nuevo. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga. Ahí mismo se enciende o apaga la asignación automática (de fábrica, apagada).
 - La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
-
-Si un vendedor captura un lead que le escribió directo, se queda con él. En la ficha, quien administra puede cambiar el vendedor en cualquier momento. En **Configuración → Reparto de leads** se puede encender la asignación automática: cada lead que llegue sin vendedor se asigna solo al de menor carga. De fábrica está apagada.
+- El gerente no asigna en su día a día; solo puede **reasignar desde la ficha** en una emergencia. Si un vendedor captura un lead que le escribió directo, se queda con él.
 
 Si un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan **sin asignar** (con una nota en su historial) para repartirlos; antes de hacerlo, la app avisa cuántos son. La pestaña Asignación muestra cuántos leads esperan vendedor y se pone en rojo si alguno lleva más de 2 horas esperando.
 
@@ -86,6 +85,13 @@ Al marcar un lead como **vendido** se puede capturar el **monto de venta** (opci
 
 Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola lista con campañas y canales orgánicos; si eliges una campaña, el canal se toma de la campaña.
 
+## Para el gerente de ventas
+
+- Entra a **Equipo hoy**: una fila por vendedor con semáforo (vencidos, leads sin primer toque después de 2 horas, acuerdos vencidos, cotizaciones frías de más de 15 días), lo que tiene para hoy, su dinero en cotización, sus toques de la semana y abajo los leads concretos que requieren atención.
+- **Pedir seguimiento**: desde la ficha deja una instrucción ("llámale hoy, ofrécele 2 caras"); al vendedor le aparece hasta arriba en su Mi día y se quita sola cuando registra el toque.
+- No registra toques en leads de otros (ensuciaría las métricas del vendedor), pero sí puede corregir datos y etapas.
+- En **Resumen → Ventas**: comparación contra el periodo anterior, **pipeline** (cotizaciones vivas y frías por vendedor y **venta esperada** = monto vivo × su tasa real de cierre de cotizaciones, con al menos 3 cerradas de historial) y una tabla de vendedores con cierre de lo cotizado, ticket promedio, **descuento promedio** (lo cotizado contra lo vendido), primer toque, toques de la semana y motivo principal de pérdida.
+
 ## Para marketing
 
 - Marketing entra directo al **Resumen → Marketing**. No tiene Mi día ni registra toques ni mueve etapas (eso es de ventas y ensuciaría sus números); desde la ficha solo corrige el origen, el producto y los datos de contacto, y puede dejar notas.
@@ -110,10 +116,11 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 
 | Rol | Qué puede hacer |
 |---|---|
-| Gerente | Todo: leads, asignación, usuarios, exportar, eliminar leads |
-| Marketing | Resumen de marketing, campañas, listas, links y audiencias; corrige el origen de los leads (no toques ni etapas). Asigna solo si tiene el permiso Administra leads |
-| Vendedor | Ver y trabajar solo los leads que le asignan; su propio Resumen de ventas (sin inversión ni datos de otros) |
-| Analista | Solo lectura de todo, resumen y exportar CSV |
+| Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración |
+| Operador | Captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
+| Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
+| Marketing | Resumen de marketing, campañas, listas, links y audiencias; corrige el origen de los leads |
+| Analista | Solo lectura: Equipo hoy, Resumen y exportar CSV |
 
 ## Publicarlo en Railway (recomendado)
 

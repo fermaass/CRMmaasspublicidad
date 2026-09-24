@@ -4,7 +4,8 @@ const { DatabaseSync } = require('node:sqlite');
 
 const STATUSES = ['nuevo', 'nuevo_perfil', 'cotizando', 'declinado', 'vendido'];
 const PROFILES = ['sin_perfilar', 'cumple', 'no_cumple'];
-const ROLES = ['gerente', 'marketing', 'vendedor', 'analista'];
+// Operador: captura leads, los asigna y corrige datos; no ve reportes ni registra toques.
+const ROLES = ['gerente', 'marketing', 'vendedor', 'analista', 'operador'];
 const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 // Orígenes que se capturan a mano (el formulario es el único automático).
 const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
@@ -70,6 +71,19 @@ function catalogDDL(table) {
     );`;
 }
 
+function usersDDL(table) {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN (${ROLES.map((r) => `'${r}'`).join(',')})),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      can_assign INTEGER NOT NULL DEFAULT 0
+    );`;
+}
+
 function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -77,15 +91,7 @@ function openDb(dbPath) {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
 
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN (${ROLES.map((r) => `'${r}'`).join(',')})),
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-    );
+    ${usersDDL('users')}
 
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
@@ -147,6 +153,16 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'can_assign')) {
     db.exec('ALTER TABLE users ADD COLUMN can_assign INTEGER NOT NULL DEFAULT 0');
   }
+  // Bases creadas antes del rol Operador: se rehace la tabla de usuarios para aceptarlo (conserva ids y datos).
+  if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'users'").get().sql.includes("'operador'")) {
+    db.exec(`PRAGMA foreign_keys = OFF;
+      ${usersDDL('users_new')}
+      INSERT INTO users_new (id, name, email, password_hash, role, active, created_at, can_assign)
+        SELECT id, name, email, password_hash, role, active, created_at, can_assign FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+      PRAGMA foreign_keys = ON;`);
+  }
   const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
   if (!leadCols.includes('product_id')) db.exec('ALTER TABLE leads ADD COLUMN product_id INTEGER REFERENCES catalog_items(id)');
@@ -161,6 +177,7 @@ function openDb(dbPath) {
     // Perfil rápido (3 preguntas de un toque), próximo paso acordado y postventa.
     ['decision_maker', 'TEXT'], ['budget_status', 'TEXT'], ['start_window', 'TEXT'],
     ['next_step', 'TEXT'], ['next_step_at', 'TEXT'],
+    ['manager_request', 'TEXT'], ['manager_request_at', 'TEXT'], // "Pedir seguimiento" del gerente al vendedor
     ['campaign_end', 'TEXT'], ['postsale_at', 'TEXT'], ['renewal_for', 'TEXT'], ['renewal_amount', 'REAL NOT NULL DEFAULT 0']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
     if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
   }

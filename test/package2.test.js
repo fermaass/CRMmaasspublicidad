@@ -47,11 +47,10 @@ test('reparto automático al de menor carga y se puede apagar', async () => {
   const own = (await req('/api/leads', { method: 'POST', cookie: sellers.Ana.cookie, body: { source: 'whatsapp', channel_id: 5, phone: '5530000005' } })).json.id;
   assert.equal((await lead(own)).assigned_name, 'Ana');
 
-  await req('/api/settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: false } });
-  assert.equal((await req('/api/settings', { cookie: gerente })).json.auto_assign, false);
+  assert.equal((await req('/api/assign-settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: false } })).json.auto_assign, false);
   const d = (await form({ nombre: 'D', telefono: '5530000006' })).json.id;
   assert.equal((await lead(d)).assigned_to, null);
-  await req('/api/settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: true } });
+  await req('/api/assign-settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: true } });
 });
 
 test('formulario guarda los datos del anuncio y el utm_campaign manda', async () => {

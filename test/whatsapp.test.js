@@ -59,7 +59,7 @@ test('plantillas de WhatsApp: de fábrica, editables por gerente y visibles para
 
   // Al desactivar a la vendedora, sus leads en curso quedan sin asignar
   const lead = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', channel_id: 1, phone: '5512340000', assigned_to: id } })).json.id;
-  const w0 = (await req('/api/workload', { cookie: gerente })).json;
+  const w0 = (await req('/api/team', { cookie: gerente })).json;
   assert.equal(w0.unassigned, 0);
   assert.equal((await req('/api/users', { cookie: gerente })).json.find((u) => u.id === id).en_curso, 1);
   const r = (await req(`/api/users/${id}`, { method: 'PATCH', cookie: gerente, body: { active: false } })).json;
@@ -67,7 +67,6 @@ test('plantillas de WhatsApp: de fábrica, editables por gerente y visibles para
   const l = (await req(`/api/leads/${lead}`, { cookie: gerente })).json;
   assert.equal(l.assigned_to, null);
   assert.ok(l.events.some((e) => /Ana ya no está activo/.test(e.content)));
-  const w = (await req('/api/workload', { cookie: gerente })).json;
+  const w = (await req('/api/team', { cookie: gerente })).json;
   assert.equal(w.unassigned, 1);
-  assert.ok(w.oldest_unassigned_at);
 });
