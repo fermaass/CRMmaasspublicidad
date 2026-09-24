@@ -1,10 +1,27 @@
 # CRM Maass Publicidad
 
-CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead se mueve entre cinco etapas (Nuevo, Nuevo – cumple perfil, Cotizando, Declinado, Vendido) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que después se puede filtrar "declinados que cumplen perfil" y exportarlos para otra campaña.
+CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead avanza por etapas que mueven los toques (Nuevo, Contactando, Contestó, Cumple perfil, Cotizando, Vendido y Declinado con o sin perfil) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que los declinados con perfil quedan como base para otras campañas.
+
+## Etapas del tablero
+
+El tablero, Mi día, el filtro de etapa y el Resumen usan las mismas columnas, y **las mueven los toques**:
+
+| Columna | Quién está ahí |
+|---|---|
+| Nuevo | Llegó y nadie lo ha tocado |
+| Contactando | Ya se intentó y aún no contesta (toque 1 a 4 de 5) |
+| Contestó | Respondió, falta perfilar |
+| Cumple perfil | Perfilado, falta cotizar |
+| Cotizando | Cotización enviada, en seguimiento |
+| Vendido | Cliente (postventa: referidos y renovación) |
+| Declinado · con perfil | Cumplía perfil y no compró: la base para campañas futuras |
+| Declinado · sin perfil | No cumplía o nunca se perfiló (los que nunca contestaron no se muestran en el tablero, pero cuentan en el Resumen) |
+
+Nuevo, Contactando y Contestó se calculan de los toques, así que no se arrastran a mano; solo se puede corregir arrastrando hacia Cumple perfil, Cotizando, Vendido o Declinado.
 
 ## Mi día
 
-Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero** (Nuevo, Nuevo – cumple perfil, Cotizando y Declinado para los que toca volver a contactar), así que un lead en Nuevo del tablero aparece bajo Nuevo. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
+Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero**, así que un lead en Nuevo del tablero aparece bajo Nuevo. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
 
 ## Asignación de leads
 
@@ -152,7 +169,7 @@ Con **+ Lead** se elige por dónde llegó (WhatsApp, llamada u otro) y se escrib
 
 ### Duplicados
 
-Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Nuevo – cumple perfil si ya estaba perfilado) y conserva su historial.
+Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Cumple perfil si ya estaba perfilado) y conserva su historial.
 
 ## Respaldos
 

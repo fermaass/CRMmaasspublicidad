@@ -99,3 +99,32 @@ test('postventa: fin de campaña al vender, referidos y renovación', async () =
   await touch(id, 'no_renueva');
   assert.equal(F.nextAction(await lead(id)), null);
 });
+
+test('etapas que se ven: nuevo, contactando, contestó y declinados con o sin perfil', async () => {
+  assert.equal(F.stageOf({ status: 'nuevo', touch_count: 0 }), 'nuevo');
+  assert.equal(F.stageOf({ status: 'nuevo', touch_count: 1 }), 'contactando');
+  assert.equal(F.stageOf({ status: 'nuevo', touch_count: 2, contacted_at: 'x' }), 'contesto');
+  assert.equal(F.stageOf({ status: 'declinado', profile: 'cumple' }), 'declinado_perfil');
+  assert.equal(F.stageOf({ status: 'declinado', profile: 'no_cumple' }), 'declinado_sin');
+  assert.equal(F.stageOf({ status: 'cotizando' }), 'cotizando');
+
+  const mk = async (phone) => (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone, assigned_to: anaId } })).json.id;
+  const fresh = await mk('5561000001');
+  const tried = await mk('5561000002'); await touch(tried, 'sin_respuesta');
+  const answered = await mk('5561000003'); await touch(answered, 'conversacion');
+  const lostFit = await mk('5561000004'); await touch(lostFit, 'cumple'); await touch(lostFit, 'rechazo', { decline_reason: 'Precio' });
+  const lostNoFit = await mk('5561000005'); await touch(lostNoFit, 'no_cumple');
+  const ids = async (stage) => (await req(`/api/leads?stage=${stage}`, { cookie: gerente })).json.map((l) => l.id);
+  assert.ok((await ids('nuevo')).includes(fresh));
+  assert.deepEqual((await ids('contactando')).filter((i) => i === tried), [tried]);
+  assert.ok((await ids('contesto')).includes(answered));
+  assert.ok((await ids('declinado_perfil')).includes(lostFit));
+  assert.ok((await ids('declinado_sin')).includes(lostNoFit));
+  assert.ok(!(await ids('declinado_perfil')).includes(lostNoFit));
+  // El conteo del Resumen coincide con el filtro
+  const s = (await req('/api/stats', { cookie: gerente })).json;
+  for (const st of F.STAGES) {
+    const n = s.byStage.find((r) => r.key === st)?.n || 0;
+    assert.equal(n, (await ids(st)).length, `conteo de ${st}`);
+  }
+});

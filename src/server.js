@@ -9,6 +9,11 @@ const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssig
 const { webhooksRouter } = require('./webhooks');
 
 const EDITORS = ['gerente', 'marketing'];
+// La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL.
+const STAGE_SQL = `CASE WHEN l.status = 'nuevo' AND l.contacted_at IS NOT NULL THEN 'contesto'
+  WHEN l.status = 'nuevo' AND l.touch_count > 0 THEN 'contactando'
+  WHEN l.status = 'declinado' AND l.profile = 'cumple' THEN 'declinado_perfil'
+  WHEN l.status = 'declinado' THEN 'declinado_sin' ELSE l.status END`;
 // Audiencias para remarketing. Los que nunca contestaron no entran: no vale la pena volver a buscarlos.
 const AUDIENCES = {
   perfil: ["l.status = 'declinado' AND l.profile = 'cumple'", []],
@@ -90,7 +95,7 @@ function createApp({ db, config }) {
 
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
     touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
-    quickProfile: QUICK_PROFILE, declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
+    quickProfile: QUICK_PROFILE, stages: FOLLOWUP.STAGES, declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
   app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
@@ -268,6 +273,7 @@ function createApp({ db, config }) {
       where.push(canAssign(req.user) ? '(l.assigned_to = ? OR l.assigned_to IS NULL)' : 'l.assigned_to = ?'); params.push(req.user.id);
     }
     if (STATUSES.includes(q.status)) { where.push('l.status = ?'); params.push(q.status); }
+    if (FOLLOWUP.STAGES.includes(q.stage)) { where.push(`${STAGE_SQL} = ?`); params.push(q.stage); }
     if (PROFILES.includes(q.profile)) { where.push('l.profile = ?'); params.push(q.profile); }
     if (SOURCES.includes(q.source)) { where.push('l.source = ?'); params.push(q.source); }
     if (q.assigned === 'none') where.push('l.assigned_to IS NULL');
@@ -639,7 +645,7 @@ function createApp({ db, config }) {
         SUM(l.profile = 'cumple') AS cumple, SUM(l.status = 'vendido') AS vendidos
       FROM leads l LEFT JOIN catalog_items c ON c.id = ${col} ${sql} GROUP BY ${col} ORDER BY n DESC`).all(...params);
     // Cruces etapa × dimensión para las barras de batería del Resumen.
-    const byStage = (keyExpr, join) => db.prepare(`SELECT ${keyExpr} AS key, l.status AS status, COUNT(*) AS n
+    const byStage = (keyExpr, join) => db.prepare(`SELECT ${keyExpr} AS key, ${STAGE_SQL} AS stage, COUNT(*) AS n
       FROM leads l ${join} ${sql} GROUP BY 1, 2`).all(...params);
     const since = new Date(Date.now() - 29 * 86400e3).toISOString().slice(0, 10);
     const byDay = db.prepare(`SELECT substr(l.created_at, 1, 10) AS day, COUNT(*) AS n FROM leads l
@@ -715,7 +721,7 @@ function createApp({ db, config }) {
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", `LEFT JOIN catalog_items c ON c.id = ${CHANNEL_EXPR}`),
       sellerStages: byStage("COALESCE(u.name, 'Sin asignar')", 'LEFT JOIN users u ON u.id = l.assigned_to'),
-      total, byStatus: group('l.status'), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
+      total, byStatus: group('l.status'), byStage: group(STAGE_SQL), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
       byChannel: byItem(CHANNEL_EXPR, 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
     });
   });

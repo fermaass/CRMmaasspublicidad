@@ -8,7 +8,8 @@ const can = (...roles) => state.me && roles.includes(state.me.role);
 // Quien administra los leads: el gerente o quien tenga ese permiso (no depende del rol).
 const canAssign = () => Boolean(state.me && (state.me.role === 'gerente' || state.me.can_assign));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
-const DARK_TEXT = new Set(['cotizando']);
+const DARK_TEXT = new Set(['cotizando', 'declinado_sin']);
+const stageOf = (l) => F.stageOf(l);
 const colorVar = (key) => `--c: var(--${key})`;
 const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
 // Paleta fija para productos y canales (validada para daltonismo); más de 8 se agrupan en "Otros".
@@ -172,7 +173,7 @@ function fillFilters() {
   };
   opts('#f-profile', state.meta.profiles.map((p) => [p, label(p)]));
   opts('#f-source', state.meta.sources.map((s) => [s, label(s)]));
-  opts('#f-status', state.meta.statuses.map((s) => [s, label(s)]));
+  opts('#f-status', state.meta.stages.map((s) => [s, label(s)]));
   opts('#f-assigned', state.users.filter((u) => u.active).map((u) => [u.id, u.name]));
   opts('#f-product', state.catalog.producto.map((i) => [i.id, i.name]));
   opts('#f-channel', state.catalog.canal.map((i) => [i.id, i.name]));
@@ -217,7 +218,7 @@ function filterQuery() {
     if (period === '30' || period === '90') p.set('from', new Date(Date.now() - Number(period) * 86400e3).toISOString());
     if (period === 'anio') p.set('from', first(d.getFullYear(), 0));
   }
-  if (state.view !== 'board') add('status', '#f-status');
+  if (state.view !== 'board') add('stage', '#f-status');
   return p.toString();
 }
 
@@ -295,16 +296,11 @@ function cardHtml(l) {
   const owner = l.assigned_name
     ? `<span class="avatar" title="${esc(l.assigned_name)}">${esc(initials(l.assigned_name))}</span>`
     : '<span class="avatar none" title="Sin asignar">?</span>';
-  return `<div class="lead-card compact ${answeredInNew(l) ? 'answered' : ''}" draggable="${canEditLead(l)}" data-id="${l.id}">
+  return `<div class="lead-card compact" draggable="${canEditLead(l)}" data-id="${l.id}">
     <div class="card-top"><span class="name">${esc(l.name || l.phone || l.email)}</span>${owner}</div>
-    ${answeredInNew(l) ? ANSWERED_PILL : ''}
     <div class="card-bottom">${cardAction(l)}<span class="ago">${timeAgo(l.updated_at)}</span></div>
   </div>`;
 }
-
-// En Nuevo conviven dos casos que piden cosas distintas: aún no contesta (seguir la cadencia) o ya contestó y falta perfilarlo.
-const answeredInNew = (l) => l.status === 'nuevo' && Boolean(l.contacted_at);
-const ANSWERED_PILL = '<span class="answered-pill">Ya contestó · falta perfilar</span>';
 
 // Lo único que el vendedor necesita saber de un vistazo, según la etapa.
 function cardAction(l) {
@@ -403,11 +399,14 @@ function renderToday() {
   const late = items.filter((x) => x.a.days < 0 && x.a.kind !== 'recontacto').length;
   // Mismas etapas, orden y colores que el Tablero: un lead en Nuevo aparece aquí bajo Nuevo.
   const STAGE_HELP = {
-    nuevo: 'Toques de la cadencia (5 en 12 días) o perfilar a quien ya contestó',
+    nuevo: 'Recién llegados: nadie los ha tocado. Entre más rápido el primer contacto, más cierres',
+    contactando: 'Ya se intentó y aún no contestan: 5 toques en 12 días',
+    contesto: 'Contestaron: toca perfilar',
     nuevo_perfil: 'Cumplen perfil: toca enviar la cotización',
     cotizando: 'Seguimiento de la cotización a los 2, 5 y 10 días',
-    declinado: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
     vendido: 'Clientes: preguntar cómo va la campaña, pedir referidos y ofrecer la renovación a tiempo',
+    declinado_perfil: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
+    declinado_sin: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
   };
   const canTouch = (l) => canEditLead(l);
   const row = ({ l, a }) => {
@@ -415,7 +414,6 @@ function renderToday() {
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
-        ${answeredInNew(l) ? ANSWERED_PILL : ''}
         <span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
@@ -431,13 +429,14 @@ function renderToday() {
         </div>`}
     </div>`;
   };
-  const sections = state.meta.statuses.filter((st) => STAGE_HELP[st]).map((st) => {
-    const list = items.filter((x) => x.l.status === st);
-    const onBoard = state.leads.filter(mine).filter((l) => l.status === st).length;
-    if (['declinado', 'vendido'].includes(st) && !list.length) return '';
+  const CLOSED = ['vendido', 'declinado_perfil', 'declinado_sin'];
+  const sections = state.meta.stages.filter((st) => STAGE_HELP[st]).map((st) => {
+    const list = items.filter((x) => stageOf(x.l) === st);
+    const onBoard = state.leads.filter(mine).filter((l) => stageOf(l) === st).length;
+    if (CLOSED.includes(st) && !list.length) return '';
     return `<section class="card today-group">
       <h3 class="col-head today-head ${textClass(st)}" style="${colorVar(st)}"><span>${esc(label(st))}</span>
-        <span class="count">${list.length} hoy${['declinado', 'vendido'].includes(st) ? '' : ` · ${onBoard} en el tablero`}</span></h3>
+        <span class="count">${list.length} hoy${CLOSED.includes(st) ? '' : ` · ${onBoard} en el tablero`}</span></h3>
       <p class="muted small-note today-help">${STAGE_HELP[st]}</p>
       ${list.length ? list.map(row).join('') : '<p class="muted today-none">Nada pendiente hoy en esta etapa.</p>'}
     </section>`;
@@ -530,15 +529,15 @@ async function reactivate(l) {
 
 function renderBoard() {
   const board = $('#view-board');
-  board.innerHTML = state.meta.statuses.map((s) => {
-    let items = state.leads.filter((l) => l.status === s);
-    // Los declinados que nunca contestaron no se muestran: no vale la pena volver a buscarlos. Siguen contando en el Resumen.
+  board.innerHTML = state.meta.stages.map((s) => {
+    let items = state.leads.filter((l) => stageOf(l) === s);
+    // Los que nunca contestaron no se muestran: no vale la pena volver a buscarlos. Siguen contando en el Resumen.
     let hidden = 0;
-    if (s === 'declinado') {
-      const keep = items.filter((l) => l.contacted_at || l.profile === 'cumple');
+    if (s === 'declinado_sin') {
+      const keep = items.filter((l) => l.contacted_at);
       hidden = items.length - keep.length; items = keep;
     }
-    return `<div class="column" data-status="${s}">
+    return `<div class="column ${['vendido', 'declinado_perfil', 'declinado_sin'].includes(s) ? 'closed' : ''}" data-stage="${s}">
       <h3 class="col-head ${textClass(s)}" style="${colorVar(s)}"><span>${esc(label(s))}</span><span class="count">${items.length}</span></h3>
       ${items.map(cardHtml).join('')}
       ${hidden ? `<p class="muted small-note col-note">${hidden} ${hidden === 1 ? 'no contestó' : 'nunca contestaron'}; no se muestran aquí y siguen contando en el Resumen.</p>` : ''}
@@ -557,8 +556,12 @@ function renderBoard() {
       col.classList.remove('drop');
       const id = e.dataTransfer.getData('text/plain');
       const lead = state.leads.find((l) => String(l.id) === id);
-      if (!lead || lead.status === col.dataset.status) return;
-      await changeStatus(lead, col.dataset.status);
+      // Nuevo, Contactando y Contestó las definen los toques; a mano solo se corrige hacia las etapas de adelante.
+      const target = { nuevo_perfil: 'nuevo_perfil', cotizando: 'cotizando', vendido: 'vendido', declinado_perfil: 'declinado', declinado_sin: 'declinado' }[col.dataset.stage];
+      if (!lead || stageOf(lead) === col.dataset.stage) return;
+      if (!target) { toast('Esa columna se llena sola con los toques: registra el toque en la ficha del lead.'); return; }
+      if (lead.status === target) return;
+      await changeStatus(lead, target);
     });
   });
 }
@@ -595,7 +598,7 @@ async function renderStats() {
   const s = await api(`/api/stats?${filterQuery()}`);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-  const stages = state.meta.statuses.map((k) => ({ key: k, n: n(s.byStatus, k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
+  const stages = state.meta.stages.map((k) => ({ key: k, n: n(s.byStage, k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
   const profiles = state.meta.profiles.map((k) => ({ key: k, n: n(s.byProfile, k), label: label(k), color: `var(--${k})` }));
   const sources = state.meta.sources.map((k) => ({ key: k, n: n(s.bySource, k), label: label(k), color: `var(--${k})` }));
 
@@ -629,7 +632,7 @@ async function renderStats() {
     <div class="card chart-card span-8">${cardTitle('funnel', 'var(--accent)', 'Embudo de conversión', 'cuántos llegan a cada paso')}${funnelChart(f)}</div>
     <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
-      <p class="muted" style="margin-bottom:0">${f.declinados} declinados; ${n(s.byStatus, 'nuevo') + n(s.byStatus, 'nuevo_perfil')} todavía sin cotizar.</p></div>
+      <p class="muted" style="margin-bottom:0">${n(s.byStage, 'nuevo')} sin tocar; ${n(s.byStage, 'declinado_perfil')} ${n(s.byStage, 'declinado_perfil') === 1 ? 'declinado' : 'declinados'} con perfil para campañas futuras.</p></div>
     <div class="card chart-card">${seller ? cardTitle('users', 'var(--f-contactados)', 'Tu eficiencia', 'de lo que te asignan, cuánto avanza')
       : cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
@@ -899,14 +902,14 @@ function stageRows(rows) {
   const groups = new Map();
   rows.forEach((r) => {
     const g = groups.get(r.key) || { key: r.key, total: 0, counts: {} };
-    g.counts[r.status] = r.n; g.total += r.n; groups.set(r.key, g);
+    g.counts[r.stage] = r.n; g.total += r.n; groups.set(r.key, g);
   });
   const list = [...groups.values()].sort((a, b) => b.total - a.total);
   if (!list.length) return '<p class="muted">Sin datos</p>';
-  const stageParts = (g) => state.meta.statuses.map((k) => ({ key: k, n: g.counts[k] || 0, label: `${g.key} · ${label(k)}`, color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
+  const stageParts = (g) => state.meta.stages.map((k) => ({ key: k, n: g.counts[k] || 0, label: `${g.key} · ${label(k)}`, color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
   return `<div class="brows">${list.map((g) => `<div class="brow"><span class="k" title="${esc(g.key)}">${esc(g.key)}</span>
     ${battery(stageParts(g), g.total)}<span class="n">${g.total}</span></div>`).join('')}</div>
-    <div class="legend">${state.meta.statuses.map((k) => `<span style="--c:var(--${k})"><i></i>${esc(label(k))}</span>`).join('')}</div>`;
+    <div class="legend">${state.meta.stages.map((k) => `<span style="--c:var(--${k})"><i></i>${esc(label(k))}</span>`).join('')}</div>`;
 }
 
 // Barras horizontales por categoría; el color sigue al elemento de la lista, no a su posición.
@@ -1088,7 +1091,7 @@ async function openLead(id) {
     <div class="contact-line">${[l.phone && esc(l.phone), l.email && esc(l.email)].filter(Boolean).join(' · ')}
       ${waButton(l)}</div>
     <div class="tags">
-      <span class="tag status-tag" style="${colorVar(l.status)}">${esc(label(l.status))}</span>
+      <span class="tag status-tag ${textClass(stageOf(l))}" style="${colorVar(stageOf(l))}">${esc(label(stageOf(l)))}</span>
       <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
       ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
       ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : l.channel_name ? `<span class="tag">${esc(l.channel_name)}</span>` : ''}

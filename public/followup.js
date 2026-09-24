@@ -16,6 +16,16 @@
   const RENEW_BEFORE = 30;
 
   const ms = (iso) => new Date(iso).getTime();
+
+  // Etapas que se ven (tablero, Mi día, Resumen). Salen de la etapa guardada y de los toques; nadie las cambia a mano.
+  //   Nuevo: nadie lo ha tocado · Contactando: ya se intentó y no contesta · Contestó: respondió, falta perfilar.
+  //   Los declinados se separan en con perfil (base para campañas futuras) y sin perfil.
+  const STAGES = ['nuevo', 'contactando', 'contesto', 'nuevo_perfil', 'cotizando', 'vendido', 'declinado_perfil', 'declinado_sin'];
+  function stageOf(l) {
+    if (l.status === 'nuevo') return l.contacted_at ? 'contesto' : (l.touch_count || 0) > 0 ? 'contactando' : 'nuevo';
+    if (l.status === 'declinado') return l.profile === 'cumple' ? 'declinado_perfil' : 'declinado_sin';
+    return l.status;
+  }
   const fmtDay = (d) => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
   // Aviso cuando el siguiente seguimiento sin respuesta declinaría el lead.
   const lastTry = (l) => ((l.silent_streak || 0) >= SILENT_MAX - 1 ? ' (último intento)' : '');
@@ -91,7 +101,7 @@
     return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   }
 
-  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
+  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, STAGES, stageOf, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);

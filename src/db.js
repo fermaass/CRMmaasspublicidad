@@ -9,7 +9,8 @@ const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 // Orígenes que se capturan a mano (el formulario es el único automático).
 const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
 const LABELS = {
-  nuevo: 'Nuevo', nuevo_perfil: 'Nuevo – cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
+  nuevo: 'Nuevo', nuevo_perfil: 'Cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
+  contactando: 'Contactando', contesto: 'Contestó', declinado_perfil: 'Declinado · con perfil', declinado_sin: 'Declinado · sin perfil',
   sin_perfilar: 'Sin perfilar', cumple: 'Cumple perfil', no_cumple: 'No cumple',
   formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro', correo: 'Correo', visita: 'Visita',
 };
