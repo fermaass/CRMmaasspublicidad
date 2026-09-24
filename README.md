@@ -30,7 +30,8 @@ Los vendedores no toman leads: los asigna el **Operador**, un rol pensado para q
 - Al capturar un lead con **+ Lead**, el operador elige al vendedor; viene preseleccionado el que tiene menos carga.
 - En **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana, y abajo los leads sin dueño, del más viejo al más nuevo. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga. Ahí mismo se enciende o apaga la asignación automática (de fábrica, apagada).
 - La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
-- El gerente no asigna en su día a día; solo puede **reasignar desde la ficha** en una emergencia. Si un vendedor captura un lead que le escribió directo, se queda con él.
+- El gerente no asigna en su día a día; solo puede **reasignar desde la ficha** en una emergencia.
+- **Equipos chicos:** al crear un gerente (también en el primer uso) la app pregunta si también hará las **funciones de operador**. Si dice que sí, ve además la pestaña Asignación y elige vendedor al capturar. Se cambia después en Usuarios. Si un vendedor captura un lead que le escribió directo, se queda con él.
 
 Si un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan **sin asignar** (con una nota en su historial) para repartirlos; antes de hacerlo, la app avisa cuántos son. La pestaña Asignación muestra cuántos leads esperan vendedor y se pone en rojo si alguno lleva más de 2 horas esperando.
 
@@ -116,7 +117,7 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 
 | Rol | Qué puede hacer |
 |---|---|
-| Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración |
+| Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración. Opcional: funciones de operador en equipos chicos |
 | Operador | Captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
 | Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
 | Marketing | Resumen de marketing, campañas, listas, links y audiencias; corrige el origen de los leads |

@@ -28,6 +28,13 @@
       <label>Tu nombre <input name="name" required></label>
       <label>Email <input type="email" name="email" required autocomplete="username"></label>
       <label>Contraseña (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+      <fieldset class="plain operator-question">
+        <legend>¿También harás las funciones de operador (capturar y asignar los leads a los vendedores)?</legend>
+        <div class="seg-group">
+          <label class="seg"><input type="radio" name="can_assign" value="1" required><span>Sí, somos un equipo chico</span></label>
+          <label class="seg"><input type="radio" name="can_assign" value=""><span>No, habrá un operador</span></label>
+        </div>
+      </fieldset>
       <p id="setup-error" class="error"></p>
       <button type="submit">Crear y entrar</button>
     </form>

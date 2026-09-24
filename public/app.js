@@ -5,8 +5,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const label = (k) => state.meta.labels[k] || k;
 const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 const can = (...roles) => state.me && roles.includes(state.me.role);
-// Asignar es trabajo del Operador; el gerente solo reasigna desde la ficha.
-const canAssign = () => Boolean(state.me && state.me.role === 'operador');
+// Asignar es trabajo del Operador (o de un gerente que también opera, en equipos chicos).
+const canAssign = () => Boolean(state.me && (state.me.role === 'operador' || state.me.can_assign));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
 const DARK_TEXT = new Set(['cotizando', 'declinado_sin']);
 const stageOf = (l) => F.stageOf(l);
@@ -1364,7 +1364,8 @@ async function renderTeam() {
       <b>${esc(a.name)}</b> · ${esc(a.why)}</button>`).join('')}</div></td></tr>` : ''}`).join('');
   $('#view-team').innerHTML = `<div class="team">
     <div class="today-summary">
-      ${t.unassigned ? `<span class="alert-pill late">${t.unassigned} sin asignar (el operador los reparte)</span>` : '<span class="alert-pill ok">Todo asignado</span>'}
+      ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
+        : `<span class="alert-pill late">${t.unassigned} sin asignar (el operador los reparte)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
       <span class="muted">Rojo: algo vencido o un lead sin primer toque después de ${t.first_touch_hours} h. Amarillo: cotizaciones frías (más de ${t.cold_days} días sin contacto).</span>
     </div>
     <section class="card">
@@ -1378,6 +1379,7 @@ async function renderTeam() {
     </section>
   </div>`;
   const view = $('#view-team');
+  $('#team-assign')?.addEventListener('click', () => setView('assign'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('[data-board]').forEach((b) => b.addEventListener('click', () => {
     $('#f-assigned').value = b.dataset.board; updateMoreFiltersLabel(); setView('board');
@@ -1471,22 +1473,39 @@ async function renderUsers() {
         <label>Email <input name="email" type="email" required></label>
         <label>Contraseña <input name="password" type="text" minlength="8" required></label>
         <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
-        <button type="submit" style="flex:0">Crear</button>
+        <fieldset class="plain operator-question hidden" id="op-question">
+          <legend>¿Este gerente también hará las funciones de operador (capturar y asignar leads)?</legend>
+          <div class="seg-group">
+            <label class="seg"><input type="radio" name="can_assign" value="1" disabled><span>Sí, equipo chico</span></label>
+            <label class="seg"><input type="radio" name="can_assign" value="" disabled><span>No, hay operador</span></label>
+          </div>
+        </fieldset>
+        <button type="submit" style="flex:0 0 auto">Crear</button>
       </form>
       <p class="error" id="user-error"></p>
       <p class="muted"><b>Gerente:</b> dirige; ve Equipo hoy, el Resumen y todos los leads, pide seguimientos y corrige; reasigna solo en emergencias.
+        En equipos chicos puede tener también las <b>funciones de operador</b> (pestaña Asignación).
         <b>Operador:</b> captura y asigna leads y corrige datos; no ve reportes. <b>Vendedor:</b> trabaja los leads que le asignan y ve su propio Resumen.
         <b>Marketing:</b> Resumen de marketing, campañas y audiencias. <b>Analista:</b> solo lectura.</p>
     </div>
-    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones de operador</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
       <td>${esc(u.name)}${u.role === 'vendedor' && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
       <td><select data-f="role">${roleOpts(u.role)}</select></td>
+      <td>${u.role === 'gerente' ? `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>` : '<span class="muted">—</span>'}</td>
       <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''}></td>
       <td><button class="ghost" data-f="password">Cambiar contraseña</button></td>
     </tr>`).join('')}
     </tbody></table>`;
 
+  // Al elegir Gerente, la pregunta de funciones de operador se vuelve obligatoria.
+  const roleSel = $('#user-form [name=role]');
+  const syncQuestion = () => {
+    const isManager = roleSel.value === 'gerente';
+    $('#op-question').classList.toggle('hidden', !isManager);
+    $('#op-question').querySelectorAll('input').forEach((i) => { i.disabled = !isManager; i.required = isManager; if (!isManager) i.checked = false; });
+  };
+  roleSel.addEventListener('change', syncQuestion); syncQuestion();
   $('#user-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -1514,6 +1533,10 @@ async function renderUsers() {
     $('[data-f=role]', tr).addEventListener('change', async (e) => {
       if (e.target.value !== 'vendedor' && !await confirmRelease(e.target, (el) => { el.value = u.role; })) return;
       released(await patch({ role: e.target.value }));
+    });
+    $('[data-f=can_assign]', tr)?.addEventListener('change', async (e) => {
+      await patch({ can_assign: e.target.checked });
+      if (String(u.id) === String(state.me.id)) { state.me = await api('/api/me'); start(); }
     });
     $('[data-f=active]', tr).addEventListener('change', async (e) => {
       if (!e.target.checked && !await confirmRelease(e.target, (el) => { el.checked = true; })) return;

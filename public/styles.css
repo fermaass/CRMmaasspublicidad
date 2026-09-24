@@ -504,3 +504,5 @@ button.chip-alert:hover { border-color: #e2445c; filter: none; box-shadow: none;
 .compact-card { padding: 14px 18px; }
 .total-row td { border-top: 2px solid var(--line); background: #fafbfe; }
 .team > *, .assign > * { min-width: 0; }
+.operator-question { flex: 1 1 100%; margin: 0; } .operator-question legend { font-size: 13px; }
+.inline-check input { width: auto; margin: 0; }

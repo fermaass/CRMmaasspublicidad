@@ -21,8 +21,11 @@ const AUDIENCES = {
   pospuso: ["l.status = 'declinado' AND l.decline_reason = ?", [POSTPONED]],
   clientes: ["l.status = 'vendido'", []],
 };
-// Asignar leads es trabajo del Operador. El gerente solo puede reasignar desde la ficha (emergencias).
-const canAssign = (user) => Boolean(user && user.role === 'operador');
+// Asignar leads es trabajo del Operador. En equipos chicos, un gerente puede tener también las funciones de operador (can_assign).
+// Cualquier gerente puede reasignar desde la ficha (emergencias).
+const canAssign = (user) => Boolean(user && (user.role === 'operador' || (user.role === 'gerente' && user.can_assign)));
+// Solo un gerente puede llevar las funciones de operador; en otros roles el valor no aplica.
+const assignFlag = (role, value) => (role === 'gerente' && value ? 1 : 0);
 const canReassign = (user) => Boolean(user && ['operador', 'gerente'].includes(user.role));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
@@ -72,13 +75,13 @@ function createApp({ db, config }) {
 
   app.post('/api/setup', (req, res) => {
     if (userCount() > 0) return res.status(409).json({ error: 'La app ya está configurada' });
-    const { name, email, password } = req.body || {};
+    const { name, email, password, can_assign: operates } = req.body || {};
     if (!name || !email || !password) return res.status(400).json({ error: 'Faltan datos' });
     if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
-    const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-      .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), 'gerente');
+    const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
+      .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), 'gerente', assignFlag('gerente', operates));
     startSession(req, res, Number(lastInsertRowid));
-    res.status(201).json({ id: Number(lastInsertRowid), name, email, role: 'gerente' });
+    res.status(201).json({ id: Number(lastInsertRowid), name, email, role: 'gerente', can_assign: assignFlag('gerente', operates) });
   });
 
   // ---------- Sesión ----------
@@ -89,7 +92,7 @@ function createApp({ db, config }) {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' });
     }
     startSession(req, res, user.id);
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: user.role === 'operador' ? 1 : 0 });
+    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: canAssign(user) ? 1 : 0 });
   });
 
   app.post('/api/logout', (req, res) => {
@@ -220,18 +223,18 @@ function createApp({ db, config }) {
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
-    res.json(db.prepare(`SELECT id, name, email, role, active, created_at,
+    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at,
       (SELECT COUNT(*) FROM leads l WHERE l.assigned_to = users.id AND l.status IN ('nuevo', 'nuevo_perfil', 'cotizando')) AS en_curso
       FROM users ORDER BY active DESC, name`).all());
   });
 
   app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
-    const { name, email, password, role } = req.body || {};
+    const { name, email, password, role, can_assign: operates } = req.body || {};
     if (!name || !email || !password || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
     if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     try {
-      const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-        .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), role);
+      const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
+        .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), role, assignFlag(role, operates));
       res.status(201).json({ id: Number(lastInsertRowid) });
     } catch {
       res.status(409).json({ error: 'Ya existe un usuario con ese email' });
@@ -242,7 +245,7 @@ function createApp({ db, config }) {
     const id = Number(req.params.id);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     if (!user) return res.status(404).json({ error: 'No existe' });
-    const { name, role, active, password } = req.body || {};
+    const { name, role, active, password, can_assign: operates } = req.body || {};
     if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: 'Rol inválido' });
     if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
       return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de gerente' });
@@ -254,6 +257,10 @@ function createApp({ db, config }) {
       name ? String(name).trim() : user.name, role || user.role,
       active === undefined ? user.active : (active ? 1 : 0),
       password ? auth.hashPassword(String(password)) : user.password_hash, id);
+    // Funciones de operador: solo para gerentes; si deja de ser gerente, se quitan.
+    const newRole = role || user.role;
+    const flag = operates !== undefined ? assignFlag(newRole, operates) : assignFlag(newRole, user.can_assign);
+    db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(flag, id);
     if (active === false || password) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     // Si deja de ser vendedor activo, sus leads en curso vuelven a "Sin asignar" para no perderse.
     const leftSales = user.role === 'vendedor' && user.active && (active === false || (role && role !== 'vendedor'));
