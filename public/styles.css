@@ -472,3 +472,15 @@ button.qp:disabled { opacity: 1; }
 .touch-head { flex-wrap: wrap; }
 .touch-head strong { white-space: nowrap; }
 .touch-head .touch-badge { white-space: normal; max-width: 100%; }
+
+/* Marketing: comparación, tabla de campañas, audiencias y links */
+.delta { font-size: 11px; font-weight: 700; margin-top: 3px; color: var(--muted); }
+.delta.good { color: #037f4c; }
+.delta.bad { color: #c21e56; }
+.stats-hint { grid-column: 1 / -1; margin: -4px 0 0; }
+.campaigns-table th, .campaigns-table td { white-space: nowrap; }
+.campaigns-table td:first-child, .campaigns-table th:first-child { position: sticky; left: 0; background: var(--card); z-index: 1; }
+.discard { font-size: 12px; color: #a3173f; background: #ffe3ec; padding: 2px 8px; border-radius: 999px; }
+.audience-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.link-form { display: grid; gap: 10px; }
+.link-form label { display: grid; gap: 4px; }

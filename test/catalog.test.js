@@ -44,7 +44,7 @@ test('lead con producto y canal; filtros, resumen y CSV', async () => {
   const led = cat.producto.find((p) => p.name === 'Pantalla LED');
   const fb = cat.canal.find((c) => c.name === 'Facebook');
 
-  assert.equal((await req('/api/leads', { method: 'POST', cookie: vendedor, body: { source: 'whatsapp', phone: '5511111111', product_id: 999 } })).status, 400);
+  assert.equal((await req('/api/leads', { method: 'POST', cookie: vendedor, body: { source: 'whatsapp', channel_id: 1, phone: '5511111111', product_id: 999 } })).status, 400);
   const r = await req('/api/leads', { method: 'POST', cookie: vendedor,
     body: { source: 'whatsapp', phone: '5511111111', name: 'Laura', product_id: String(esp.id), channel_id: String(fb.id) } });
   assert.equal(r.status, 201, r.text);

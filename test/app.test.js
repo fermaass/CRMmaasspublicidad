@@ -76,12 +76,12 @@ test('captura manual de WhatsApp: no duplica al contacto del formulario', async 
   assert.equal((await req('/api/leads', { method: 'POST', cookie: gerente, body: { name: 'X' } })).status, 400);
 
   const dup = await req('/api/leads', { method: 'POST', cookie: gerente,
-    body: { source: 'whatsapp', phone: '+52 1 55 1234 5678', message: 'Hola, sigo interesado' } });
+    body: { source: 'whatsapp', channel_id: 1, phone: '+52 1 55 1234 5678', message: 'Hola, sigo interesado' } });
   assert.equal(dup.status, 200, dup.text);
   assert.equal(dup.json.existing, true);
 
   const nuevo = await req('/api/leads', { method: 'POST', cookie: vendedorA,
-    body: { source: 'whatsapp', phone: '3300000000', name: 'María', message: 'Precio?' } });
+    body: { source: 'whatsapp', channel_id: 1, phone: '3300000000', name: 'María', message: 'Precio?' } });
   assert.equal(nuevo.status, 201, nuevo.text);
 
   const leads = (await req('/api/leads', { cookie: gerente })).json;
@@ -114,7 +114,7 @@ test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar',
 
   // Si vuelve a escribir, se reabre conservando el perfil
   await req('/api/leads', { method: 'POST', cookie: gerente,
-    body: { source: 'whatsapp', phone: '5215512345678', message: 'Ahora sí tengo presupuesto' } });
+    body: { source: 'whatsapp', channel_id: 1, phone: '5215512345678', message: 'Ahora sí tengo presupuesto' } });
   l = (await req(`/api/leads/${juan.id}`, { cookie: gerente })).json;
   assert.equal(l.status, 'nuevo_perfil');
   assert.equal(l.profile, 'cumple');
@@ -139,7 +139,7 @@ test('permisos: vendedor ve solo lo suyo, no toma leads; analista solo lee', asy
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando' } })).status, 200);
 
   // Si Ana registra un contacto que ya es de Beto, se le avisa sin mostrarle la ficha
-  const taken = await req('/api/leads', { method: 'POST', cookie: vendedorA, body: { source: 'llamada', phone: l2.phone, email: l2.email } });
+  const taken = await req('/api/leads', { method: 'POST', cookie: vendedorA, body: { source: 'llamada', channel_id: 1, phone: l2.phone, email: l2.email } });
   assert.equal(taken.status, 409);
   assert.match(taken.json.error, /Beto/);
 

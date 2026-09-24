@@ -42,9 +42,9 @@ test('reparto automático al de menor carga y se puede apagar', async () => {
   assert.ok((await lead(a)).events.some((e) => e.content === 'Asignado automáticamente a Ana'));
 
   // El gerente captura a mano: también se reparte. El vendedor que captura se queda con el lead.
-  const m = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'llamada', phone: '5530000004' } })).json.id;
+  const m = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'llamada', channel_id: 5, phone: '5530000004' } })).json.id;
   assert.equal((await lead(m)).assigned_name, 'Beto');
-  const own = (await req('/api/leads', { method: 'POST', cookie: sellers.Ana.cookie, body: { source: 'whatsapp', phone: '5530000005' } })).json.id;
+  const own = (await req('/api/leads', { method: 'POST', cookie: sellers.Ana.cookie, body: { source: 'whatsapp', channel_id: 5, phone: '5530000005' } })).json.id;
   assert.equal((await lead(own)).assigned_name, 'Ana');
 
   await req('/api/settings', { method: 'PATCH', cookie: gerente, body: { auto_assign: false } });

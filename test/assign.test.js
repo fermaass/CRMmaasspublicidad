@@ -16,7 +16,7 @@ async function req(path, { method = 'GET', body, cookie } = {}) {
   return { status: res.status, json, cookie: res.headers.get('set-cookie')?.split(';')[0] };
 }
 const lead = async (id) => (await req(`/api/leads/${id}`, { cookie: gerente })).json;
-const capture = (phone, extra = {}) => req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone, ...extra } });
+const capture = (phone, extra = {}) => req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', channel_id: 1, phone, ...extra } });
 
 before(async () => {
   const db = openDb(':memory:');
@@ -62,7 +62,7 @@ test('el gerente asigna al capturar y la carga sugiere al de menos leads', async
   assert.equal((await capture('5540000005', { assigned_to: 9999 })).status, 400);
   assert.equal((await req('/api/workload', { cookie: sellers.Ana.cookie })).status, 403);
   // Si un vendedor manda assigned_to se ignora: se queda con su lead
-  const own = (await req('/api/leads', { method: 'POST', cookie: sellers.Beto.cookie, body: { source: 'llamada', phone: '5540000006', assigned_to: sellers.Ana.id } })).json.id;
+  const own = (await req('/api/leads', { method: 'POST', cookie: sellers.Beto.cookie, body: { source: 'llamada', channel_id: 1, phone: '5540000006', assigned_to: sellers.Ana.id } })).json.id;
   assert.equal((await lead(own)).assigned_name, 'Beto');
 });
 

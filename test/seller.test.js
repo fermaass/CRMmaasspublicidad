@@ -50,7 +50,7 @@ before(async () => {
 after(() => server.close());
 
 test('perfil rápido, nota y acuerdo en el mismo toque; la última nota viaja con el lead', async () => {
-  const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone: '5560000001', name: 'Cliente', assigned_to: anaId } })).json.id;
+  const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', channel_id: 1, phone: '5560000001', name: 'Cliente', assigned_to: anaId } })).json.id;
   const when = new Date(Date.now() + 2 * DAY); when.setSeconds(0, 0);
   const local = `${when.toISOString().slice(0, 16)}`;
   assert.equal((await touch(id, 'cumple', { decision_maker: 'quizas' })).status, 400, 'respuesta de perfil inválida');
@@ -75,7 +75,7 @@ test('perfil rápido, nota y acuerdo en el mismo toque; la última nota viaja co
 });
 
 test('postventa: fin de campaña al vender, referidos y renovación', async () => {
-  const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'llamada', phone: '5560000002', assigned_to: anaId } })).json.id;
+  const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'llamada', channel_id: 1, phone: '5560000002', assigned_to: anaId } })).json.id;
   await touch(id, 'cumple');
   await touch(id, 'cotizado', { quote_amount: 90000 });
   assert.equal((await touch(id, 'renovo')).status, 400, 'aún no está vendido');
@@ -108,7 +108,7 @@ test('etapas que se ven: nuevo, contactando, contestó y declinados con o sin pe
   assert.equal(F.stageOf({ status: 'declinado', profile: 'no_cumple' }), 'declinado_sin');
   assert.equal(F.stageOf({ status: 'cotizando' }), 'cotizando');
 
-  const mk = async (phone) => (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone, assigned_to: anaId } })).json.id;
+  const mk = async (phone) => (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', channel_id: 1, phone, assigned_to: anaId } })).json.id;
   const fresh = await mk('5561000001');
   const tried = await mk('5561000002'); await touch(tried, 'sin_respuesta');
   const answered = await mk('5561000003'); await touch(answered, 'conversacion');

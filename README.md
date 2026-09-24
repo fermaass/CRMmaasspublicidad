@@ -86,6 +86,15 @@ Al marcar un lead como **vendido** se puede capturar el **monto de venta** (opci
 
 Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola lista con campañas y canales orgánicos; si eliges una campaña, el canal se toma de la campaña.
 
+## Para marketing
+
+- Marketing entra directo al **Resumen → Marketing**. No tiene Mi día ni registra toques ni mueve etapas (eso es de ventas y ensuciaría sus números); desde la ficha solo corrige el origen, el producto y los datos de contacto, y puede dejar notas.
+- **Indicadores con comparación**: leads, % que cumple perfil, inversión, costo por lead, **costo por lead con perfil** (la señal temprana de calidad), costo por cierre, retorno y leads sin origen, cada uno contra el periodo anterior equivalente cuando se elige un periodo.
+- **Una sola tabla de campañas** con calidad, costo y retorno: leads, cumplen perfil, cotizados, cierres, inversión, costo por lead, por lead con perfil y por cierre, ventas, retorno, **días a cerrar** y **por qué se descartan**. La misma lectura por anuncio.
+- **Links para anuncios** en Configuración: se elige la campaña, dónde se publica y el nombre del anuncio, y la app arma el link con los UTM correctos.
+- **Audiencias "Para Meta / Google"**: el CSV trae teléfono internacional (+52…), correo y nombre separados para subirlo como público personalizado.
+- Al capturar un lead a mano, **"¿De dónde viene?" es obligatorio**: sin origen no se puede medir la inversión.
+
 ## Listas: productos y canales de percepción
 
 En **Configuración** (gerente y marketing) se administran los productos y los canales por los que el cliente se enteró de ustedes. En cada lead se eligen de una lista, y el Resumen muestra leads, perfil y ventas por producto y por canal. Quitar un elemento lo oculta de la lista pero los leads que ya lo tenían lo conservan.
@@ -102,7 +111,7 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 | Rol | Qué puede hacer |
 |---|---|
 | Gerente | Todo: leads, asignación, usuarios, exportar, eliminar leads |
-| Marketing | Ver y editar todos los leads, campañas y listas; exportar. Asigna solo si tiene el permiso Administra leads |
+| Marketing | Resumen de marketing, campañas, listas, links y audiencias; corrige el origen de los leads (no toques ni etapas). Asigna solo si tiene el permiso Administra leads |
 | Vendedor | Ver y trabajar solo los leads que le asignan; su propio Resumen de ventas (sin inversión ni datos de otros) |
 | Analista | Solo lectura de todo, resumen y exportar CSV |
 

@@ -118,7 +118,10 @@ function createApp({ db, config }) {
 
   app.patch('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const b = req.body || {};
-    if (b.auto_assign !== undefined) setSetting(db, 'auto_assign', b.auto_assign ? '1' : '0');
+    if (b.auto_assign !== undefined) {
+      if (!canAssign(req.user)) return res.status(403).json({ error: 'El reparto lo decide quien administra los leads' });
+      setSetting(db, 'auto_assign', b.auto_assign ? '1' : '0');
+    }
     if (b.wa_templates && typeof b.wa_templates === 'object') {
       const clean = Object.fromEntries(Object.keys(WA_TEMPLATES).filter((k) => typeof b.wa_templates[k] === 'string')
         .map((k) => [k, b.wa_templates[k].trim().slice(0, 1000)]));
@@ -302,10 +305,14 @@ function createApp({ db, config }) {
     return lead;
   }
 
+  // Avance de ventas (etapa, toques, montos): el gerente y el vendedor dueño del lead.
+  // Marketing no registra toques ni mueve etapas, para no ensuciar los números de ventas; solo corrige el origen y los datos de contacto.
   function canEdit(user, lead) {
-    if (EDITORS.includes(user.role)) return true;
+    if (user.role === 'gerente') return true;
     return user.role === 'vendedor' && lead.assigned_to === user.id;
   }
+  const canEditOrigin = (user) => EDITORS.includes(user.role);
+  const ORIGIN_FIELDS = ['campaign', 'channel_id', 'product_id', 'name', 'phone', 'email'];
 
   app.get('/api/leads', auth.requireUser, (req, res) => {
     const { sql, params } = leadFilters(req);
@@ -323,8 +330,19 @@ function createApp({ db, config }) {
       const s = v == null ? '' : String(v);
       return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const csv = [cols.map((c) => c[1]).join(','), ...rows.map((r) => cols.map(([k]) => esc(['status', 'profile'].includes(k) ? LABELS[r[k]] : r[k])).join(','))].join('\n');
-    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="leads.csv"' });
+    let csv;
+    if (req.query.format === 'ads') {
+      // Para subir como público a Meta o Google: teléfono internacional (+52…), correo y nombre separados.
+      const rowsAds = rows.map((r) => {
+        const n = FOLLOWUP.waNumber(r.phone);
+        const [fn, ...ln] = String(r.name || '').trim().split(/\s+/);
+        return [r.email ? r.email.toLowerCase() : '', n ? `+${n}` : '', fn || '', ln.join(' '), 'MX'];
+      }).filter((r) => r[0] || r[1]);
+      csv = [['email', 'phone', 'fn', 'ln', 'country'].join(','), ...rowsAds.map((r) => r.map(esc).join(','))].join('\n');
+    } else {
+      csv = [cols.map((c) => c[1]).join(','), ...rows.map((r) => cols.map(([k]) => esc(['status', 'profile'].includes(k) ? LABELS[r[k]] : r[k])).join(','))].join('\n');
+    }
+    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${req.query.format === 'ads' ? 'audiencia-anuncios' : 'leads'}.csv"` });
     res.send('﻿' + csv);
   });
 
@@ -333,13 +351,15 @@ function createApp({ db, config }) {
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const events = db.prepare(`SELECT e.*, u.name AS user_name FROM lead_events e
       LEFT JOIN users u ON u.id = e.user_id WHERE e.lead_id = ? ORDER BY e.id DESC`).all(lead.id);
-    res.json({ ...lead, events, can_edit: canEdit(req.user, lead) });
+    res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user) });
   });
 
   app.post('/api/leads', auth.requireRole('gerente', 'marketing', 'vendedor'), (req, res) => {
     const b = req.body || {};
     try {
       if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
+      // Sin origen no se puede medir qué inversión trajo el lead.
+      if (!b.campaign && !b.channel_id) return res.status(400).json({ error: 'Indica de dónde viene el lead' });
       // Quien administra los leads elige al capturarlo quién le da seguimiento.
       let seller = null;
       if (b.assigned_to && canAssign(req.user)) {
@@ -408,8 +428,12 @@ function createApp({ db, config }) {
   app.patch('/api/leads/:id', auth.requireUser, (req, res) => {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
-    if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
-    const err = updateLead(req.user, lead, req.body || {});
+    let body = req.body || {};
+    if (!canEdit(req.user, lead)) {
+      if (!canEditOrigin(req.user)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
+      body = Object.fromEntries(Object.entries(body).filter(([k]) => ORIGIN_FIELDS.includes(k)));
+    }
+    const err = updateLead(req.user, lead, body);
     if (err) return res.status(err.status).json({ error: err.error });
     res.json({ ok: true });
   });
@@ -618,7 +642,7 @@ function createApp({ db, config }) {
   app.post('/api/leads/:id/notes', auth.requireUser, (req, res) => {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
-    if (!canEdit(req.user, lead)) return res.status(403).json({ error: 'No tienes permiso' });
+    if (!canEdit(req.user, lead) && !canEditOrigin(req.user)) return res.status(403).json({ error: 'No tienes permiso' });
     const content = String(req.body?.content || '').trim();
     if (!content) return res.status(400).json({ error: 'La nota está vacía' });
     addEvent(db, lead.id, req.user.id, 'nota', content.slice(0, 5000));
@@ -661,7 +685,9 @@ function createApp({ db, config }) {
       COALESCE(SUM(l.status = 'declinado'), 0) AS declinados,
       COALESCE(SUM(l.sale_amount), 0) AS ingresos,
       COALESCE(SUM(CASE WHEN l.status = 'cotizando' THEN l.quote_amount END), 0) AS en_cotizacion,
-      COALESCE(SUM(l.status = 'cotizando'), 0) AS cotizando_ahora`;
+      COALESCE(SUM(l.status = 'cotizando'), 0) AS cotizando_ahora,
+      AVG(CASE WHEN l.won_at IS NOT NULL THEN julianday(l.won_at) - julianday(l.created_at) END) AS dias_cierre,
+      COALESCE(SUM(l.campaign IS NULL AND ${CHANNEL_EXPR} IS NULL), 0) AS sin_origen`;
     const funnel = db.prepare(`SELECT ${funnelCols} FROM leads l ${sql}`).get(...params);
     // Por campaña, con su inversión para sacar costo por lead, por cotización y por cierre.
     const campaignFunnel = db.prepare(`SELECT COALESCE(l.campaign, 'Sin campaña') AS key, MAX(cp.id) AS campaign_id, ${funnelCols}
@@ -708,6 +734,18 @@ function createApp({ db, config }) {
       speed: db.prepare(`SELECT AVG((julianday(l.first_touch_at) - julianday(l.created_at)) * 24) AS h FROM leads l
         ${where('l.first_touch_at IS NOT NULL')}`).get(...params).h,
     };
+    // Por qué se descartan los leads de cada campaña y de cada anuncio (retroalimentación de calidad para marketing).
+    const reasonsBy = (keyExpr) => {
+      const m = {};
+      db.prepare(`SELECT ${keyExpr} AS key, COALESCE(l.decline_reason, 'Sin motivo') AS reason, COUNT(*) AS n FROM leads l
+        ${where("l.status = 'declinado'")} GROUP BY 1, 2 ORDER BY n DESC`).all(...params)
+        .forEach((r) => { (m[r.key] ||= []).push({ key: r.reason, n: r.n }); });
+      return m;
+    };
+    const campReasons = reasonsBy("COALESCE(l.campaign, 'Sin campaña')");
+    campaignFunnel.forEach((r) => { r.descartes = campReasons[r.key] || []; });
+    const adReasons = reasonsBy('l.utm_content');
+    adFunnel.forEach((r) => { r.descartes = adReasons[r.key] || []; });
     sellerFunnel.forEach((r) => { r.toques_vencidos = touches.overdueBySeller[r.id ?? 'none'] || 0; });
     // Audiencias para remarketing con los filtros actuales (los que nunca contestaron no se incluyen).
     const audiences = Object.fromEntries(Object.entries(AUDIENCES).map(([k, [cond, extra]]) => [k,

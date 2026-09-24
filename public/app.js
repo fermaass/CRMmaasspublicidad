@@ -161,8 +161,8 @@ async function start() {
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
   fillFilters();
-  // El vendedor arranca en su lista de pendientes; el analista, en el Resumen.
-  setView(state.view || (state.me.role === 'analista' ? 'stats' : 'today'));
+  // Vendedor y gerente arrancan en sus pendientes; marketing y analista, en el Resumen.
+  setView(state.view || (['analista', 'marketing'].includes(state.me.role) ? 'stats' : 'today'));
 }
 
 function fillFilters() {
@@ -182,10 +182,10 @@ function fillFilters() {
 }
 
 // "¿De dónde viene?": una sola lista con las campañas activas y los canales orgánicos.
-function originOptions(campaign, channelId) {
+function originOptions(campaign, channelId, emptyLabel = 'Sin dato') {
   const camps = state.catalog.campana.filter((c) => c.active || c.name === campaign);
   const chans = state.catalog.canal.filter((c) => c.active || c.id === channelId);
-  return `<option value="">Sin dato</option>
+  return `<option value="">${esc(emptyLabel)}</option>
     ${camps.length ? `<optgroup label="Campañas">${camps.map((c) => `<option value="camp:${esc(c.name)}" ${c.name === campaign ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
     <optgroup label="Sin campaña (orgánico)">${chans.map((c) => `<option value="chan:${c.id}" ${!campaign && c.id === channelId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`;
 }
@@ -325,7 +325,8 @@ function timeAgo(iso) {
 }
 
 function canEditLead(l) {
-  return can('gerente', 'marketing') || (state.me.role === 'vendedor' && l.assigned_to === state.me.id);
+  // Avance de ventas: gerente y el vendedor dueño. Marketing solo corrige el origen desde la ficha.
+  return can('gerente') || (state.me.role === 'vendedor' && l.assigned_to === state.me.id);
 }
 
 // ---------- Toques, cadencia y pendientes ----------
@@ -594,8 +595,44 @@ async function changeStatus(lead, status) {
   refresh();
 }
 
+// Mismo periodo anterior para comparar (mismos filtros). null si no hay periodo elegido.
+function prevPeriodQuery() {
+  const period = $('#f-period').value;
+  if (!period) return null;
+  const p = new URLSearchParams(filterQuery());
+  const d = new Date(); const now = Date.now();
+  const first = (y, m) => new Date(y, m, 1);
+  let from; let to; let text;
+  if (period === 'mes') { from = first(d.getFullYear(), d.getMonth() - 1); to = new Date(from.getTime() + (now - first(d.getFullYear(), d.getMonth()).getTime())); text = 'vs mismo corte del mes anterior'; }
+  if (period === 'mes_pasado') { from = first(d.getFullYear(), d.getMonth() - 2); to = first(d.getFullYear(), d.getMonth() - 1); text = 'vs el mes previo'; }
+  if (period === '30' || period === '90') { to = new Date(now - Number(period) * 86400e3); from = new Date(to.getTime() - Number(period) * 86400e3); text = `vs ${period} días anteriores`; }
+  if (period === 'anio') { from = first(d.getFullYear() - 1, 0); to = new Date(from.getTime() + (now - first(d.getFullYear(), 0).getTime())); text = 'vs mismo corte del año pasado'; }
+  p.set('from', from.toISOString()); p.set('to', to.toISOString());
+  return { query: p.toString(), text };
+}
+
+// Números de marketing de un periodo: costos sobre las campañas con inversión.
+function marketingMetrics(st) {
+  const f = st.funnel;
+  const paid = st.campaignFunnel.filter((r) => r.inversion > 0);
+  const inv = paid.reduce((t, r) => t + r.inversion, 0);
+  const sum = (k) => paid.reduce((t, r) => t + (r[k] || 0), 0);
+  const per = (k) => (inv && sum(k) ? inv / sum(k) : null);
+  return { leads: f.recibidos, perfil: f.recibidos ? (f.perfilados / f.recibidos) * 100 : null, inv: inv || null, paid: paid.length,
+    cpl: per('recibidos'), cplq: per('perfilados'), cpc: per('cerrados'), roas: inv && sum('ingresos') ? sum('ingresos') / inv : null, sinOrigen: f.sin_origen || 0 };
+}
+// Flecha contra el periodo anterior. lowerIsBetter para costos; points para porcentajes.
+function delta(cur, old, text, { lowerIsBetter = false, points = false, neutral = false } = {}) {
+  if (cur == null || old == null || (!points && !old)) return '';
+  const diff = points ? cur - old : ((cur - old) / old) * 100;
+  if (Math.abs(diff) < 0.5) return `<div class="delta">= ${text}</div>`;
+  const good = lowerIsBetter ? diff < 0 : diff > 0;
+  return `<div class="delta ${neutral ? '' : good ? 'good' : 'bad'}">${diff > 0 ? '↑' : '↓'} ${Math.abs(Math.round(diff))}${points ? ' pts' : '%'} ${text}</div>`;
+}
+
 async function renderStats() {
-  const s = await api(`/api/stats?${filterQuery()}`);
+  const prevQ = state.me.role !== 'vendedor' && (state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas')) === 'marketing' ? prevPeriodQuery() : null;
+  const [s, prev] = await Promise.all([api(`/api/stats?${filterQuery()}`), prevQ ? api(`/api/stats?${prevQ.query}`) : null]);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const stages = state.meta.stages.map((k) => ({ key: k, n: n(s.byStage, k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
@@ -643,32 +680,31 @@ async function renderStats() {
     ${seller ? `<div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>`
       : `<div class="card chart-card span-6">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`}`;
   } else {
-    const paid = s.campaignFunnel.filter((r) => r.inversion > 0);
-    const inv = paid.reduce((t, r) => t + r.inversion, 0);
-    const sum = (k) => paid.reduce((t, r) => t + (r[k] || 0), 0);
-    const perOrDash = (k) => (inv && sum(k) ? money(inv / sum(k)) : '—');
-    body = `<div class="kpis" style="--cols:3">
-      ${kpi('inbox', 'Leads', f.recibidos, 'con los filtros actuales', 'var(--f-recibidos)')}
-      ${kpi('userCheck', 'Cumplen perfil', pct(f.perfilados, f.recibidos), `${f.perfilados} de ${f.recibidos} leads`, 'var(--cumple)', '%')}
-      ${textKpi('money', 'Inversión', inv ? money(inv) : '—', inv ? `${paid.length} ${paid.length === 1 ? 'campaña' : 'campañas'} con inversión` : 'captúrala en Configuración', 'var(--llamada)')}
-      ${textKpi('inbox', 'Costo por lead', perOrDash('recibidos'), 'de las campañas con inversión', 'var(--f-recibidos)')}
-      ${textKpi('check', 'Costo por cierre', perOrDash('cerrados'), 'de las campañas con inversión', 'var(--f-cerrados)')}
-      ${textKpi('trend', 'Retorno', inv && sum('ingresos') ? `${(sum('ingresos') / inv).toFixed(1)}x` : '—', 'ventas ÷ inversión', 'var(--accent)')}
+    const m = marketingMetrics(s); const o = prev ? marketingMetrics(prev) : null; const vs = prevQ?.text || '';
+    const d = (k, opts) => (o ? delta(m[k], o[k], vs, opts) : '');
+    const moneyOr = (v) => (v == null ? '—' : money(v));
+    body = `<div class="kpis" style="--cols:4">
+      ${textKpi('inbox', 'Leads', String(m.leads), 'con los filtros actuales', 'var(--f-recibidos)', d('leads'))}
+      ${textKpi('userCheck', 'Cumplen perfil', m.perfil == null ? '—' : `${Math.round(m.perfil)}%`, `${f.perfilados} de ${f.recibidos} leads`, 'var(--cumple)', d('perfil', { points: true }))}
+      ${textKpi('money', 'Inversión', moneyOr(m.inv), m.inv ? `${m.paid} ${m.paid === 1 ? 'campaña' : 'campañas'} con inversión` : 'captúrala en Configuración', 'var(--llamada)', d('inv', { neutral: true }))}
+      ${textKpi('inbox', 'Costo por lead', moneyOr(m.cpl), 'de las campañas con inversión', 'var(--f-recibidos)', d('cpl', { lowerIsBetter: true }))}
+      ${textKpi('userCheck', 'Costo por lead con perfil', moneyOr(m.cplq), 'la señal temprana de calidad', 'var(--nuevo_perfil)', d('cplq', { lowerIsBetter: true }))}
+      ${textKpi('check', 'Costo por cierre', moneyOr(m.cpc), 'de las campañas con inversión', 'var(--f-cerrados)', d('cpc', { lowerIsBetter: true }))}
+      ${textKpi('trend', 'Retorno', m.roas == null ? '—' : `${m.roas.toFixed(1)}x`, 'ventas ÷ inversión', 'var(--accent)', d('roas'))}
+      ${textKpi('target', 'Leads sin origen', String(m.sinOrigen), m.sinOrigen ? `${pct(m.sinOrigen, m.leads)}%: inversión que no se puede medir` : 'todos tienen origen', m.sinOrigen ? 'var(--declinado)' : 'var(--cumple)')}
     </div>
-    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Conversión por campaña', 'de dónde salen los cierres')}${campaignTable(s.campaignFunnel)}</div>
-    <div class="card chart-card">${cardTitle('target', 'var(--nuevo_perfil)', 'Audiencias para remarketing', 'con los filtros de arriba; se descargan en CSV')}${audienceCards(s.audiences)}</div>
-    <div class="card chart-card">${cardTitle('money', 'var(--f-cerrados)', 'Eficiencia de campañas', 'cuánto cuesta y cuánto regresa cada una')}${campaignEfficiency(s.campaignFunnel)}</div>
-    <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Por anuncio', 'qué anuncio trae leads que cierran (utm_content)')}${adTable(s.adFunnel)}</div>
+    ${!prevQ ? '<p class="muted small-note stats-hint">Elige un periodo arriba (por ejemplo "Este mes") para comparar contra el periodo anterior.</p>' : ''}
+    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Campañas', 'calidad, costo y retorno de cada una')}${campaignTable(s.campaignFunnel)}</div>
+    <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Por anuncio', 'qué anuncio trae leads que cumplen perfil y cierran (utm_content)')}${adTable(s.adFunnel)}</div>
+    <div class="card chart-card">${cardTitle('target', 'var(--nuevo_perfil)', 'Audiencias para remarketing', 'con los filtros de arriba')}${audienceCards(s.audiences)}</div>
     <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
-    <div class="card chart-card span-4">${cardTitle('pie', 'var(--formulario)', 'Por dónde escribieron')}${donut(sources, s.total)}</div>
-    <div class="card chart-card span-6">${cardTitle('radio', 'var(--whatsapp)', '¿De dónde vienen?', 'canal, incluido el de cada campaña')}${categoryBars(s.byChannel)}</div>
+    <div class="card chart-card span-4">${cardTitle('radio', 'var(--whatsapp)', '¿De dónde vienen?', 'canal, incluido el de cada campaña')}${categoryBars(s.byChannel)}</div>
     <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
-    <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Perfil', 'se conserva aunque el lead se decline')}${battery(profiles, s.total, true)}${legend(profiles, s.total)}</div>
     <div class="card chart-card span-6">${cardTitle('layers', 'var(--whatsapp)', 'Por canal', 'etapa de cada lead')}${stageRows(s.channelStages)}</div>`;
   }
   $('#view-stats').innerHTML = `<div class="dash">${tabs}${insightBanner(s)}${body}</div>`;
   $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
-    exportCsv(`${filterQuery()}&audience=${b.dataset.audience}`);
+    exportCsv(`${filterQuery()}&audience=${b.dataset.audience}${b.dataset.format ? `&format=${b.dataset.format}` : ''}`);
   }));
   $('#view-stats').querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
     state.statsTab = b.dataset.tab; pref.set('statsTab', b.dataset.tab); renderStats();
@@ -685,27 +721,40 @@ const AUDIENCES = [
 function audienceCards(a) {
   return `<div class="audience-grid">${AUDIENCES.map(([k, title, help]) => `<div class="audience">
       <div class="value num">${a[k]}</div><strong>${title}</strong><p class="muted">${help}</p>
-      <button type="button" class="ghost small" data-audience="${k}" ${a[k] ? '' : 'disabled'}>Descargar CSV</button></div>`).join('')}</div>
-    <p class="muted small-note">Los que nunca contestaron no entran en ninguna audiencia.</p>`;
+      <div class="audience-actions">
+        <button type="button" class="ghost small" data-audience="${k}" ${a[k] ? '' : 'disabled'}>Lista completa</button>
+        <button type="button" class="ghost small" data-audience="${k}" data-format="ads" ${a[k] ? '' : 'disabled'} title="Teléfono con +52, correo y nombre separados, para subir como público">Para Meta / Google</button>
+      </div></div>`).join('')}</div>
+    <p class="muted small-note">Los que nunca contestaron no entran en ninguna audiencia. "Para Meta / Google" trae teléfono internacional (+52…), correo y nombre separados,
+      para subirla como público personalizado o para excluir a quienes ya son clientes.</p>`;
 }
 
 // KPI con texto ya formateado (dinero, tiempo), sin animación de conteo.
-function textKpi(ico, title, value, sub, color) {
+function textKpi(ico, title, value, sub, color, extra = '') {
   return `<div class="kpi-tile" style="--c:${color}"><span class="kpi-ico">${icon(ico, 24)}</span>
-    <div><div class="value money">${esc(value)}</div><div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
+    <div><div class="value money">${esc(value)}</div><div class="label">${esc(title)}</div><div class="sub">${esc(sub)}</div>${extra}</div></div>`;
 }
+
+// Motivo principal por el que se descartan los leads de una campaña o anuncio (el resto, al pasar el mouse).
+function discardCell(r) {
+  if (!r.descartes?.length) return '<td class="muted">—</td>';
+  const total = r.descartes.reduce((t, x) => t + x.n, 0);
+  const top = r.descartes[0];
+  return `<td><span class="discard" data-tip="${esc(r.descartes.map((x) => `${x.key}: ${x.n}`).join('\n'))}">${esc(top.key)} <b>${pctOf(top.n, total)}%</b></span></td>`;
+}
+const daysCell = (v) => { const d = v == null ? null : Math.max(1, Math.round(v)); return `<td class="num">${d == null ? '—' : `${d} ${d === 1 ? 'día' : 'días'}`}</td>`; };
 
 function adTable(rows) {
   if (!rows.length) {
-    return `<p class="muted">Todavía no llegan leads con anuncio identificado. En cada anuncio pon el link de tu página con
-      <code>?utm_campaign=…&amp;utm_content=nombre-del-anuncio</code>; el formulario de Configuración ya lo lee solo.</p>`;
+    return `<p class="muted">Todavía no llegan leads con anuncio identificado. Arma los links de tus anuncios en
+      <strong>Configuración → Links para anuncios</strong> y aquí verás qué anuncio trae leads que cumplen perfil.</p>`;
   }
   return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Anuncio</th><th>Campaña</th><th>Recibidos</th><th>Perfilados</th><th>Cotizados</th><th>Cerrados</th><th>Ventas</th>
+    <th>Anuncio</th><th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Cotizados</th><th>Cierres</th><th>Ventas</th><th>Días a cerrar</th><th>Por qué se descartan</th>
   </tr></thead><tbody>${rows.map((r) => `<tr>
       <td><strong>${esc(r.key)}</strong></td><td class="muted">${esc((r.campaign || '—').split(',').join(', '))}</td><td class="num"><b>${r.recibidos}</b></td>
       ${rateCell(r.perfilados, r.recibidos, 'perfilados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
-      <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td></tr>`).join('')}</tbody></table></div>`;
+      <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td>${daysCell(r.dias_cierre)}${discardCell(r)}</tr>`).join('')}</tbody></table></div>`;
 }
 
 // Aviso con degradado: la lectura rápida del periodo (dónde se pierden los leads, qué campaña y quién cierran más).
@@ -794,57 +843,42 @@ function sellerTable(rows) {
   <p class="muted small-note">Los porcentajes son sobre lo que recibe cada vendedor. Los tiempos se miden desde que llega el lead: "Primer toque" es cuánto tardó el vendedor en intentar el contacto (más de un día se marca en rojo) y "Hasta que contestan", cuánto tardó el cliente en responder.</p>`;
 }
 
+// Una sola tabla por campaña: calidad del lead, costo y retorno. Con ventas manda el retorno; sin ventas, el costo por lead con perfil.
 function campaignTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
-  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Campaña</th><th>Recibidos</th><th>Contestaron</th><th>Perfilados</th><th>Cotizados</th><th>Cerrados</th><th>Conversión</th>
-  </tr></thead><tbody>${rows.map((r) => `<tr>
-      <td><strong>${esc(r.key)}</strong></td><td class="num"><b>${r.recibidos}</b></td>
-      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.perfilados, r.recibidos, 'perfilados')}
-      ${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
-      <td><span class="conv">${pctOf(r.cerrados, r.recibidos)}%</span></td></tr>`).join('')}</tbody></table></div>`;
-}
-
-// Costo por lead, por cotización y por cierre, y retorno (ventas ÷ inversión). Menor costo = más eficiente.
-function campaignEfficiency(rows) {
-  const withBudget = rows.filter((r) => r.inversion > 0);
-  if (!withBudget.length) {
-    if (rows.some((r) => r.falta_inversion_mes)) {
-      return `<p class="muted">Las campañas solo tienen inversión total y el filtro es por periodo. Captura la inversión de cada mes en
-        <strong>Configuración → Campañas</strong>, o elige "Todo el tiempo".</p>`;
-    }
-    return `<p class="muted">Todavía no hay inversión capturada. En <strong>Configuración → Campañas</strong> marketing pone cuánto se invirtió en cada una
-      y aquí aparece el costo por lead, por cotización y por cierre.</p>`;
-  }
-  const per = (r, k) => (r[k] ? r.inversion / r[k] : null);
-  // Si hay ventas capturadas manda el retorno (ventas ÷ inversión); si no, el costo por cierre más bajo.
-  const roasOf = (r) => (r.ingresos ? r.ingresos / r.inversion : null);
-  const bySales = withBudget.some((r) => r.ingresos);
-  const ranked = [...withBudget].sort((a, b) => (bySales
-    ? (roasOf(b) ?? -1) - (roasOf(a) ?? -1)
-    : (per(a, 'cerrados') ?? Infinity) - (per(b, 'cerrados') ?? Infinity)));
-  const best = ranked.find((r) => (bySales ? r.ingresos : r.cerrados));
-  const maxCpl = Math.max(...withBudget.map((r) => per(r, 'recibidos') || 0));
+  const per = (r, k) => (r.inversion > 0 && r[k] ? r.inversion / r[k] : null);
+  const roasOf = (r) => (r.inversion > 0 && r.ingresos ? r.ingresos / r.inversion : null);
+  const paid = rows.filter((r) => r.inversion > 0);
+  const bySales = paid.some((r) => r.ingresos);
+  const ranked = [...paid].sort((a, b) => (bySales ? (roasOf(b) ?? -1) - (roasOf(a) ?? -1) : (per(a, 'perfilados') ?? Infinity) - (per(b, 'perfilados') ?? Infinity)));
+  const best = ranked.find((r) => (bySales ? r.ingresos : r.perfilados));
+  const order = [...ranked, ...rows.filter((r) => !(r.inversion > 0))];
   const missing = rows.filter((r) => r.falta_inversion_mes).map((r) => r.key);
-  const periodNote = missing.length ? `<p class="muted small-note">Sin inversión por mes en ${missing.map(esc).join(', ')}: solo tienen el total, que no se puede repartir por periodo.
-    Captura la inversión de cada mes en Configuración → Campañas, o usa "Todo el tiempo".</p>` : '';
-  return `<div class="table-wrap"><table class="funnel-table"><thead><tr>
-    <th>Campaña</th><th>Inversión</th><th>Costo por lead</th><th>Costo por cotización</th><th>Costo por cierre</th><th>Ventas</th><th>Retorno</th>
-  </tr></thead><tbody>${ranked.map((r) => {
+  const note = !paid.length
+    ? (missing.length ? '<p class="muted small-note">Las campañas solo tienen inversión total y el filtro es por periodo: captura la inversión de cada mes en Configuración → Campañas, o elige "Todo el tiempo".</p>'
+      : '<p class="muted small-note">Captura la inversión de cada campaña en Configuración → Campañas para ver costos y retorno.</p>')
+    : missing.length ? `<p class="muted small-note">Sin inversión por mes en ${missing.map(esc).join(', ')}: solo tienen el total, que no se puede repartir por periodo.</p>` : '';
+  return `<div class="table-wrap"><table class="funnel-table campaigns-table"><thead><tr>
+    <th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Cotizados</th><th>Cierres</th><th>Inversión</th><th>Costo por lead</th>
+    <th>Por lead con perfil</th><th>Por cierre</th><th>Ventas</th><th>Retorno</th><th>Días a cerrar</th><th>Por qué se descartan</th>
+  </tr></thead><tbody>${order.map((r) => {
     const roas = roasOf(r);
-    const cpl = per(r, 'recibidos');
     return `<tr>
       <td><strong>${esc(r.key)}</strong>${r === best ? ' <span class="conv top">más eficiente</span>' : ''}</td>
-      <td class="num">${money(r.inversion)}</td>
-      <td class="rate"><div class="num">${money(cpl)}</div><div class="mini"><i style="--w:${maxCpl ? (cpl / maxCpl) * 100 : 0}%; --c:var(--f-recibidos)"></i></div></td>
-      <td class="num">${money(per(r, 'cotizados'))}</td>
-      <td class="num"><b>${r.cerrados ? money(per(r, 'cerrados')) : 'sin cierres'}</b></td>
+      <td class="num"><b>${r.recibidos}</b></td>
+      ${rateCell(r.perfilados, r.recibidos, 'perfilados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      <td class="num">${r.inversion > 0 ? money(r.inversion) : '—'}</td>
+      <td class="num">${money(per(r, 'recibidos'))}</td>
+      <td class="num"><b>${money(per(r, 'perfilados'))}</b></td>
+      <td class="num">${r.inversion > 0 ? (r.cerrados ? money(per(r, 'cerrados')) : 'sin cierres') : '—'}</td>
       <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td>
       <td>${roas == null ? '—' : `<span class="conv ${roas >= 1 ? 'good' : 'bad'}" data-tip="${esc(`Por cada $1 invertido regresaron $${roas.toFixed(2)}`)}">${roas.toFixed(1)}x</span>`}</td>
+      ${daysCell(r.dias_cierre)}${discardCell(r)}
     </tr>`;
   }).join('')}</tbody></table></div>
-  <p class="muted small-note">Retorno = ventas ÷ inversión: 3x significa que por cada peso invertido se vendieron tres. Las ventas se toman del monto capturado al marcar un lead como vendido.</p>
-  ${periodNote}`;
+  <p class="muted small-note">"Por lead con perfil" es la señal temprana: los cierres tardan semanas, pero en días ya se sabe si una campaña trae leads que sí cumplen.
+    "Días a cerrar" ayuda a no juzgar una campaña antes de tiempo. Retorno = ventas ÷ inversión. Cada venta cuenta en la campaña y el periodo en que llegó el lead.</p>
+  ${note}`;
 }
 
 // Barras por número de toque (T1…T5, 6+), con el acumulado: "con 3 toques ya respondió el 80%".
@@ -1082,6 +1116,7 @@ ${tt.user_name}` : ''}`)}">
 async function openLead(id) {
   const [l, touches] = await Promise.all([api(`/api/leads/${id}`), api(`/api/leads/${id}/touches`)]);
   const ro = l.can_edit ? '' : 'disabled';
+  const roOrigin = l.can_edit_origin ? '' : 'disabled';
   const sellers = state.users.filter((u) => (u.active && u.role === 'vendedor') || u.id === l.assigned_to);
 
   const adLine = [l.utm_content && `Anuncio: ${l.utm_content}`, l.utm_source && [l.utm_source, l.utm_medium].filter(Boolean).join(' / ')].filter(Boolean).join(' · ');
@@ -1110,20 +1145,20 @@ async function openLead(id) {
     ${touchesPanel(l, touches)}
     ${l.message ? `<p class="card message">${esc(l.message)}</p>` : ''}
 
-    ${l.can_edit ? `<form id="note-form" class="note-form"><textarea name="content" placeholder="Agregar nota (qué platicaron, acuerdos, siguiente paso)"></textarea>
+    ${l.can_edit_origin ? `<form id="note-form" class="note-form"><textarea name="content" placeholder="Agregar nota (qué platicaron, acuerdos, siguiente paso)"></textarea>
       <div class="actions"><button type="submit" class="small">Agregar nota</button></div></form>` : ''}
 
     <details class="lead-data">
       <summary>Datos del lead</summary>
       <form id="lead-form">
         <div class="row">
-          <label>Nombre <input name="name" value="${esc(l.name)}" ${ro}></label>
-          <label>Teléfono <input name="phone" value="${esc(l.phone)}" ${ro}></label>
+          <label>Nombre <input name="name" value="${esc(l.name)}" ${roOrigin}></label>
+          <label>Teléfono <input name="phone" value="${esc(l.phone)}" ${roOrigin}></label>
         </div>
-        <label>Email <input name="email" value="${esc(l.email)}" ${ro}></label>
+        <label>Email <input name="email" value="${esc(l.email)}" ${roOrigin}></label>
         <div class="row">
-          <label>¿De dónde viene? <select name="origin" ${ro}>${originOptions(l.campaign, l.channel_id)}</select></label>
-          <label>Producto <select name="product_id" ${ro}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
+          <label>¿De dónde viene? <select name="origin" ${roOrigin}>${originOptions(l.campaign, l.channel_id)}</select></label>
+          <label>Producto <select name="product_id" ${roOrigin}>${catalogOptions('producto', l.product_id, 'Sin producto')}</select></label>
         </div>
         <label>Vendedor
           <select name="assigned_to" ${canAssign() ? '' : 'disabled'}>
@@ -1148,10 +1183,11 @@ async function openLead(id) {
             .map((r) => `<option ${r === l.decline_reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
           <label>Volver a contactar el <input type="date" name="recontact_at" value="${esc(l.recontact_at || '')}" ${ro}></label>
         </div>
-        <p class="muted small-note">La etapa normalmente se mueve sola con los toques; cámbiala aquí solo para corregir.</p>
+        <p class="muted small-note">${l.can_edit ? 'La etapa normalmente se mueve sola con los toques; cámbiala aquí solo para corregir.'
+          : l.can_edit_origin ? 'Desde marketing se corrigen el origen, el producto y los datos de contacto; la etapa y los toques los lleva ventas.' : ''}</p>
         <p class="error" id="lead-error"></p>
         <div class="actions">
-          ${l.can_edit ? '<button type="submit">Guardar cambios</button>' : ''}
+          ${l.can_edit_origin ? '<button type="submit">Guardar cambios</button>' : ''}
           ${can('gerente') ? '<button type="button" class="danger" id="delete">Eliminar lead</button>' : ''}
         </div>
       </form>
@@ -1237,7 +1273,7 @@ async function openNewLead() {
       <fieldset class="plain"><legend>¿Por dónde escribió?</legend>
         <div class="seg-group">${state.meta.manualSources.map((src, i) => `<label class="seg"><input type="radio" name="source" value="${src}" ${i === 0 ? 'checked' : ''}><span>${esc(label(src))}</span></label>`).join('')}</div>
       </fieldset>
-      <label>¿De dónde viene? <select name="origin">${originOptions(null, null)}</select></label>
+      <label>¿De dónde viene? <select name="origin" required>${originOptions(null, null, 'Elige campaña o canal…')}</select></label>
       <label>Producto de interés <select name="product_id">${catalogOptions('producto', null, 'Sin definir')}</select></label>
       ${pick}
       <label>Mensaje / comentario <textarea name="message"></textarea></label>
@@ -1453,14 +1489,15 @@ async function renderSettings() {
 </script>`;
 
   $('#view-settings').innerHTML = `<div class="settings">
-    <div class="card">
+    ${canAssign() ? `<div class="card">
       ${cardTitle('users', 'var(--f-contactados)', 'Reparto de leads')}
       <label class="switch-row"><input type="checkbox" id="auto-assign" ${s.auto_assign ? 'checked' : ''}>
         <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
         <span class="muted">Apagado, quien gestiona el CRM asigna cada lead a mano desde <strong>Asignación</strong> o al capturarlo, con la sugerencia de a quién le toca.
         Encendido, cada lead que llega sin vendedor se asigna solo al que tiene menos leads en curso.</span></span></label>
-    </div>
+    </div>` : ''}
     ${campaignEditor()}
+    ${linkBuilder()}
     <div class="card">
       ${cardTitle('chat', 'var(--whatsapp)', 'Mensajes de WhatsApp')}
       <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
@@ -1542,7 +1579,8 @@ async function renderSettings() {
       renderSettings();
     } catch (err) { toast(err.message, 'error'); }
   });
-  $('#auto-assign').addEventListener('change', async (e) => {
+  wireLinkBuilder();
+  $('#auto-assign')?.addEventListener('change', async (e) => {
     try {
       await api('/api/settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
       toast(e.target.checked ? 'Asignación automática encendida' : 'Asignación manual', 'ok');
@@ -1572,6 +1610,49 @@ function monthKey(back) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 const monthName = (key) => new Date(`${key}-15T12:00:00`).toLocaleDateString('es-MX', { month: 'short', year: '2-digit' });
+
+// Links para anuncios: arma la URL con los UTM exactos para que la campaña y el anuncio lleguen bien escritos.
+const UTM_SOURCES = [['facebook', 'paid_social', 'Facebook'], ['instagram', 'paid_social', 'Instagram'], ['google', 'cpc', 'Google Ads'],
+  ['tiktok', 'paid_social', 'TikTok'], ['email', 'email', 'Correo'], ['otro', 'referral', 'Otro']];
+const slug = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+function linkBuilder() {
+  const camps = state.catalog.campana.filter((c) => c.active);
+  return `<div class="card">
+    ${cardTitle('megaphone', 'var(--llamada)', 'Links para anuncios')}
+    <p class="muted">Arma aquí el link de cada anuncio. Así la campaña y el anuncio llegan bien escritos y el Resumen los mide sin partirse en nombres parecidos.</p>
+    <form id="link-form" class="link-form" onsubmit="return false">
+      <label>Página a donde lleva el anuncio<input name="url" type="url" placeholder="https://tu-sitio.com/espectaculares" value="${esc(pref.get('landingUrl') || '')}"></label>
+      <div class="row">
+        <label>Campaña<select name="campaign">${camps.length ? camps.map((c) => `<option>${esc(c.name)}</option>`).join('') : '<option value="">Primero da de alta una campaña</option>'}</select></label>
+        <label>Dónde se publica<select name="source">${UTM_SOURCES.map(([v, , t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+      </div>
+      <label>Nombre del anuncio<input name="ad" maxlength="80" placeholder="Ej. video carretera, carrusel precios"></label>
+      <label>Link listo para pegar en el anuncio</label>
+      <div class="copy"><input readonly id="link-out" placeholder="Llena la página y la campaña"><button type="button" class="ghost" id="link-copy">Copiar</button></div>
+    </form>
+  </div>`;
+}
+function wireLinkBuilder() {
+  const f = $('#link-form'); if (!f) return;
+  const build = () => {
+    const url = f.url.value.trim();
+    pref.set('landingUrl', url);
+    if (!url || !f.campaign.value) { $('#link-out').value = ''; return; }
+    let u;
+    try { u = new URL(url); } catch { $('#link-out').value = 'Revisa la dirección de la página (debe empezar con https://)'; return; }
+    const src = UTM_SOURCES.find(([v]) => v === f.source.value);
+    u.searchParams.set('utm_campaign', f.campaign.value);
+    u.searchParams.set('utm_source', src[0]); u.searchParams.set('utm_medium', src[1]);
+    if (slug(f.ad.value)) u.searchParams.set('utm_content', slug(f.ad.value)); else u.searchParams.delete('utm_content');
+    $('#link-out').value = u.toString();
+  };
+  f.addEventListener('input', build); f.addEventListener('change', build); build();
+  $('#link-copy').addEventListener('click', async () => {
+    const v = $('#link-out').value; if (!v.startsWith('http')) return;
+    try { await navigator.clipboard.writeText(v); } catch { $('#link-out').select(); document.execCommand('copy'); }
+    toast('Link copiado', 'ok');
+  });
+}
 
 function campaignEditor() {
   const items = state.catalog.campana;
