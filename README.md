@@ -188,6 +188,15 @@ Con **+ Lead** se elige por dónde llegó (WhatsApp, llamada u otro) y se escrib
 
 Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Cumple perfil si ya estaba perfilado) y conserva su historial.
 
-## Respaldos
+## Respaldos y seguridad de los datos
 
-Toda la información vive en el archivo `crm.db` del volumen. En Railway activa los respaldos del volumen desde la pestaña del volumen.
+- **Todo o nada:** cada acción que guarda (un toque, una asignación, un lead del formulario) se guarda completa o no se guarda; nunca queda a medias.
+- **Escritura segura a disco:** la base usa el modo WAL con sincronización completa. Probado: con escrituras simultáneas y apagando el servidor de golpe, no se perdió ningún dato confirmado y la base quedó íntegra.
+- **Sin duplicados:** 300 formularios simultáneos de 100 personas dejan 100 leads. El doble clic o el reintento por mala conexión no registran un toque dos veces.
+- **Datos que no se pisan:** si alguien cambió un lead mientras otra persona tenía la ficha abierta, al guardar se avisa y se recarga en vez de borrar lo nuevo.
+- **Sin internet:** la app avisa claramente "no se guardó" y lo escrito (por ejemplo una nota) se queda en pantalla para reintentar.
+- **Respaldo automático diario** en la carpeta `respaldos` del volumen (se guardan los últimos 14), y en **Configuración → Respaldos y datos** el gerente descarga una copia completa cuando quiera. Recomendado: descargar una cada semana y guardarla fuera del servidor (computadora o Drive).
+- **Restaurar:** detén el servicio, reemplaza `crm.db` del volumen por el respaldo (y borra `crm.db-wal` y `crm.db-shm` si existen) y vuelve a arrancar.
+- **Aviso sin volumen:** si la app corre en Railway sin volumen, lo dice en los registros y le muestra al gerente un aviso en rojo, porque la base se borraría en la siguiente actualización.
+- Al actualizar, el servidor termina las peticiones en curso y cierra la base de forma ordenada. Al arrancar revisa la integridad de la base.
+- Además, en Railway activa los respaldos del volumen desde la pestaña del volumen.

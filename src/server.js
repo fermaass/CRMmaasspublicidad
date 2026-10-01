@@ -7,6 +7,9 @@ const {
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
+const { transactionalRoutes } = require('./tx');
+const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
+const fs = require('node:fs');
 
 const EDITORS = ['gerente', 'marketing'];
 // La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL.
@@ -44,11 +47,14 @@ const isDateTime = (v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v)) && !N
 
 function createApp({ db, config }) {
   ensureSettings(db, config);
-  const app = express();
+  const app = transactionalRoutes(express(), db);
   app.disable('x-powered-by');
   // Detrás del proxy HTTPS del hosting: así sabemos si la conexión es segura y la URL pública real.
   app.set('trust proxy', 1);
-  app.get('/health', (req, res) => res.send('ok'));
+  // Salud: confirma que la base responde (Railway reinicia el servicio si esto falla).
+  app.get('/health', (req, res) => {
+    try { db.prepare('SELECT 1').get(); res.send('ok'); } catch (err) { res.status(503).send(`base de datos sin respuesta: ${err.message}`); }
+  });
   app.use(express.json({ limit: '1mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -107,6 +113,23 @@ function createApp({ db, config }) {
     quickProfile: QUICK_PROFILE, stages: FOLLOWUP.STAGES, declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
+  // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
+  app.get('/api/system', auth.requireRole('gerente'), (req, res) => {
+    const file = config.dbPath;
+    const size = file && file !== ':memory:' && fs.existsSync(file) ? fs.statSync(file).size : null;
+    const backups = file && file !== ':memory:' ? listBackups(file) : [];
+    res.json({ storage_warning: Boolean(config.storageWarning), size, backups: backups.length, last_backup: backups.at(-1)?.file.slice(4, 14) || null,
+      leads: db.prepare('SELECT COUNT(*) AS n FROM leads').get().n });
+  });
+  // Descarga de un respaldo completo al momento, para guardarlo fuera del servidor.
+  app.get('/api/backup', auth.requireRole('gerente'), (req, res) => {
+    if (!config.dbPath || config.dbPath === ':memory:') return res.status(400).json({ error: 'No hay base de datos en disco' });
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    const tmp = path.join(backupDir(config.dbPath), `descarga-${Date.now()}.db`);
+    try { snapshot(db, tmp); } catch (err) { return res.status(500).json({ error: `No se pudo crear el respaldo: ${err.message}` }); }
+    res.download(tmp, `crm-respaldo-${stamp}.db`, () => fs.rm(tmp, { force: true }, () => {}));
+  });
+
   app.get('/api/settings', auth.requireRole(...EDITORS), (req, res) => {
     const base = `${req.protocol}://${req.get('host')}`;
     res.json({
@@ -326,7 +349,9 @@ function createApp({ db, config }) {
 
   app.get('/api/leads', auth.requireUser, (req, res) => {
     const { sql, params } = leadFilters(req);
-    res.json(db.prepare(`${leadSelect} ${sql} ORDER BY l.updated_at DESC LIMIT 2000`).all(...params));
+    // Lo que está en curso (o tiene algo pendiente) va primero, para que nunca quede fuera del límite por leads viejos cerrados.
+    res.json(db.prepare(`${leadSelect} ${sql} ORDER BY (l.status IN ('nuevo', 'nuevo_perfil', 'cotizando', 'vendido')
+      OR l.recontact_at IS NOT NULL) DESC, l.updated_at DESC LIMIT 5000`).all(...params));
   });
 
   app.get('/api/leads.csv', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
@@ -495,6 +520,10 @@ function createApp({ db, config }) {
     const lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     let body = req.body || {};
+    // Si la ficha se abrió antes de que alguien más cambiara el lead, no se pisa lo nuevo con datos viejos.
+    if (body.base_updated_at && body.base_updated_at !== lead.updated_at) {
+      return res.status(409).json({ error: 'Alguien más cambió este lead mientras lo tenías abierto. Se recargó con los datos nuevos; revisa y vuelve a guardar.', stale: true });
+    }
     if (!canEdit(req.user, lead)) {
       if (!canEditOrigin(req.user)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
       body = Object.fromEntries(Object.entries(body).filter(([k]) => ORIGIN_FIELDS.includes(k)));
@@ -638,6 +667,12 @@ function createApp({ db, config }) {
     if (!lead) return res.status(404).json({ error: 'No existe' });
     if (!canTouch(req.user, lead)) return res.status(403).json({ error: 'Los toques los registra el vendedor que atiende el lead' });
     const { channel, outcome } = req.body || {};
+    // Doble clic o reintento por mala conexión: el mismo request_id no registra el toque dos veces.
+    const requestId = req.body?.request_id ? String(req.body.request_id).slice(0, 80) : null;
+    if (requestId) {
+      const dup = db.prepare('SELECT n FROM lead_touches WHERE request_id = ?').get(requestId);
+      if (dup) return res.status(200).json({ ok: true, n: dup.n, duplicate: true, auto_declined: false });
+    }
     if (!TOUCH_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Indica por qué medio fue el toque' });
     const allowed = OUTCOMES_BY_STATUS[lead.status];
     if (!allowed) return res.status(409).json({ error: 'Este lead ya está cerrado; reábrelo para registrar más toques' });
@@ -683,8 +718,8 @@ function createApp({ db, config }) {
     if (autoDecline) Object.assign(changes, { status: 'declinado', decline_reason: neverAnswered ? NO_ANSWER : GHOSTED });
 
     const ts = now();
-    db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(lead.id, n, req.user.id, channel, outcome, ts);
+    db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(lead.id, n, req.user.id, channel, outcome, ts, requestId);
     db.prepare('UPDATE leads SET touch_count = ?, silent_streak = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
       .run(n, streak, ts, ts, ts, lead.id);
     addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
@@ -892,7 +927,10 @@ function seedAdmin(db, config) {
 }
 
 function loadConfig(env = process.env) {
+  const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
   return {
+    // En Railway sin volumen la base vive en el contenedor y se borra en cada actualización: hay que avisar.
+    storageWarning: onRailway && !env.RAILWAY_VOLUME_MOUNT_PATH && !env.DB_PATH,
     port: Number(env.PORT) || 3000,
     // En Railway el disco persistente se monta en RAILWAY_VOLUME_MOUNT_PATH; ahí va la base de datos.
     dbPath: env.DB_PATH || (env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(env.RAILWAY_VOLUME_MOUNT_PATH, 'crm.db')
@@ -913,7 +951,24 @@ if (require.main === module) {
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
     console.log('Primer uso: abre la app en el navegador para crear el usuario gerente.');
   }
-  createApp({ db, config }).listen(config.port, () => console.log(`CRM en http://localhost:${config.port}`));
+  const check = db.prepare('PRAGMA quick_check').get().quick_check;
+  if (check !== 'ok') console.error(`ATENCIÓN: la revisión de la base de datos encontró problemas: ${check}. Restaura el último respaldo.`);
+  if (config.storageWarning) {
+    console.error('ATENCIÓN: no hay volumen conectado. La base de datos se BORRARÁ en la próxima actualización. Agrega un volumen en Railway montado en /data.');
+  }
+  // Respaldo del día al arrancar y revisión cada 6 horas (solo crea uno por día; guarda los últimos 14).
+  const backup = () => { try { dailyBackup(db, config.dbPath); } catch (err) { console.error('No se pudo hacer el respaldo diario:', err.message); } };
+  backup();
+  const timer = setInterval(backup, 6 * 3600e3); timer.unref();
+  const server = createApp({ db, config }).listen(config.port, () => console.log(`CRM en http://localhost:${config.port}`));
+  // Apagado ordenado (Railway manda SIGTERM al actualizar): termina las peticiones en curso y cierra la base limpia.
+  const shutdown = (signal) => {
+    console.log(`${signal}: cerrando…`);
+    server.close(() => { try { db.close(); } catch { /* ya cerrada */ } process.exit(0); });
+    setTimeout(() => { try { db.close(); } catch { /* ya cerrada */ } process.exit(0); }, 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 module.exports = { createApp, seedAdmin, loadConfig };

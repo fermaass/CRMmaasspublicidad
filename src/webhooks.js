@@ -1,3 +1,4 @@
+const { transactionalRoutes } = require('./tx');
 const express = require('express');
 const { ingestLead, campaignName, autoAssign } = require('./leads');
 const { getSetting } = require('./db');
@@ -8,7 +9,7 @@ const pick = (body, ...keys) => {
 };
 
 function webhooksRouter(db) {
-  const router = express.Router();
+  const router = transactionalRoutes(express.Router(), db);
 
   // Formularios web, landing pages, Zapier/Make (Meta Lead Ads, Google Ads, etc.)
   router.options('/form', (req, res) => {

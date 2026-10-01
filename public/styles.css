@@ -506,3 +506,5 @@ button.chip-alert:hover { border-color: #e2445c; filter: none; box-shadow: none;
 .team > *, .assign > * { min-width: 0; }
 .operator-question { flex: 1 1 100%; margin: 0; } .operator-question legend { font-size: 13px; }
 .inline-check input { width: auto; margin: 0; }
+a.button-link { display: inline-block; background: var(--grad); color: #fff; border-radius: 10px; padding: 9px 16px; font-weight: 600; text-decoration: none; }
+.storage-warning { margin: 10px 16px 0; }

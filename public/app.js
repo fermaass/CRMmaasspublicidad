@@ -59,16 +59,30 @@ const pref = {
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    method: opts.method || 'GET',
-    headers: opts.body !== undefined || ['POST', 'PATCH'].includes(opts.method) ? { 'Content-Type': 'application/json' } : {},
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : (['POST', 'PATCH'].includes(opts.method) ? '{}' : undefined),
-  });
-  const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+  let res;
+  try {
+    res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: opts.body !== undefined || ['POST', 'PATCH'].includes(opts.method) ? { 'Content-Type': 'application/json' } : {},
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : (['POST', 'PATCH'].includes(opts.method) ? '{}' : undefined),
+    });
+  } catch {
+    // Sin internet o el servidor no respondió: se dice claro que NO se guardó, para que no se pierda el dato sin saberlo.
+    throw new Error(opts.method && opts.method !== 'GET'
+      ? 'Sin conexión: no se guardó. Revisa tu internet e intenta de nuevo.' : 'Sin conexión con el servidor. Revisa tu internet.');
+  }
+  let data = null;
+  try { data = res.headers.get('content-type')?.includes('json') ? await res.json() : null; } catch { /* respuesta incompleta */ }
   if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Sesión expirada'); }
   if (!res.ok) throw Object.assign(new Error(data?.error || `Error ${res.status}`), { data });
   return data;
 }
+
+// Cualquier error que no se haya atrapado se muestra (antes se perdía en silencio).
+window.addEventListener('unhandledrejection', (e) => { if (e.reason?.message) toast(e.reason.message, 'error'); });
+window.addEventListener('offline', () => toast('Sin internet: lo que registres no se guardará hasta que vuelva la conexión.', 'error'));
+window.addEventListener('online', () => { toast('Conexión de nuevo', 'ok'); if (state.me) refresh(); });
+const newRequestId = () => (window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 // ---------- Avisos y confirmaciones dentro de la página ----------
 function toast(message, kind = '') {
@@ -161,6 +175,14 @@ async function start() {
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
   fillFilters();
+  if (can('gerente')) {
+    api('/api/system').then((sys) => {
+      $('#storage-warning')?.remove();
+      if (sys.storage_warning) {
+        $('.topbar').insertAdjacentHTML('afterend', '<div id="storage-warning" class="decline-note storage-warning">Atención: la base de datos no está en un disco persistente y se borrará en la próxima actualización. Conecta un volumen en Railway (ver Configuración).</div>');
+      }
+    }).catch(() => {});
+  }
   // Cada rol arranca en lo suyo: vendedor en Mi día, gerente en Equipo hoy, operador en Asignación, marketing y analista en el Resumen.
   const home = { vendedor: 'today', gerente: 'team', operador: 'assign', marketing: 'stats', analista: 'stats' };
   setView(state.view || home[state.me.role] || 'board');
@@ -491,8 +513,16 @@ const moneyField = (name, text) => `<label>${text}<input name="${name}" inputmod
 const dateField = (name, text) => `<label>${text}<input type="date" name="${name}"></label>`;
 
 // Registra un toque (desde Mi día o la ficha) pidiendo en un solo paso lo que haga falta según el resultado.
+// Freno al doble clic: mientras un toque de un lead se está guardando, no se manda otro.
+const touchBusy = new Set();
 async function registerTouch(l, channel, outcome) {
-  const body = { channel, outcome };
+  if (touchBusy.has(l.id)) return false;
+  touchBusy.add(l.id);
+  try { return await registerTouchOnce(l, channel, outcome); } finally { touchBusy.delete(l.id); }
+}
+async function registerTouchOnce(l, channel, outcome) {
+  // Mismo identificador si se reintenta: el servidor no lo registra dos veces.
+  const body = { channel, outcome, request_id: newRequestId() };
   const forms = {
     cumple: ['Cumple perfil. Si puedes, responde (un toque cada una):', `${quickProfileFields(l)}${agreementFields()}`],
     conversacion: ['Contestó. ¿Qué quedaron?', agreementFields()],
@@ -1281,10 +1311,14 @@ async function openLead(id) {
       .map((k) => [k, form[k].value]));
     Object.assign(body, originToFields(form.origin.value));
     try {
+      body.base_updated_at = l.updated_at;
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body });
       openLead(l.id);
       refresh();
-    } catch (err) { $('#lead-error').textContent = err.message; }
+    } catch (err) {
+      if (err.data?.stale) { toast(err.message, 'error'); openLead(l.id); refresh(); return; }
+      $('#lead-error').textContent = err.message;
+    }
   });
   $('#delete')?.addEventListener('click', async () => {
     if (!await ask('¿Eliminar este lead y su historial? No se puede deshacer.', { okLabel: 'Eliminar', danger: true })) return;
@@ -1295,8 +1329,12 @@ async function openLead(id) {
     e.preventDefault();
     const content = e.target.content.value.trim();
     if (!content) return;
-    await api(`/api/leads/${l.id}/notes`, { method: 'POST', body: { content } });
-    openLead(l.id);
+    const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      await api(`/api/leads/${l.id}/notes`, { method: 'POST', body: { content } });
+      openLead(l.id);
+    } catch (err) { toast(err.message, 'error'); btn.disabled = false; } // la nota se queda escrita para reintentar
   });
 }
 
@@ -1605,7 +1643,17 @@ async function renderSettings() {
   })();
 </script>`;
 
+  const sys = can('gerente') ? await api('/api/system').catch(() => null) : null;
+  const kb = (b) => (b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
   $('#view-settings').innerHTML = `<div class="settings">
+    ${sys ? `<div class="card">
+      ${cardTitle('layers', 'var(--f-cerrados)', 'Respaldos y datos')}
+      ${sys.storage_warning ? '<p class="decline-note">La base de datos no está en un disco persistente: se borrará en la próxima actualización. En Railway agrega un volumen montado en /data.</p>' : ''}
+      <p class="muted">Se hace una copia completa de la base cada día y se guardan las últimas 14 en el servidor. Descarga una copia de vez en cuando (por ejemplo cada semana)
+        y guárdala en tu computadora o en Drive: así tus datos están a salvo aunque le pase algo al servidor.</p>
+      <p>${sys.leads} leads · base de ${kb(sys.size)} · ${sys.last_backup ? `último respaldo automático: ${shortDate(`${sys.last_backup}T12:00:00`)} (${sys.backups} guardados)` : 'aún sin respaldo automático'}</p>
+      <a class="button-link" href="/api/backup" download>Descargar respaldo completo</a>
+    </div>` : ''}
     ${campaignEditor()}
     ${linkBuilder()}
     <div class="card">

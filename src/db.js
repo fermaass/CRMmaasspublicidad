@@ -141,12 +141,16 @@ function openDb(dbPath) {
   // Bases creadas antes de existir las campañas: se rehace la tabla para aceptar el nuevo tipo.
   const catSql = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'catalog_items'").get().sql;
   if (!catSql.includes("'campana'")) {
-    db.exec(`PRAGMA foreign_keys = OFF;
-      ${catalogDDL('catalog_new')}
-      INSERT INTO catalog_new (id, kind, name, active) SELECT id, kind, name, active FROM catalog_items;
-      DROP TABLE catalog_items;
-      ALTER TABLE catalog_new RENAME TO catalog_items;
-      PRAGMA foreign_keys = ON;`);
+    // Todo o nada: si algo falla a la mitad, la tabla original queda intacta.
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec(`BEGIN;
+        ${catalogDDL('catalog_new')}
+        INSERT INTO catalog_new (id, kind, name, active) SELECT id, kind, name, active FROM catalog_items;
+        DROP TABLE catalog_items;
+        ALTER TABLE catalog_new RENAME TO catalog_items;
+        COMMIT;`);
+    } catch (err) { try { db.exec('ROLLBACK'); } catch { /* sin transacción abierta */ } throw err; } finally { db.exec('PRAGMA foreign_keys = ON'); }
   }
 
   // Quién administra los leads (los asigna a vendedores). El gerente siempre puede; a los demás se les da este permiso.
@@ -155,13 +159,16 @@ function openDb(dbPath) {
   }
   // Bases creadas antes del rol Operador: se rehace la tabla de usuarios para aceptarlo (conserva ids y datos).
   if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'users'").get().sql.includes("'operador'")) {
-    db.exec(`PRAGMA foreign_keys = OFF;
-      ${usersDDL('users_new')}
-      INSERT INTO users_new (id, name, email, password_hash, role, active, created_at, can_assign)
-        SELECT id, name, email, password_hash, role, active, created_at, can_assign FROM users;
-      DROP TABLE users;
-      ALTER TABLE users_new RENAME TO users;
-      PRAGMA foreign_keys = ON;`);
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec(`BEGIN;
+        ${usersDDL('users_new')}
+        INSERT INTO users_new (id, name, email, password_hash, role, active, created_at, can_assign)
+          SELECT id, name, email, password_hash, role, active, created_at, can_assign FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+        COMMIT;`);
+    } catch (err) { try { db.exec('ROLLBACK'); } catch { /* sin transacción abierta */ } throw err; } finally { db.exec('PRAGMA foreign_keys = ON'); }
   }
   const leadCols = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name);
   if (!leadCols.includes('channel_id')) db.exec('ALTER TABLE leads ADD COLUMN channel_id INTEGER REFERENCES catalog_items(id)');
@@ -204,6 +211,14 @@ function openDb(dbPath) {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS lead_touches_lead ON lead_touches(lead_id);`);
+  if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'request_id')) {
+    db.exec('ALTER TABLE lead_touches ADD COLUMN request_id TEXT');
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS lead_touches_request ON lead_touches(request_id) WHERE request_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS lead_touches_user ON lead_touches(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS leads_assigned ON leads(assigned_to, status);
+    CREATE INDEX IF NOT EXISTS leads_campaign ON leads(campaign);
+    CREATE INDEX IF NOT EXISTS leads_created ON leads(created_at);`);
   // Hitos del embudo: la fecha en que el lead pasó por cada paso. No se borran aunque el lead retroceda o se decline.
   if (!leadCols.includes('won_at')) {
     for (const col of MILESTONES) db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
