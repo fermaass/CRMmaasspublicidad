@@ -428,7 +428,7 @@ function createApp({ db, config }) {
       else if (req.user.role === 'vendedor') {
         db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
       } else autoAssign(db, result.id);
-      res.status(201).json({ id: result.id });
+      res.status(201).json({ id: result.id, repeat_of: result.repeat_of });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -811,6 +811,7 @@ function createApp({ db, config }) {
       const kind = FOLLOWUP.nextAction(lead)?.kind;
       if (outcome === 'referidos' && kind !== 'postventa') return res.status(400).json({ error: 'Ya se pidieron referidos a este cliente' });
       if (['renovo', 'no_renueva'].includes(outcome) && !lead.campaign_end) return res.status(400).json({ error: 'Primero captura cuándo termina la campaña' });
+      if (['renovo', 'no_renueva'].includes(outcome) && kind !== 'renovacion') return res.status(400).json({ error: 'Todavía no toca la renovación de este cliente' });
       if (req.body.campaign_end && !isDate(req.body.campaign_end)) return res.status(400).json({ error: 'Fecha de fin de campaña inválida' });
     }
     let renewalAmount = null;

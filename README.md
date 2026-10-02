@@ -198,7 +198,9 @@ Con **+ Lead** se elige por dónde llegó (WhatsApp, llamada u otro) y se escrib
 
 ### Duplicados
 
-Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado o vendido vuelve a escribir, se reabre en Nuevo (o Cumple perfil si ya estaba perfilado) y conserva su historial.
+Un contacto se reconoce por los últimos 10 dígitos del teléfono o por el email. Así `+52 1 55 1234 5678` (como aparece en WhatsApp) y `55 1234 5678` (como lo escriben en un formulario) son la misma persona. Si un lead declinado vuelve a escribir, se reabre en Nuevo (o Cumple perfil si ya estaba perfilado) y conserva su historial.
+
+Si un **cliente que ya compró** vuelve a escribir, se abre una **oportunidad nueva** asignada a su mismo vendedor, ligada en el historial de las dos. Su venta, su postventa y su renovación no se tocan, y una segunda venta queda con su propio monto. Si escribe otra vez, el contacto se suma a esa oportunidad abierta.
 
 ## Respaldos y seguridad de los datos
 

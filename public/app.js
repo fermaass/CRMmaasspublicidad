@@ -1117,6 +1117,7 @@ async function monthlyReport() {
     const m = marketingMetrics(cur); const o = marketingMetrics(prev);
     const mName = new Date(d.getFullYear(), d.getMonth() - 1, 15).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
     const ch = (a, b, lower) => (a == null || b == null || !b ? '' : (() => { const x = ((a - b) / b) * 100; const good = lower ? x < 0 : x > 0;
+      if (Math.abs(x) < 0.5) return ' <small style="color:#6b7189">= igual</small>';
       return ` <small style="color:${good ? '#037f4c' : '#c21e56'}">${x >= 0 ? '↑' : '↓'} ${Math.abs(Math.round(x))}%</small>`; })());
     const cell = (v) => `<td>${v}</td>`;
     const per = (r, k) => (r.inversion > 0 && r[k] ? money(r.inversion / r[k]) : '—');
@@ -1580,12 +1581,16 @@ async function openNewLead() {
     const { origin, ...rest } = Object.fromEntries(new FormData(e.target));
     const body = { ...rest, ...originToFields(origin) };
     try {
-      const { id, existing } = await api('/api/leads', { method: 'POST', body });
+      const { id, existing, repeat_of: repeatOf } = await api('/api/leads', { method: 'POST', body });
       refresh();
       await openLead(id);
       if (existing) {
         $('#drawer-body h2').insertAdjacentHTML('afterend',
           '<p class="warn">Este contacto ya estaba registrado. Se agregó el nuevo contacto a su historial.</p>');
+      }
+      if (repeatOf) {
+        $('#drawer-body h2').insertAdjacentHTML('afterend',
+          '<p class="warn">Ya es cliente: compró antes. Se abrió como oportunidad nueva y su venta anterior no se toca.</p>');
       }
     } catch (err) { $('#new-error').textContent = err.message; }
   });
@@ -1741,7 +1746,8 @@ async function weeklyReport() {
   try {
     const [cur, prev, t] = await Promise.all([api(`/api/stats?${q(now - 7 * day, now)}`), api(`/api/stats?${q(now - 14 * day, now - 7 * day)}`), api('/api/team')]);
     const f = cur.funnel; const p = prev.funnel;
-    const ch = (a, b) => (!b ? '' : ` <small style="color:${a >= b ? '#037f4c' : '#c21e56'}">${a >= b ? '↑' : '↓'} ${Math.abs(Math.round(((a - b) / b) * 100))}%</small>`);
+    const ch = (a, b) => (!b ? '' : a === b ? ' <small style="color:#6b7189">= igual</small>'
+      : ` <small style="color:${a > b ? '#037f4c' : '#c21e56'}">${a > b ? '↑' : '↓'} ${Math.abs(Math.round(((a - b) / b) * 100))}%</small>`);
     const pipe = cur.pipeline || [];
     const exp = pipe.reduce((x, r) => x + (r.esperado || 0), 0);
     const cell = (v) => `<td>${v}</td>`;

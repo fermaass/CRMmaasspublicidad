@@ -10,11 +10,12 @@ function addEvent(db, leadId, userId, type, content) {
 function findExisting(db, { phone, email }) {
   const key = phoneKey(phone);
   if (key) {
-    const byPhone = db.prepare('SELECT * FROM leads WHERE phone_key = ? ORDER BY id LIMIT 1').get(key);
+    // El más reciente: si un cliente ya tiene una oportunidad nueva, el contacto se suma a esa.
+    const byPhone = db.prepare('SELECT * FROM leads WHERE phone_key = ? ORDER BY id DESC LIMIT 1').get(key);
     if (byPhone) return byPhone;
   }
   if (email) {
-    return db.prepare('SELECT * FROM leads WHERE email = ? ORDER BY id LIMIT 1').get(String(email).trim()) || null;
+    return db.prepare('SELECT * FROM leads WHERE email = ? ORDER BY id DESC LIMIT 1').get(String(email).trim()) || null;
   }
   return null;
 }
@@ -46,7 +47,9 @@ function ingestLead(db, data) {
   if (!lead.phone && !lead.email) throw new Error('Se necesita teléfono o email');
 
   const existing = findExisting(db, lead);
-  if (existing) {
+  // Un cliente que ya compró y vuelve a escribir es una oportunidad nueva: no se toca su venta, su postventa ni su renovación.
+  const repeatOf = existing && existing.status === 'vendido' ? existing : null;
+  if (existing && !repeatOf) {
     const reopen = ['declinado', 'vendido'].includes(existing.status);
     db.prepare(`UPDATE leads SET
         name = COALESCE(name, ?), phone = COALESCE(phone, ?), phone_key = COALESCE(phone_key, ?),
@@ -74,7 +77,19 @@ function ingestLead(db, data) {
       lead.channel_id, lead.product_id, lead.utm_source, lead.utm_medium, lead.utm_content, ts, ts);
   const id = Number(lastInsertRowid);
   addEvent(db, id, data.userId, 'creado', `Lead recibido por ${LABELS[lead.source] || lead.source}`);
-  return { id, created: true };
+  if (repeatOf) {
+    // Se queda con el vendedor que ya lo atendió (si sigue activo): conoce al cliente.
+    const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(repeatOf.assigned_to);
+    db.prepare('UPDATE leads SET name = COALESCE(name, ?), email = COALESCE(email, ?), product_id = COALESCE(product_id, ?) WHERE id = ?')
+      .run(repeatOf.name, repeatOf.email, repeatOf.product_id, id);
+    addEvent(db, id, data.userId, 'contacto', `Ya es cliente: compró antes (lead #${repeatOf.id}). Esta es una oportunidad nueva.`);
+    addEvent(db, repeatOf.id, data.userId, 'contacto', `Volvió a escribir${lead.message ? `: ${lead.message}` : ''}. Se abrió una oportunidad nueva (lead #${id}).`);
+    if (seller) {
+      db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ? WHERE id = ?').run(seller.id, ts, id);
+      addEvent(db, id, null, 'asignacion', `Asignado a ${seller.name} (ya era su cliente)`);
+    }
+  }
+  return { id, created: true, repeat_of: repeatOf?.id };
 }
 
 const ACTIVE = "('nuevo', 'nuevo_perfil', 'cotizando')";
