@@ -21,7 +21,13 @@ Nuevo, Contactando y Contestó se calculan de los toques, así que no se arrastr
 
 ## Mi día
 
-Es la primera pantalla de vendedores, marketing y gerente. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero**, así que un lead en Nuevo del tablero aparece bajo Nuevo. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha. Quien administra los leads ve además cuántos están sin asignar.
+Es la primera pantalla del vendedor. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero**, así que un lead en Nuevo del tablero aparece bajo Nuevo. Solo salen las etapas con algo que hacer hoy. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha.
+
+- **Llamar y WhatsApp** a un toque, en Mi día y en la ficha. Al usarlos, el toque que se registre después queda con ese medio.
+- **Buscador** para encontrar a un cliente que regresa la llamada (por nombre, teléfono o campaña) sin salir de Mi día.
+- **Contador en la pestaña Mi día** con lo que hay que atender; en rojo si hay vencidos. Se ve desde el Tablero o el Resumen.
+
+El **Resumen del vendedor** dice cómo va su mes (ventas contra el mes pasado a estas alturas, cotizaciones abiertas, frías y vencidos), lo compara contra el promedio del equipo (sin nombres de compañeros: conversión, cierre de lo cotizado, ticket, descuento y primer toque), y muestra su embudo, su pipeline y por qué pierde.
 
 ## Asignación de leads
 

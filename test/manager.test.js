@@ -120,3 +120,18 @@ test('pedidos: a tiempo, tarde y abiertos; cotizaciones más grandes; datos inco
   assert.ok(t.top_quotes.length > 0);
   assert.ok(t.top_quotes.every((q, i, arr) => i === 0 || arr[i - 1].amount >= q.amount), 'de mayor a menor');
 });
+
+test('Resumen del vendedor: promedio del equipo sin nombres, solo si hay más de un vendedor', async () => {
+  const solo = (await req('/api/stats', { cookie: ana })).json;
+  assert.equal(solo.team, null, 'con un solo vendedor no hay contra quién comparar');
+  const beoId = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Beo', email: 'b@t.com', password: 'password123', role: 'vendedor' } })).json.id;
+  const sold = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', channel_id: 1, phone: '5580009991', assigned_to: beoId } })).json.id;
+  db.prepare("UPDATE leads SET status = 'vendido', quoted_at = ?, won_at = ?, quote_amount = 100000, sale_amount = 80000 WHERE id = ?")
+    .run(new Date().toISOString(), new Date().toISOString(), sold);
+  const s = (await req('/api/stats', { cookie: ana })).json;
+  assert.equal(s.team.vendedores, 2);
+  assert.ok(s.team.recibidos > s.funnel.recibidos, 'el equipo incluye los leads de Beo');
+  assert.ok(s.team.cerrados >= 1);
+  assert.ok(s.sellerFunnel.every((r) => r.id === anaId), 'Ana solo ve su propia fila, no la de Beo');
+  assert.equal((await req('/api/stats', { cookie: gerente })).json.team, null, 'al gerente no se le manda');
+});

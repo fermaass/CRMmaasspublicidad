@@ -976,6 +976,18 @@ function createApp({ db, config }) {
       db.prepare(`SELECT COUNT(*) AS n FROM leads l ${where(cond)}`).get(...params, ...extra).n]));
     // Al vendedor no se le muestra la inversión de marketing.
     if (req.user.role === 'vendedor') campaignFunnel.forEach((r) => { r.inversion = null; });
+    // Al vendedor: el promedio del equipo con los mismos filtros, sin nombres, para compararse. Con un solo vendedor no aplica.
+    let team = null;
+    if (req.user.role === 'vendedor') {
+      const all = leadFilters({ user: { role: 'gerente' }, query: { ...req.query, assigned: undefined } });
+      const t = db.prepare(`SELECT COUNT(DISTINCT l.assigned_to) AS vendedores, COUNT(*) AS recibidos,
+          COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados, COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
+          AVG(CASE WHEN l.won_at IS NOT NULL AND l.sale_amount > 0 THEN l.sale_amount END) AS ticket,
+          AVG(CASE WHEN l.won_at IS NOT NULL AND l.quote_amount > 0 AND l.sale_amount > 0 THEN (l.quote_amount - l.sale_amount) / l.quote_amount END) AS descuento,
+          AVG(CASE WHEN l.first_touch_at IS NOT NULL THEN (julianday(l.first_touch_at) - julianday(l.created_at)) * 24 END) AS primer_toque
+        FROM leads l ${all.sql ? `${all.sql} AND` : 'WHERE'} l.assigned_to IS NOT NULL`).get(...all.params);
+      if (t.vendedores > 1) team = t;
+    }
 
     // Pipeline: cotizaciones abiertas hoy (sin importar cuándo llegó el lead), vivas y frías, y venta esperada con la tasa histórica de cierre.
     const cur = leadFilters({ user: req.user, query: { ...req.query, from: undefined, to: undefined } });
@@ -998,7 +1010,7 @@ function createApp({ db, config }) {
     }).sort((a, b) => b.vivas_monto - a.vivas_monto);
 
     res.json({
-      funnel, campaignFunnel, sellerFunnel, touches, adFunnel, audiences, pipeline,
+      funnel, campaignFunnel, sellerFunnel, touches, adFunnel, audiences, pipeline, team,
       byDay,
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", `LEFT JOIN catalog_items c ON c.id = ${CHANNEL_EXPR}`),
