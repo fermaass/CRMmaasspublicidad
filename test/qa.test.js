@@ -130,3 +130,17 @@ test('en Railway sin volumen se avisa que los datos se borrarían', () => {
   assert.equal(loadConfig({ RAILWAY_ENVIRONMENT: 'production', RAILWAY_VOLUME_MOUNT_PATH: '/data' }).storageWarning, false);
   assert.equal(loadConfig({}).storageWarning, false);
 });
+
+test('el CSV no deja correr fórmulas que lleguen en el formulario público', async () => {
+  const { openDb } = require('../src/db');
+  const { createApp, seedAdmin } = require('../src/server');
+  const db = openDb(':memory:'); seedAdmin(db, { adminEmail: 'g2@t.com', adminPassword: 'clave-gerente' });
+  const srv = createApp({ db, config: { formApiKey: 'k2' } }).listen(0); await new Promise((r) => srv.once('listening', r));
+  const b = `http://127.0.0.1:${srv.address().port}`;
+  await fetch(`${b}/webhooks/form?key=k2`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nombre: '=HYPERLINK("http://x","clic")', telefono: '+52 55 1234 5678' }) });
+  const c = (await fetch(`${b}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'g2@t.com', password: 'clave-gerente' }) })).headers.get('set-cookie').split(';')[0];
+  const csv = await (await fetch(`${b}/api/leads.csv`, { headers: { cookie: c } })).text();
+  srv.close();
+  assert.ok(csv.includes(`"'=HYPERLINK(""http://x"",""clic"")"`), csv);
+  assert.ok(csv.includes(',+52 55 1234 5678,'), 'el teléfono queda igual');
+});

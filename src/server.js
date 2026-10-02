@@ -476,7 +476,10 @@ function createApp({ db, config }) {
       ['assigned_name', 'Vendedor'], ['quote_amount', 'Monto cotizado'], ['sale_amount', 'Monto de venta'],
       ['utm_source', 'utm_source'], ['utm_medium', 'utm_medium'], ['utm_content', 'Anuncio (utm_content)'], ['created_at', 'Fecha']];
     const esc = (v) => {
-      const s = v == null ? '' : String(v);
+      let s = v == null ? '' : String(v);
+      // Un nombre como "=HYPERLINK(...)" llegado del formulario público no debe correr como fórmula al abrirlo en Excel.
+      // Los teléfonos (+52 55…) y los números negativos se dejan igual.
+      if (/^[=@\t\r]/.test(s) || (/^[+-]/.test(s) && !/^[+-][\d\s().-]*$/.test(s))) s = `'${s}`;
       return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     let csv;

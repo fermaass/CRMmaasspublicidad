@@ -1951,7 +1951,10 @@ function writeReport(w, title, sub, body) {
     </body></html>`;
   w.document.open(); w.document.write(html); w.document.close();
   // Excel: cada tabla del reporte, con su título; los números de arriba como primera sección.
-  const doc = w.document; const q = (v) => `"${String(v).replace(/\s+/g, ' ').trim().replace(/"/g, '""')}"`;
+  const doc = w.document;
+  // Celdas que empiezan como fórmula (=, @, +texto, -texto) se marcan como texto: un nombre malicioso no corre en Excel.
+  const safe = (t) => (/^[=@\t\r]/.test(t) || (/^[+-]/.test(t) && !/^[+-][\d\s().,$%-]*$/.test(t)) ? `'${t}` : t);
+  const q = (v) => `"${safe(String(v).replace(/\s+/g, ' ').trim()).replace(/"/g, '""')}"`;
   const lines = [[title], [`${company ? `${company} · ` : ''}${sub}`], [], ['Resumen']];
   doc.querySelectorAll('.k').forEach((k) => lines.push([k.firstChild.textContent, k.querySelector('b').textContent]));
   doc.querySelectorAll('h2').forEach((h) => {
