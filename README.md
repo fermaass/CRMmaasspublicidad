@@ -1,6 +1,6 @@
-# CRM Maass Publicidad
+# CRM de leads (hecho para Maass Publicidad, sirve para cualquier giro)
 
-CRM sencillo para que marketing y ventas trabajen los mismos leads. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead avanza por etapas que mueven los toques (Nuevo, Contactando, Contestó, Cumple perfil, Cotizando, Vendido y Declinado con o sin perfil) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que los declinados con perfil quedan como base para otras campañas.
+CRM sencillo para que marketing y ventas trabajen los mismos leads. Cada empresa tiene **su propia instalación** (su link y su base de datos, separada de las demás); el nombre, el logo, los productos con sus precios y cómo le llama a lo que vende se configuran en la app. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead avanza por etapas que mueven los toques (Nuevo, Contactando, Contestó, Cumple perfil, Cotizando, Vendido y Declinado con o sin perfil) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que los declinados con perfil quedan como base para otras campañas.
 
 ## Etapas del tablero
 
@@ -98,7 +98,7 @@ Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola list
 - **Equipo hoy:** una fila por vendedor con semáforo. Rojo: vencidos, un lead sin primer toque después de 2 horas, acuerdos vencidos o un pedido del gerente con más de 24 h sin atender. Amarillo: cotizaciones frías (más de 15 días sin contacto) o datos incompletos. Debajo de cada vendedor van los leads concretos que requieren atención, y aparte **las 5 cotizaciones más grandes** con su último contacto y siguiente paso.
 - **Ficha del vendedor** (clic en su nombre): conversión, cierre de lo cotizado, ticket, descuento y primer toque **contra el promedio del equipo**, su embudo, su pipeline, por qué pierde, los pedidos abiertos y qué tan a tiempo los atiende. Es la base para la junta uno a uno.
 - **Pedir seguimiento:** desde la ficha del lead; al vendedor le aparece hasta arriba en su Mi día y se quita sola cuando registra el toque. Queda un historial: se mide el % de pedidos que cada vendedor atiende en menos de 24 h.
-- **Reporte semanal:** una página con la semana contra la anterior, los vendedores, el pipeline, las cotizaciones más grandes y por qué se perdieron, lista para imprimir o guardar en PDF.
+- **Reporte de ventas:** con las fechas que elijas (de entrada, los últimos 7 días) contra el periodo anterior: ventas cerradas, cotizaciones enviadas y renovaciones por vendedor, el pipeline, las cotizaciones más grandes y por qué se perdieron. Para imprimir, PDF o Excel.
 - **Montos obligatorios** al registrar una cotización y una venta: sin ellos el pipeline, la venta esperada, el ticket y el descuento salen mal. Los datos viejos incompletos aparecen como aviso en Equipo hoy.
 - En **Resumen → Ventas**: lectura rápida del equipo (quién tiene vencidos, venta esperada, cotizaciones frías y ventas contra el periodo anterior), embudo, pipeline con venta esperada y una tabla de vendedores con lo que sirve para decidir. "¿En qué toque responden?" queda plegada.
 - No registra toques en leads de otros, pero puede corregir datos y etapas y reasignar en emergencias.
@@ -106,7 +106,7 @@ Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola list
 ## Para el gerente de marketing
 
 - El rol se llama **Gerente de marketing**. Entra directo al **Resumen de marketing** (no ve la pestaña de ventas ni evalúa vendedores), no registra toques ni mueve etapas; desde la ficha de un lead solo corrige origen, producto y contacto, y deja notas.
-- **Lectura rápida:** cuántas campañas hay que revisar, de dónde viene el lead con perfil más barato del mes y cuántos leads no tienen origen. Desde ahí sale el **reporte mensual** (mes pasado contra el anterior), listo para imprimir o guardar en PDF.
+- **Lectura rápida:** cuántas campañas hay que revisar, de dónde viene el lead con perfil más barato del mes y cuántos leads no tienen origen. Desde ahí sale el **reporte de marketing** con las fechas que elijas (de entrada, el mes pasado), para imprimir, PDF o Excel.
 - **Campañas a revisar (mes en curso):** rojo si una campaña tiene inversión y no trae leads en 7 días, si ninguno de 5 o más leads cumple perfil, o si cada lead con perfil cuesta más del doble del promedio. Amarillo si trajo leads sin inversión capturada (sus costos saldrían en cero) o si la mitad de sus descartes son por un mismo motivo.
 - **Indicadores con comparación** contra el periodo anterior: leads, % que cumple perfil, inversión, costo por lead, **costo por lead con perfil**, costo por cierre, retorno y leads sin origen.
 - **Tabla de campañas** con lo que decide la inversión: leads, cumplen perfil, inversión, costo por lead con perfil, cierres, retorno y por qué se descartan. Clic en una campaña abre su **ficha**: indicadores contra el promedio, tendencia semanal de leads y leads con perfil (muestra cuándo un anuncio se cansa), inversión contra leads por mes, sus anuncios, **lo que dicen sus leads** (perfil rápido: decisor, presupuesto, cuándo arranca) y por qué se descartan.
@@ -132,8 +132,44 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 | Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración. Opcional: también asigna leads |
 | Coordinador de leads | Su único trabajo: captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
 | Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
-| Gerente de marketing | Resumen de marketing, campañas a revisar, ficha de cada campaña, links, audiencias y reporte mensual; corrige el origen de los leads (no toques ni etapas) |
+| Gerente de marketing | Resumen de marketing, campañas a revisar, ficha de cada campaña, links, audiencias y reporte de marketing; corrige el origen de los leads (no toques ni etapas) |
 | Analista | Solo lectura: Equipo hoy, Resumen y exportar CSV |
+
+## Usuarios y acceso
+
+- **Solo el gerente** da de alta usuarios, les asigna rol y la casilla "También asigna leads", y los desactiva.
+- **Alta por invitación:** el gerente pone nombre, email y rol, y la app genera un **link de invitación** (un solo uso, vence en 72 horas) que se manda por WhatsApp o correo con un clic. La persona abre el link y **elige su propia contraseña**; eso confirma que el acceso le llegó a ella. Nadie más conoce las contraseñas, ni el gerente.
+- **Olvidó su contraseña:** en Usuarios, "Link para contraseña nueva" y se le manda igual. Un link nuevo invalida el anterior.
+- **Cambiar mi contraseña:** clic en tu nombre arriba a la derecha (pide la actual). Cierra tu sesión en los demás dispositivos.
+- **Bloqueo:** 5 intentos fallidos seguidos bloquean ese email 15 minutos (el link de contraseña nueva lo desbloquea).
+- En Usuarios se ve el estado de cada quien: invitación pendiente o vencida, último acceso o desactivado.
+
+## Productos y precios
+
+Cada producto puede tener **precio de lista**. Con la casilla **precio fijo**, al cotizar o vender se elige producto y cantidad y el monto se calcula solo (precio × cantidad); el vendedor no lo puede cambiar y solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el monto real.
+
+## Reportes por periodo
+
+Cada rol tiene su reporte con **las fechas que elija** (últimos 7 días, este mes, mes pasado… o desde/hasta). Se abre en otra pestaña para **imprimir o guardar en PDF** o **descargar en Excel**:
+
+| Reporte | Quién | Dónde |
+|---|---|---|
+| Mi reporte de ventas | Vendedor (solo lo suyo) | Resumen → Descargar reporte |
+| Reporte de ventas (por vendedor) | Gerente y analista | Equipo hoy o Resumen → Ventas |
+| Reporte de marketing (campañas, anuncios, costos, audiencias) | Gerente de marketing, gerente y analista | Resumen → Marketing |
+| Reporte de asignación (cuántos llegaron, de dónde, en cuánto se asignaron) | Coordinador y quien asigna | Asignación |
+
+En el de ventas cada venta cuenta **el día que se cerró** y cada cotización el día que se envió, aunque el lead haya llegado antes; trae además el embudo de los leads que llegaron en el periodo. Todos se comparan contra el periodo anterior del mismo largo. El Resumen también acepta "Elegir fechas…".
+
+## Empresa nueva
+
+Cada empresa es una instalación aparte: repite los pasos de "Publicarlo en Railway" con un servicio y un volumen nuevos. En el primer uso la app pide el nombre de la empresa y crea al gerente. Luego, en **Configuración → Empresa**:
+
+- nombre y logo (salen en la app, los mensajes de WhatsApp y los reportes);
+- cómo le llama a lo que vende y se renueva (campaña, contrato, membresía, servicio, póliza, suscripción o proyecto);
+- si sus clientes **renuevan**: si no, al vender no se pregunta cuándo termina y solo se piden referidos.
+
+Después: productos con sus precios, canales, campañas y los usuarios por invitación.
 
 ## Publicarlo en Railway (recomendado)
 
@@ -141,7 +177,7 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 2. **New Project → Deploy from GitHub repo** y elige este repositorio.
 3. Cuando aparezca el servicio, clic derecho sobre él → **Attach volume** (o *Add Volume*), con ruta `/data`. Ahí se guarda la base de datos; sin volumen se borraría en cada actualización.
 4. En el servicio: **Settings → Networking → Generate Domain**. Esa es la dirección de tu CRM.
-5. Abre esa dirección: la app te pide crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario de tu página.
+5. Abre esa dirección: la app te pide el nombre de la empresa y crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario de tu página.
 
 No hace falta configurar variables de entorno: la app detecta el volumen y genera sola sus claves.
 

@@ -57,7 +57,7 @@ const GHOSTED = 'Dejó de contestar';
 const DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
-const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'Espectacular / valla', 'Recomendación', 'Otro'];
+const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'TikTok', 'Recomendación', 'Otro'];
 
 function catalogDDL(table) {
   return `CREATE TABLE IF NOT EXISTS ${table} (
@@ -243,6 +243,22 @@ function openDb(dbPath) {
     `);
   }
 
+  // Acceso por invitación: último acceso de cada usuario y links de un solo uso (invitación o nueva contraseña).
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+  db.exec(`CREATE TABLE IF NOT EXISTS user_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('invite', 'reset')),
+      expires_at INTEGER NOT NULL,
+      used_at TEXT
+    );`);
+  // Precio de lista por producto (y si es fijo), cantidad cotizada y monto de cada toque (renovaciones con fecha).
+  const catCols2 = db.prepare('PRAGMA table_info(catalog_items)').all().map((c) => c.name);
+  if (!catCols2.includes('price')) db.exec('ALTER TABLE catalog_items ADD COLUMN price REAL');
+  if (!catCols2.includes('fixed_price')) db.exec('ALTER TABLE catalog_items ADD COLUMN fixed_price INTEGER NOT NULL DEFAULT 0');
+  if (!db.prepare('PRAGMA table_info(leads)').all().some((c) => c.name === 'quantity')) db.exec('ALTER TABLE leads ADD COLUMN quantity REAL');
+  if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'amount')) db.exec('ALTER TABLE lead_touches ADD COLUMN amount REAL');
+
   // Toda campaña usada en algún lead aparece en la lista de campañas.
   db.exec(`INSERT OR IGNORE INTO catalog_items (kind, name)
     SELECT DISTINCT 'campana', campaign FROM leads WHERE campaign IS NOT NULL
@@ -266,6 +282,8 @@ function setSetting(db, key, value) {
 
 // Las claves se generan solas la primera vez; si vienen en variables de entorno, esas mandan.
 function ensureSettings(db, config = {}) {
+  // Instalaciones anteriores a la configuración por empresa eran de Maass: conservan su nombre en mensajes y reportes.
+  if (!getSetting(db, 'company_name') && db.prepare('SELECT 1 FROM users').get()) setSetting(db, 'company_name', 'Maass Publicidad');
   const random = () => require('node:crypto').randomBytes(18).toString('base64url');
   const initial = {
     form_api_key: config.formApiKey,
@@ -283,14 +301,14 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
-// Mensajes de WhatsApp según lo que toque con el lead. {nombre}, {vendedor} y {producto} se reemplazan al enviar.
+// Mensajes de WhatsApp según lo que toque con el lead. {nombre}, {vendedor}, {producto}, {empresa} y {servicio} se reemplazan al enviar.
 const WA_TEMPLATES = {
-  cadencia: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Vi que nos escribiste por {producto}. ¿Te puedo llamar o prefieres que te comparta opciones por aquí?',
-  seguimiento: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Para prepararte una propuesta de {producto}, ¿me confirmas zona, fechas y presupuesto aproximado?',
+  cadencia: 'Hola {nombre}, soy {vendedor} de {empresa}. Vi que nos escribiste por {producto}. ¿Te puedo llamar o prefieres que te comparta opciones por aquí?',
+  seguimiento: 'Hola {nombre}, soy {vendedor} de {empresa}. Para prepararte una propuesta de {producto}, ¿me confirmas zona, fechas y presupuesto aproximado?',
   cotizacion: 'Hola {nombre}, ¿pudiste revisar la cotización de {producto} que te enviamos? Con gusto resolvemos cualquier duda.',
-  recontacto: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
-  postventa: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. ¿Cómo va tu campaña? Si conoces a alguien a quien le pueda servir, con gusto lo atendemos.',
-  renovacion: 'Hola {nombre}, soy {vendedor} de Maass Publicidad. Tu campaña está por terminar; ¿te aparto el espacio para el siguiente periodo antes de que se ocupe?',
+  recontacto: 'Hola {nombre}, soy {vendedor} de {empresa}. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
+  postventa: 'Hola {nombre}, soy {vendedor} de {empresa}. ¿Cómo va tu {servicio}? Si conoces a alguien a quien le pueda servir, con gusto lo atendemos.',
+  renovacion: 'Hola {nombre}, soy {vendedor} de {empresa}. Tu {servicio} está por terminar; ¿te ayudo a renovar para el siguiente periodo?',
 };
 
 module.exports = {

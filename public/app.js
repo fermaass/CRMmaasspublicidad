@@ -1,4 +1,4 @@
-const state = { waTemplates: {}, me: null, meta: null, users: [], catalog: { canal: [], producto: [], campana: [] }, leads: [], view: null, statsTab: null };
+const state = { company: { name: '', logo: '', term: 'campana', renewals: true }, waTemplates: {}, me: null, meta: null, users: [], catalog: { canal: [], producto: [], campana: [] }, leads: [], view: null, statsTab: null };
 const F = window.CRMFollowup;
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -15,6 +15,18 @@ const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
 // Paleta fija para productos y canales (validada para daltonismo); más de 8 se agrupan en "Otros".
 const CAT = ['#6161ff', '#ff7a00', '#00a39b', '#e2445c', '#caa000', '#9d50dd', '#037f4c', '#ff5ac4'];
 const money = (v) => (v == null ? '—' : Number(v).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }));
+// Empresa de esta instalación: nombre, logo y cómo le llama a lo que vende (campaña, contrato, membresía…).
+function applyCompany(c) {
+  state.company = c;
+  F.configure({ term: c.term, renewals: c.renewals });
+  document.querySelectorAll('.brand-name').forEach((el) => { el.textContent = c.name || 'CRM'; });
+  document.querySelectorAll('.brand-logo').forEach((img) => { img.classList.toggle('hidden', !c.logo); if (c.logo) img.src = c.logo; else img.removeAttribute('src'); });
+  $('.brand')?.classList.toggle('has-logo', Boolean(c.logo));
+  document.title = c.name ? `CRM · ${c.name}` : 'CRM';
+}
+// ¿Sus clientes renuevan? (campañas, contratos, membresías). Si no, no se pregunta cuándo termina ni se avisa la renovación.
+const renewals = () => state.company.renewals !== false;
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 // Opciones de campaña (se guardan por nombre); incluye la actual aunque ya no esté activa.
 function campaignOptions(current, emptyLabel) {
   const items = state.catalog.campana.filter((c) => c.active || c.name === current);
@@ -164,6 +176,49 @@ $('#login-form').addEventListener('submit', async (e) => {
 
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); showLogin(); });
 
+// Link de invitación o de contraseña nueva: quien lo abre elige su contraseña y entra.
+async function showAccess(token) {
+  $('#access').classList.remove('hidden');
+  const goLogin = () => { history.replaceState(null, '', location.pathname); $('#access').classList.add('hidden'); showLogin(); };
+  try {
+    const t = await api(`/api/access/${encodeURIComponent(token)}`);
+    $('#access-title').textContent = t.kind === 'invite' ? `Hola ${t.name.split(' ')[0]}, crea tu contraseña` : 'Crea tu contraseña nueva';
+    $('#access-sub').textContent = `Entrarás con ${t.email}. Solo tú la conoces; ni tu gerente la ve.`;
+  } catch (err) {
+    $('#access-title').textContent = 'Este link ya no sirve';
+    $('#access-sub').textContent = err.message;
+    $('#access-form').querySelectorAll('label, button').forEach((el) => el.classList.add('hidden'));
+    $('#access-form').insertAdjacentHTML('beforeend', '<button type="button" id="access-login">Ir a la pantalla de entrada</button>');
+    $('#access-login').addEventListener('click', goLogin);
+    return;
+  }
+  $('#access-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if (f.get('password') !== f.get('password2')) { $('#access-error').textContent = 'Las contraseñas no coinciden'; return; }
+    try {
+      state.me = await api(`/api/access/${encodeURIComponent(token)}`, { method: 'POST', body: { password: f.get('password') } });
+      history.replaceState(null, '', location.pathname);
+      $('#access').classList.add('hidden');
+      toast('Listo: ya tienes acceso', 'ok');
+      start();
+    } catch (err) { $('#access-error').textContent = err.message; }
+  };
+}
+
+// Cambiar mi contraseña (clic en mi nombre arriba a la derecha).
+$('#me').addEventListener('click', async () => {
+  const v = await askForm('Cambiar mi contraseña', `<label>Contraseña actual<input type="password" name="current" required autocomplete="current-password"></label>
+    <label>Contraseña nueva (mínimo 8 caracteres)<input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+    <label>Repítela<input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>`, 'Cambiar');
+  if (!v) return;
+  if (v.password !== v.password2) { toast('Las contraseñas nuevas no coinciden', 'error'); return; }
+  try {
+    await api('/api/me/password', { method: 'POST', body: { current: v.current, password: v.password } });
+    toast('Contraseña cambiada. Se cerró tu sesión en los demás dispositivos.', 'ok');
+  } catch (err) { toast(err.message, 'error'); }
+});
+
 async function start() {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
@@ -241,6 +296,10 @@ function filterQuery() {
     if (period === 'mes_pasado') { p.set('from', first(d.getFullYear(), d.getMonth() - 1)); p.set('to', first(d.getFullYear(), d.getMonth())); }
     if (period === '30' || period === '90') p.set('from', new Date(Date.now() - Number(period) * 86400e3).toISOString());
     if (period === 'anio') p.set('from', first(d.getFullYear(), 0));
+    if (period === 'custom') {
+      const r = periodRange('custom', $('#f-from').value, $('#f-to').value);
+      if (r) { p.set('from', r.from.toISOString()); p.set('to', r.to.toISOString()); }
+    }
   }
   if (state.view !== 'board') add('stage', '#f-status');
   return p.toString();
@@ -259,12 +318,20 @@ $('#more-filters').addEventListener('click', () => {
 });
 $('#clear-filters').addEventListener('click', () => {
   ['#f-q', '#f-period', '#f-assigned', '#f-campaign', ...EXTRA_FILTERS].forEach((sel) => { $(sel).value = ''; });
+  $('#f-custom').classList.add('hidden');
   updateMoreFiltersLabel(); refresh();
 });
 // ---------- Vistas ----------
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 ['#f-profile', '#f-source', '#f-product', '#f-channel', '#f-campaign', '#f-period', '#f-assigned', '#f-status', '#f-reason']
   .forEach((s) => $(s).addEventListener('change', () => { updateMoreFiltersLabel(); refresh(); }));
+// "Elegir fechas…": desde y hasta (incluye los dos días). Arranca con el mes en curso.
+$('#f-period').addEventListener('change', () => {
+  const custom = $('#f-period').value === 'custom';
+  $('#f-custom').classList.toggle('hidden', !custom);
+  if (custom && !$('#f-from').value) { const r = periodRange('mes'); $('#f-from').value = ymdLocal(r.from); $('#f-to').value = ymdLocal(new Date(r.to - 1)); }
+});
+['#f-from', '#f-to'].forEach((sel) => $(sel).addEventListener('change', () => { if (periodRange('custom', $('#f-from').value, $('#f-to').value)) refresh(); }));
 let searchTimer;
 $('#f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 300); });
 function exportCsv(query) {
@@ -397,7 +464,7 @@ const whenText = (days) => (days < 0 ? `${-days} ${days === -1 ? 'día' : 'días
 function waHref(l) {
   const a = nextAction(l);
   const kind = a ? a.kind : l.status === 'declinado' || l.status === 'vendido' ? null : l.contacted_at ? 'seguimiento' : 'cadencia';
-  return F.waLink(l.phone, kind ? state.waTemplates[kind] : '', { nombre: l.name, vendedor: state.me.name, producto: l.product_name });
+  return F.waLink(l.phone, kind ? state.waTemplates[kind] : '', { nombre: l.name, vendedor: state.me.name, producto: l.product_name, empresa: state.company.name });
 }
 const WA_ICON = '<svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.8-1.2.2-.6.2-1.1.1-1.2l-.5-.3Z"/></svg>';
 const waButton = (l, small = false) => {
@@ -454,7 +521,7 @@ function renderToday() {
     contesto: 'Contestaron: toca perfilar',
     nuevo_perfil: 'Cumplen perfil: toca enviar la cotización',
     cotizando: 'Seguimiento de la cotización a los 2, 5 y 10 días',
-    vendido: 'Clientes: preguntar cómo va la campaña, pedir referidos y ofrecer la renovación a tiempo',
+    vendido: `Clientes: preguntar cómo va ${F.theTerm()} y pedir referidos${renewals() ? '; ofrecer la renovación a tiempo' : ''}`,
     declinado_perfil: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
     declinado_sin: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
   };
@@ -548,12 +615,41 @@ function quickProfileStrip(l) {
 }
 
 // Campos de captura: todos opcionales y lo más cortos posible.
-const agreementFields = () => `<label>¿Qué se habló o acordó?<input name="note" maxlength="300" placeholder="Ej. Le mando propuesta con 3 ubicaciones"></label>
+const agreementFields = () => `<label>¿Qué se habló o acordó?<input name="note" maxlength="300" placeholder="Ej. Le mando la propuesta por correo hoy"></label>
   <label>¿Cuándo es el siguiente paso?<input type="datetime-local" name="next_step_at"></label>`;
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
 const moneyField = (name, text, required = false) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000" ${required ? 'required pattern="[$0-9., ]*[1-9][$0-9., ]*"' : ''}></label>`;
 const dateField = (name, text) => `<label>${text}<input type="date" name="${name}"></label>`;
+// Producto, cantidad y monto al cotizar o vender. Con precio fijo el monto sale de precio × cantidad y el vendedor no lo cambia.
+function priceFields(l, amountName, text) {
+  const prods = state.catalog.producto.filter((p) => p.active || p.id === l.product_id);
+  if (!prods.length) return moneyField(amountName, text, true);
+  return `<div class="row"><label>Producto <select name="product_id" data-prod>
+      <option value="" data-price="" data-fixed="0">Sin definir</option>
+      ${prods.map((p) => `<option value="${p.id}" data-price="${p.price ?? ''}" data-fixed="${p.fixed_price ? 1 : 0}" ${p.id === l.product_id ? 'selected' : ''}>${esc(p.name)}${p.price ? ` · ${money(p.price)}${p.fixed_price ? ' (fijo)' : ''}` : ''}</option>`).join('')}
+    </select></label>
+    <label>Cantidad <input name="quantity" inputmode="decimal" value="${l.quantity ?? 1}" data-qty required pattern="[0-9]+([.,][0-9]+)?"></label></div>
+    ${moneyField(amountName, text, true)}<p class="muted small-note" data-price-note></p>`;
+}
+function wirePriceFields(root, amountName) {
+  const sel = $('[data-prod]', root); const qty = $('[data-qty]', root); const amt = $(`[name=${amountName}]`, root); const note = $('[data-price-note]', root);
+  if (!sel || !amt) return;
+  const sync = () => {
+    const o = sel.selectedOptions[0]; const price = Number(o?.dataset.price) || 0; const fixed = o?.dataset.fixed === '1';
+    const q = Number(String(qty.value).replace(',', '.')) || 1; const total = Math.round(price * q * 100) / 100;
+    if (fixed && !can('gerente')) {
+      amt.value = String(total); amt.readOnly = true;
+      note.textContent = `Precio fijo: ${money(price)} × ${q} = ${money(total)}`;
+    } else {
+      amt.readOnly = false;
+      if (price && (!amt.value || amt.dataset.auto === '1')) { amt.value = String(total); amt.dataset.auto = '1'; }
+      note.textContent = price ? `Precio de lista: ${money(price)} × ${q} = ${money(total)}. Si el real es otro, escríbelo.` : '';
+    }
+  };
+  amt.addEventListener('input', () => { amt.dataset.auto = '0'; });
+  sel.addEventListener('change', sync); qty.addEventListener('input', sync); sync();
+}
 
 // Registra un toque (desde Mi día o la ficha) pidiendo en un solo paso lo que haga falta según el resultado.
 // Freno al doble clic: mientras un toque de un lead se está guardando, no se manda otro.
@@ -570,13 +666,16 @@ async function registerTouchOnce(l, channel, outcome) {
     cumple: ['Cumple perfil. Si puedes, responde (un toque cada una):', `${quickProfileFields(l)}${agreementFields()}`],
     conversacion: ['Contestó. ¿Qué quedaron?', agreementFields()],
     seguimiento: ['Sigue en conversación. ¿Qué quedaron?', agreementFields()],
-    cotizado: ['Cotización enviada', `${moneyField('quote_amount', '¿De cuánto es la cotización?', true)}${agreementFields()}`],
-    vendido: ['¡Venta cerrada!', `${moneyField('sale_amount', '¿De cuánto fue la venta?', true)}${dateField('campaign_end', '¿Cuándo termina la campaña? (para ofrecer la renovación a tiempo)')}`],
+    cotizado: ['Cotización enviada', `${priceFields(l, 'quote_amount', '¿De cuánto es la cotización?')}${agreementFields()}`],
+    vendido: ['¡Venta cerrada!', `${priceFields(l, 'sale_amount', '¿De cuánto fue la venta?')}${renewals() ? dateField('campaign_end', `¿Cuándo termina ${F.theTerm()}? (para ofrecer la renovación a tiempo)`) : ''}`],
     referidos: ['¿Cómo va su campaña?', '<label>¿Te recomendó a alguien?<input name="note" maxlength="300" placeholder="Nombre y teléfono, si te lo dio"></label>'],
-    renovo: ['¡Renovó!', `${moneyField('renewal_amount', '¿Por cuánto?')}${dateField('campaign_end', '¿Hasta cuándo va ahora la campaña?')}`],
+    renovo: ['¡Renovó!', `${moneyField('renewal_amount', '¿Por cuánto?')}${dateField('campaign_end', `¿Hasta cuándo va ahora ${F.theTerm()}?`)}`],
   };
   if (forms[outcome]) {
-    const v = await askForm(forms[outcome][0], forms[outcome][1]);
+    const pending = askForm(forms[outcome][0], forms[outcome][1]);
+    if (outcome === 'cotizado') wirePriceFields($('#modal-extra'), 'quote_amount');
+    if (outcome === 'vendido') wirePriceFields($('#modal-extra'), 'sale_amount');
+    const v = await pending;
     if (v === null) return false;
     for (const [k, val] of Object.entries(v)) if (val) body[k] = val;
     // La hora la pone el navegador del vendedor: se manda en ISO para que no dependa de la zona del servidor.
@@ -659,17 +758,14 @@ async function changeStatus(lead, status) {
       if (date) body.recontact_at = date;
     }
   }
-  if (status === 'cotizando') {
-    const amount = await ask('¿De cuánto es la cotización?', { input: true, placeholder: 'Ej. 60000', okLabel: 'Mover a Cotizando' });
-    if (amount === null) return;
-    if (!amount) { toast('Escribe el monto de la cotización', 'error'); return; }
-    body.quote_amount = amount;
-  }
-  if (status === 'vendido') {
-    const amount = await ask('¡Venta cerrada! ¿De cuánto fue?', { input: true, placeholder: 'Ej. 45000', okLabel: 'Marcar vendido' });
-    if (amount === null) return;
-    if (!amount) { toast('Escribe el monto de la venta', 'error'); return; }
-    body.sale_amount = amount;
+  if (status === 'cotizando' || status === 'vendido') {
+    const key = status === 'cotizando' ? 'quote_amount' : 'sale_amount';
+    const pending = askForm(status === 'cotizando' ? 'Mover a Cotizando' : '¡Venta cerrada!',
+      priceFields(lead, key, status === 'cotizando' ? '¿De cuánto es la cotización?' : '¿De cuánto fue la venta?'), status === 'cotizando' ? 'Mover a Cotizando' : 'Marcar vendido');
+    wirePriceFields($('#modal-extra'), key);
+    const v = await pending;
+    if (!v) return;
+    for (const [k, val] of Object.entries(v)) if (val) body[k] = val;
   }
   try {
     await api(`/api/leads/${lead.id}`, { method: 'PATCH', body });
@@ -689,6 +785,11 @@ function prevPeriodQuery() {
   if (period === 'mes_pasado') { from = first(d.getFullYear(), d.getMonth() - 2); to = first(d.getFullYear(), d.getMonth() - 1); text = 'vs el mes previo'; }
   if (period === '30' || period === '90') { to = new Date(now - Number(period) * 86400e3); from = new Date(to.getTime() - Number(period) * 86400e3); text = `vs ${period} días anteriores`; }
   if (period === 'anio') { from = first(d.getFullYear() - 1, 0); to = new Date(from.getTime() + (now - first(d.getFullYear(), 0).getTime())); text = 'vs mismo corte del año pasado'; }
+  if (period === 'custom') {
+    const r = periodRange('custom', $('#f-from').value, $('#f-to').value);
+    if (!r) return null;
+    to = r.from; from = new Date(r.from.getTime() - (r.to - r.from)); text = 'vs el periodo anterior del mismo largo';
+  }
   p.set('from', from.toISOString()); p.set('to', to.toISOString());
   return { query: p.toString(), text };
 }
@@ -798,9 +899,11 @@ async function renderStats() {
     <div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>`;
   }
   const banner = seller ? sellerMonth(await api('/api/leads'), s) : tab === 'marketing' ? marketingInsight(s, health) : salesInsight(s, prev, prevQ);
-  $('#view-stats').innerHTML = `<div class="dash">${tabs}${banner}${body}</div>`;
+  const reportBtn = `<div class="stats-actions"><button type="button" class="ghost" id="stats-report">${icon('file', 16)} Descargar reporte</button></div>`;
+  $('#view-stats').innerHTML = `<div class="dash">${tabs}${reportBtn}${banner}${body}</div>`;
   $('#view-stats').querySelectorAll('[data-campaign-open]').forEach((b) => b.addEventListener('click', () => openCampaign(b.dataset.campaignOpen)));
-  $('#monthly-report')?.addEventListener('click', monthlyReport);
+  $('#monthly-report')?.addEventListener('click', () => openReport('marketing', 'mes_pasado'));
+  $('#stats-report').addEventListener('click', () => openReport(seller ? 'vendedor' : tab === 'marketing' ? 'marketing' : 'ventas'));
   $('#view-stats').querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
     exportCsv(`${filterQuery()}&audience=${b.dataset.audience}${b.dataset.format ? `&format=${b.dataset.format}` : ''}`);
@@ -1041,7 +1144,7 @@ function marketingInsight(s, h) {
   if (best) parts.push(`El lead con perfil más barato del mes viene de <b>${esc(best.key)}</b> (${money(best.cplq_mes)}).`);
   if (s.funnel.sin_origen) parts.push(`${s.funnel.sin_origen} ${s.funnel.sin_origen === 1 ? 'lead sin origen' : 'leads sin origen'}: inversión que no se puede medir.`);
   return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>${parts.join(' ')}</p></div>
-    <button type="button" class="ghost hero-btn" id="monthly-report">Reporte mensual</button></div>`;
+    <button type="button" class="ghost hero-btn" id="monthly-report">Reporte de marketing</button></div>`;
 }
 
 // ---------- Ficha de campaña ----------
@@ -1103,56 +1206,6 @@ async function renderCampaign() {
 }
 
 // ---------- Reporte mensual de marketing (mes pasado completo contra el anterior) ----------
-async function monthlyReport() {
-  const w = window.open('', '_blank');
-  if (!w) { toast('Permite las ventanas emergentes para abrir el reporte', 'error'); return; }
-  w.document.write('<p style="font-family:sans-serif">Preparando el reporte…</p>');
-  const d = new Date(); const first = (y, mo) => new Date(y, mo, 1).toISOString();
-  const q = (a, b) => `from=${a}&to=${b}`;
-  try {
-    const [cur, prev, h] = await Promise.all([
-      api(`/api/stats?${q(first(d.getFullYear(), d.getMonth() - 1), first(d.getFullYear(), d.getMonth()))}`),
-      api(`/api/stats?${q(first(d.getFullYear(), d.getMonth() - 2), first(d.getFullYear(), d.getMonth() - 1))}`),
-      api('/api/campaign-health')]);
-    const m = marketingMetrics(cur); const o = marketingMetrics(prev);
-    const mName = new Date(d.getFullYear(), d.getMonth() - 1, 15).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
-    const ch = (a, b, lower) => (a == null || b == null || !b ? '' : (() => { const x = ((a - b) / b) * 100; const good = lower ? x < 0 : x > 0;
-      if (Math.abs(x) < 0.5) return ' <small style="color:#6b7189">= igual</small>';
-      return ` <small style="color:${good ? '#037f4c' : '#c21e56'}">${x >= 0 ? '↑' : '↓'} ${Math.abs(Math.round(x))}%</small>`; })());
-    const cell = (v) => `<td>${v}</td>`;
-    const per = (r, k) => (r.inversion > 0 && r[k] ? money(r.inversion / r[k]) : '—');
-    w.document.open();
-    w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte mensual de marketing</title><style>
-      body{font:14px/1.45 system-ui,sans-serif;color:#1f2433;max-width:960px;margin:24px auto;padding:0 16px}h1{margin:0}h2{margin:24px 0 8px;font-size:16px}
-      .muted{color:#6b7189}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.k{border:1px solid #e4e8f1;border-radius:10px;padding:10px}
-      .k b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e4e8f1}
-      th{font-size:12px;color:#6b7189}@media print{button{display:none}}</style></head><body>
-      <button onclick="print()" style="float:right;padding:8px 14px">Imprimir o guardar PDF</button>
-      <h1>Reporte mensual de marketing</h1><p class="muted">${esc(mName)} · comparado con el mes anterior</p>
-      <div class="kpis">
-        <div class="k">Leads<b>${m.leads}${ch(m.leads, o.leads)}</b></div>
-        <div class="k">Cumplen perfil<b>${m.perfil == null ? '—' : `${Math.round(m.perfil)}%`}</b></div>
-        <div class="k">Inversión<b>${m.inv ? money(m.inv) : '—'}</b></div>
-        <div class="k">Costo por lead con perfil<b>${m.cplq ? money(m.cplq) : '—'}${ch(m.cplq, o.cplq, true)}</b></div>
-        <div class="k">Costo por cierre<b>${m.cpc ? money(m.cpc) : '—'}${ch(m.cpc, o.cpc, true)}</b></div>
-        <div class="k">Retorno<b>${m.roas == null ? '—' : `${m.roas.toFixed(1)}x`}${ch(m.roas, o.roas)}</b></div>
-      </div>
-      <h2>Campañas</h2>
-      <table><tr><th>Campaña</th><th>Leads</th><th>Con perfil</th><th>Inversión</th><th>Por lead con perfil</th><th>Cierres</th><th>Ventas</th></tr>
-        ${cur.campaignFunnel.map((r) => `<tr>${cell(esc(r.key))}${cell(r.recibidos)}${cell(r.perfilados)}${cell(r.inversion > 0 ? money(r.inversion) : '—')}${cell(per(r, 'perfilados'))}${cell(r.cerrados)}${cell(r.ingresos ? money(r.ingresos) : '—')}</tr>`).join('')}</table>
-      <h2>Anuncios</h2>
-      <table><tr><th>Anuncio</th><th>Leads</th><th>Con perfil</th><th>Cierres</th></tr>
-        ${cur.adFunnel.slice(0, 10).map((r) => `<tr>${cell(esc(r.key))}${cell(r.recibidos)}${cell(r.perfilados)}${cell(r.cerrados)}</tr>`).join('') || '<tr><td class="muted">Sin anuncios identificados</td></tr>'}</table>
-      <h2>Campañas a revisar (mes en curso)</h2>
-      <table>${h.campaigns.filter((c) => c.status !== 'green').map((c) => `<tr>${cell(esc(c.key))}${cell(c.motivos.map(esc).join('; '))}</tr>`).join('') || '<tr><td class="muted">Ninguna</td></tr>'}</table>
-      <h2>Audiencias disponibles</h2>
-      <table><tr><td>Cumplían perfil y no compraron</td><td>${cur.audiences.perfil}</td></tr><tr><td>Lo pospusieron</td><td>${cur.audiences.pospuso}</td></tr>
-        <tr><td>Contestaron pero no cumplían perfil</td><td>${cur.audiences.contestaron}</td></tr><tr><td>Clientes</td><td>${cur.audiences.clientes}</td></tr></table>
-      </body></html>`);
-    w.document.close();
-  } catch (err) { w.close(); toast(err.message, 'error'); }
-}
-
 // Barras por número de toque (T1…T5, 6+), con el acumulado: "con 3 toques ya respondió el 80%".
 function touchBars(rows, never, colorKey, verb) {
   const max = state.meta.touches.max;
@@ -1399,12 +1452,12 @@ async function openLead(id) {
       ${callButton(l)}${waButton(l)}</div>
     <div class="tags">
       <span class="tag status-tag ${textClass(stageOf(l))}" style="${colorVar(stageOf(l))}">${esc(label(stageOf(l)))}</span>
-      <span class="tag ${l.profile}">${esc(label(l.profile))}</span>
+      ${label(l.profile) !== label(stageOf(l)) ? `<span class="tag ${l.profile}">${esc(label(l.profile))}</span>` : ''}
       ${l.product_name ? `<span class="tag product">${esc(l.product_name)}</span>` : ''}
       ${l.campaign ? `<span class="tag">${esc(l.campaign)}</span>` : l.channel_name ? `<span class="tag">${esc(l.channel_name)}</span>` : ''}
-      ${l.quote_amount ? `<span class="tag">Cotizado ${money(l.quote_amount)}</span>` : ''}
+      ${l.quote_amount ? `<span class="tag">Cotizado ${money(l.quote_amount)}${l.quantity && l.quantity !== 1 ? ` (× ${l.quantity})` : ''}</span>` : ''}
       ${l.sale_amount ? `<span class="tag cumple">Vendido ${money(l.sale_amount)}</span>` : ''}
-      ${l.campaign_end ? `<span class="tag">Campaña hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
+      ${l.campaign_end ? `<span class="tag">${esc(cap(F.term()))} hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
       ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
     </div>
     ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido del gerente:</b> ${esc(l.manager_request)}
@@ -1447,12 +1500,14 @@ async function openLead(id) {
           <label>Perfil <select name="profile" ${ro}>${state.meta.profiles.map((pr) => `<option value="${pr}" ${pr === l.profile ? 'selected' : ''}>${esc(label(pr))}</option>`).join('')}</select></label>
         </div>
         <div class="row">
+          <label class="${['cotizando', 'vendido', 'declinado'].includes(l.status) ? '' : 'hidden'}" id="qty-wrap">Cantidad
+            <input name="quantity" inputmode="decimal" value="${l.quantity ?? ''}" placeholder="1" ${ro}></label>
           <label id="quote-wrap" class="${['cotizando', 'vendido', 'declinado'].includes(l.status) ? '' : 'hidden'}">Monto cotizado (MXN)
             <input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}" placeholder="Ej. 60000" ${ro}></label>
           <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="sale-wrap">Monto de venta (MXN)
             <input name="sale_amount" inputmode="decimal" value="${l.sale_amount ?? ''}" placeholder="Ej. 45000" ${ro}></label>
         </div>
-        <label class="${l.status === 'vendido' ? '' : 'hidden'}" id="end-wrap">¿Cuándo termina la campaña?
+        <label class="${l.status === 'vendido' && renewals() ? '' : 'hidden'}" id="end-wrap">¿Cuándo termina ${esc(F.theTerm())}?
           <input type="date" name="campaign_end" value="${esc(l.campaign_end || '')}" ${ro}></label>
         <div class="row ${l.status === 'declinado' ? '' : 'hidden'}" id="decline-wrap">
           <label>Motivo <select name="decline_reason" ${ro}>${[...new Set([...(l.decline_reason ? [l.decline_reason] : []), ...state.meta.declineReasons])]
@@ -1483,7 +1538,7 @@ async function openLead(id) {
     try { await api(`/api/leads/${l.id}/request`, { method: 'POST', body: { text } }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
   };
   $('#req-ask')?.addEventListener('click', async () => {
-    const text = await ask(`¿Qué le pides a ${l.assigned_name}? Le aparecerá hasta arriba en su Mi día.`, { input: true, placeholder: 'Ej. Llámale hoy y ofrécele 2 caras en Periférico', okLabel: 'Pedir' });
+    const text = await ask(`¿Qué le pides a ${l.assigned_name}? Le aparecerá hasta arriba en su Mi día.`, { input: true, placeholder: 'Ej. Llámale hoy y ofrécele el paquete trimestral', okLabel: 'Pedir' });
     if (text) { await sendRequest(text); toast('Pedido enviado al vendedor', 'ok'); }
   });
   $('#req-clear')?.addEventListener('click', () => sendRequest(''));
@@ -1511,14 +1566,15 @@ async function openLead(id) {
   form.status.addEventListener('change', () => {
     $('#decline-wrap').classList.toggle('hidden', form.status.value !== 'declinado');
     $('#sale-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
-    $('#end-wrap').classList.toggle('hidden', form.status.value !== 'vendido');
+    $('#end-wrap').classList.toggle('hidden', form.status.value !== 'vendido' || !renewals());
     $('#quote-wrap').classList.toggle('hidden', !['cotizando', 'vendido', 'declinado'].includes(form.status.value));
+    $('#qty-wrap').classList.toggle('hidden', !['cotizando', 'vendido', 'declinado'].includes(form.status.value));
     form.status.setAttribute('style', colorVar(form.status.value));
     form.status.classList.toggle('dark-text', DARK_TEXT.has(form.status.value));
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'campaign_end', 'name', 'phone', 'email', 'product_id']
+    const body = Object.fromEntries(['status', 'profile', 'decline_reason', 'recontact_at', 'sale_amount', 'quote_amount', 'quantity', 'campaign_end', 'name', 'phone', 'email', 'product_id']
       .map((k) => [k, form[k].value]));
     Object.assign(body, originToFields(form.origin.value));
     try {
@@ -1642,7 +1698,7 @@ async function renderTeam() {
         : `<span class="alert-pill late">${t.unassigned} sin asignar (los reparte quien asigna leads)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
       <span class="muted">Rojo: algo vencido, un lead sin primer toque después de ${t.first_touch_hours} h o un pedido tuyo con más de 24 h. Amarillo: cotizaciones frías o datos incompletos.</span>
       <span class="spacer"></span>
-      <button type="button" class="ghost" id="weekly-report">Reporte semanal</button>
+      <button type="button" class="ghost" id="weekly-report">Reporte de ventas</button>
     </div>
     <section class="card">
       ${cardTitle('users', 'var(--f-contactados)', 'Tu equipo hoy', 'a quién hablarle y de qué lead')}
@@ -1657,7 +1713,7 @@ async function renderTeam() {
   </div>`;
   const view = $('#view-team');
   $('#team-assign')?.addEventListener('click', () => setView('assign'));
-  $('#weekly-report').addEventListener('click', weeklyReport);
+  $('#weekly-report').addEventListener('click', () => openReport('ventas', '7'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   animateIn(view);
@@ -1736,53 +1792,167 @@ async function renderSeller() {
   animateIn(view);
 }
 
-// ---------- Reporte semanal: una página para la junta del lunes (se imprime o se guarda en PDF) ----------
-async function weeklyReport() {
+// ---------- Reportes por periodo: cada rol elige las fechas, lo ve, lo imprime/guarda en PDF o lo descarga en Excel ----------
+// kind: 'ventas' (gerente y analista), 'vendedor' (el suyo), 'marketing', 'asignacion' (quien asigna leads).
+const REPORT_PRESETS = [['7', 'Últimos 7 días'], ['mes', 'Este mes'], ['mes_pasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['anio', 'Este año'], ['custom', 'Elegir fechas']];
+async function openReport(kind, preset) {
+  // El periodo arranca con el de los filtros (si hay uno) o con el más común para ese reporte.
+  const cur = $('#f-period').value;
+  const start = cur === 'custom' && periodRange('custom', $('#f-from').value, $('#f-to').value) ? 'custom'
+    : REPORT_PRESETS.some(([k]) => k === cur) ? cur : preset || 'mes';
+  const r0 = start === 'custom' ? periodRange('custom', $('#f-from').value, $('#f-to').value) : periodRange(start);
+  const pending = askForm('Reporte: elige el periodo', `
+    <label>Periodo <select name="preset" data-preset>${REPORT_PRESETS.map(([k, t]) => `<option value="${k}" ${k === start ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <div class="row"><label>Desde <input type="date" name="from" value="${ymdLocal(r0.from)}" required></label>
+      <label>Hasta <input type="date" name="to" value="${ymdLocal(new Date(r0.to - 1))}" required></label></div>
+    <p class="muted small-note">Se abre en otra pestaña: ahí lo imprimes o guardas en PDF, o lo descargas en Excel.</p>`, 'Ver reporte');
+  const box = $('#modal-extra');
+  $('[data-preset]', box).addEventListener('change', (e) => {
+    if (e.target.value === 'custom') return;
+    const r = periodRange(e.target.value);
+    box.elements.from.value = ymdLocal(r.from); box.elements.to.value = ymdLocal(new Date(r.to - 1));
+  });
+  ['from', 'to'].forEach((n) => box.elements[n].addEventListener('change', () => { box.elements.preset.value = 'custom'; }));
+  const v = await pending;
+  if (!v) return;
+  const range = periodRange('custom', v.from, v.to);
+  if (!range) { toast('Revisa las fechas: "Desde" debe ser antes que "Hasta"', 'error'); return; }
   const w = window.open('', '_blank');
   if (!w) { toast('Permite las ventanas emergentes para abrir el reporte', 'error'); return; }
   w.document.write('<p style="font-family:sans-serif">Preparando el reporte…</p>');
-  const now = Date.now(); const day = 86400e3;
-  const q = (from, to) => `from=${new Date(from).toISOString()}&to=${new Date(to).toISOString()}`;
   try {
-    const [cur, prev, t] = await Promise.all([api(`/api/stats?${q(now - 7 * day, now)}`), api(`/api/stats?${q(now - 14 * day, now - 7 * day)}`), api('/api/team')]);
-    const f = cur.funnel; const p = prev.funnel;
-    const ch = (a, b) => (!b ? '' : a === b ? ' <small style="color:#6b7189">= igual</small>'
-      : ` <small style="color:${a > b ? '#037f4c' : '#c21e56'}">${a > b ? '↑' : '↓'} ${Math.abs(Math.round(((a - b) / b) * 100))}%</small>`);
-    const pipe = cur.pipeline || [];
-    const exp = pipe.reduce((x, r) => x + (r.esperado || 0), 0);
-    const cell = (v) => `<td>${v}</td>`;
-    const range = `${new Date(now - 7 * day).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} al ${new Date(now).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-    w.document.open();
-    w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte semanal de ventas</title><style>
-      body{font:14px/1.45 system-ui,sans-serif;color:#1f2433;max-width:900px;margin:24px auto;padding:0 16px}
-      h1{margin:0}h2{margin:24px 0 8px;font-size:16px}.muted{color:#6b7189}
-      .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.k{border:1px solid #e4e8f1;border-radius:10px;padding:10px}
-      .k b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e4e8f1}
-      th{font-size:12px;color:#6b7189}@media print{button{display:none}}</style></head><body>
-      <button onclick="print()" style="float:right;padding:8px 14px">Imprimir o guardar PDF</button>
-      <h1>Reporte semanal de ventas</h1><p class="muted">${esc(range)} · comparado con la semana anterior</p>
-      <div class="kpis">
-        <div class="k">Leads recibidos<b>${f.recibidos}${ch(f.recibidos, p.recibidos)}</b></div>
-        <div class="k">Cotizados<b>${f.cotizados}${ch(f.cotizados, p.cotizados)}</b></div>
-        <div class="k">Cierres<b>${f.cerrados}${ch(f.cerrados, p.cerrados)}</b></div>
-        <div class="k">Ventas<b>${money(f.ingresos)}${ch(f.ingresos, p.ingresos)}</b></div>
-      </div>
-      <h2>Vendedores (esta semana)</h2>
-      <table><tr><th>Vendedor</th><th>Recibe</th><th>Cotiza</th><th>Cierra</th><th>Ventas</th><th>Vencidos hoy</th><th>Toques 7 días</th></tr>
-        ${t.sellers.map((r) => { const s2 = cur.sellerFunnel.find((x) => x.id === r.id) || {};
-          return `<tr>${cell(esc(r.name))}${cell(s2.recibidos || 0)}${cell(s2.cotizados || 0)}${cell(s2.cerrados || 0)}${cell(s2.ingresos ? money(s2.ingresos) : '—')}${cell(r.vencidos)}${cell(r.toques_7d)}</tr>`; }).join('')}</table>
-      <h2>Pipeline hoy</h2>
-      <table><tr><th>Vendedor</th><th>Vivas</th><th>Frías</th><th>Venta esperada</th></tr>
-        ${pipe.map((r) => `<tr>${cell(esc(r.key))}${cell(`${r.vivas} · ${money(r.vivas_monto)}`)}${cell(r.frias ? `${r.frias} · ${money(r.frias_monto)}` : '0')}${cell(r.esperado == null ? 'sin historial' : money(r.esperado))}</tr>`).join('')}
-        <tr><th>Total</th><th></th><th></th><th>${exp ? money(exp) : '—'}</th></tr></table>
-      <h2>Cotizaciones más grandes</h2>
-      <table><tr><th>Cliente</th><th>Vendedor</th><th>Monto</th><th>Último contacto</th><th>Siguiente paso</th></tr>
-        ${t.top_quotes.map((x) => `<tr>${cell(esc(x.name))}${cell(esc(x.seller))}${cell(money(x.amount))}${cell(x.dias_sin_contacto === 0 ? 'hoy' : `hace ${x.dias_sin_contacto} ${x.dias_sin_contacto === 1 ? 'día' : 'días'}`)}${cell(esc(x.siguiente || '—'))}</tr>`).join('')}</table>
-      <h2>Por qué se perdieron (esta semana)</h2>
-      <table>${cur.touches.declineReasons.map((r) => `<tr>${cell(esc(r.key))}${cell(r.n)}</tr>`).join('') || '<tr><td class="muted">Sin declinados</td></tr>'}</table>
-      </body></html>`);
-    w.document.close();
+    const builders = { ventas: salesReport, vendedor: salesReport, marketing: marketingReport, asignacion: assignReport };
+    const { title, body } = await builders[kind](range, kind);
+    writeReport(w, title, rangeText(range), body);
   } catch (err) { w.close(); toast(err.message, 'error'); }
+}
+
+// Periodo anterior del mismo largo, para comparar.
+const prevRange = (r) => ({ from: new Date(r.from.getTime() - (r.to - r.from)), to: r.from });
+const rangeQuery = (r) => `from=${encodeURIComponent(r.from.toISOString())}&to=${encodeURIComponent(r.to.toISOString())}`;
+// Variación contra el periodo anterior; en costos, bajar es bueno.
+function reportDelta(a, b, lowerIsBetter = false) {
+  if (a == null || b == null || !b) return '';
+  const x = ((a - b) / b) * 100;
+  if (Math.abs(x) < 0.5) return ' <small style="color:#6b7189">= igual</small>';
+  const good = lowerIsBetter ? x < 0 : x > 0;
+  return ` <small style="color:${good ? '#037f4c' : '#c21e56'}">${x > 0 ? '↑' : '↓'} ${Math.abs(Math.round(x))}%</small>`;
+}
+const rCell = (v) => `<td>${v}</td>`;
+const rTable = (head, rows, empty = 'Sin datos en el periodo') => `<table><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr>
+  ${rows.length ? rows.join('') : `<tr><td class="muted" colspan="${head.length}">${empty}</td></tr>`}</table>`;
+const rKpi = (label, value) => `<div class="k">${label}<b>${value}</b></div>`;
+const rDay = (iso) => new Date(iso).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+
+// Ventas: lo que pasó en el periodo por fecha de cada hecho (venta el día que se cerró, cotización el día que se envió).
+async function salesReport(range, kind) {
+  const seller = kind === 'vendedor';
+  const [a, p, st] = await Promise.all([api(`/api/activity?${rangeQuery(range)}`), api(`/api/activity?${rangeQuery(prevRange(range))}`), api(`/api/stats?${rangeQuery(range)}`)]);
+  const tot = (x, k) => x.sellers.reduce((t, r) => t + (r[k] || 0), 0);
+  const team = !seller && can('gerente', 'analista') ? await api('/api/team').catch(() => null) : null;
+  const f = st.funnel;
+  const myPipe = (st.pipeline || []).filter((r) => (seller ? r.id === state.me.id : r.id));
+  const body = `
+    <div class="kpis">
+      ${rKpi('Leads recibidos', `${a.recibidos.n}${reportDelta(a.recibidos.n, p.recibidos.n)}`)}
+      ${rKpi('Toques registrados', `${tot(a, 'toques')}${reportDelta(tot(a, 'toques'), tot(p, 'toques'))}`)}
+      ${rKpi('Cotizaciones enviadas', `${tot(a, 'cotizaciones')} · ${money(tot(a, 'cotizado'))}${reportDelta(tot(a, 'cotizado'), tot(p, 'cotizado'))}`)}
+      ${rKpi('Ventas cerradas', `${tot(a, 'ventas')} · ${money(tot(a, 'vendido'))}${reportDelta(tot(a, 'vendido'), tot(p, 'vendido'))}`)}
+      ${renewals() ? rKpi('Renovaciones', `${tot(a, 'renovaciones')} · ${money(tot(a, 'renovado'))}${reportDelta(tot(a, 'renovado'), tot(p, 'renovado'))}`) : ''}
+      ${rKpi('Declinados', `${tot(a, 'declinados')}`)}
+    </div>
+    <p class="muted">Comparado con el periodo anterior del mismo largo. Cada venta cuenta el día que se cerró y cada cotización el día que se envió, sin importar cuándo llegó el lead.</p>
+    ${seller ? '' : `<h2>Por vendedor</h2>${rTable(['Vendedor', 'Leads asignados', 'Primer toque', 'Toques', 'Cotizaciones', 'Cotizado', 'Ventas', 'Vendido', ...(renewals() ? ['Renovado'] : []), 'Declinados'],
+      a.sellers.map((r) => `<tr>${rCell(esc(r.name))}${rCell(r.asignados)}${rCell(hours(r.horas_primer_toque))}${rCell(r.toques)}${rCell(r.cotizaciones)}${rCell(money(r.cotizado))}${rCell(r.ventas)}${rCell(money(r.vendido))}${renewals() ? rCell(money(r.renovado)) : ''}${rCell(r.declinados)}</tr>`))}`}
+    <h2>Ventas cerradas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Producto', 'Cantidad', 'Monto'],
+      a.ventas.map((x) => `<tr>${rCell(rDay(x.at))}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(esc(x.product || '—'))}${rCell(x.quantity ?? '—')}${rCell(money(x.amount))}</tr>`))}
+    <h2>Cotizaciones enviadas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Producto', 'Monto', 'Cómo va'],
+      a.cotizaciones.map((x) => `<tr>${rCell(rDay(x.at))}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(esc(x.product || '—'))}${rCell(money(x.amount))}${rCell(esc(label(x.status)))}</tr>`))}
+    ${renewals() ? `<h2>Renovaciones</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Monto'],
+      a.renovaciones.map((x) => `<tr>${rCell(rDay(x.at))}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(money(x.amount))}</tr>`))}` : ''}
+    <h2>Por qué se perdieron</h2>${rTable(['Motivo', 'Leads'], a.motivos.map((r) => `<tr>${rCell(esc(r.key))}${rCell(r.n)}</tr>`), 'Sin declinados en el periodo')}
+    <h2>Embudo de los leads que llegaron en el periodo</h2>${rTable(['Paso', 'Leads', '% de los recibidos'],
+      FUNNEL.map(([k, n]) => `<tr>${rCell(n)}${rCell(f[k])}${rCell(`${pctOf(f[k], f.recibidos)}%`)}</tr>`))}
+    <h2>Cotizaciones abiertas hoy</h2>${rTable([...(seller ? [] : ['Vendedor']), 'Vivas', 'Frías (más de 15 días sin contacto)', 'Venta esperada'],
+      myPipe.map((r) => `<tr>${seller ? '' : rCell(esc(r.key))}${rCell(`${r.vivas} · ${money(r.vivas_monto)}`)}${rCell(r.frias ? `${r.frias} · ${money(r.frias_monto)}` : '0')}${rCell(r.esperado == null ? 'sin historial suficiente' : money(r.esperado))}</tr>`), 'Sin cotizaciones abiertas')}
+    ${team ? `<h2>Cotizaciones más grandes hoy</h2>${rTable(['Cliente', 'Vendedor', 'Monto', 'Último contacto'],
+      team.top_quotes.map((x) => `<tr>${rCell(esc(x.name))}${rCell(esc(x.seller))}${rCell(money(x.amount))}${rCell(x.dias_sin_contacto === 0 ? 'hoy' : `hace ${x.dias_sin_contacto} días`)}</tr>`), 'Sin cotizaciones abiertas')}` : ''}`;
+  return { title: seller ? `Mi reporte de ventas · ${state.me.name}` : 'Reporte de ventas', body };
+}
+
+// Marketing: los leads que llegaron en el periodo, de qué campaña y anuncio, cuánto costaron y cuánto vendieron.
+async function marketingReport(range) {
+  const [cur, prev] = await Promise.all([api(`/api/stats?${rangeQuery(range)}`), api(`/api/stats?${rangeQuery(prevRange(range))}`)]);
+  const m = marketingMetrics(cur); const o = marketingMetrics(prev);
+  const per = (r, k) => (r.inversion > 0 && r[k] ? money(r.inversion / r[k]) : '—');
+  const body = `
+    <div class="kpis">
+      ${rKpi('Leads', `${m.leads}${reportDelta(m.leads, o.leads)}`)}
+      ${rKpi('Cumplen perfil', m.perfil == null ? '—' : `${Math.round(m.perfil)}%`)}
+      ${rKpi('Inversión', m.inv ? money(m.inv) : '—')}
+      ${rKpi('Costo por lead con perfil', `${m.cplq ? money(m.cplq) : '—'}${reportDelta(m.cplq, o.cplq, true)}`)}
+      ${rKpi('Costo por cierre', `${m.cpc ? money(m.cpc) : '—'}${reportDelta(m.cpc, o.cpc, true)}`)}
+      ${rKpi('Retorno', `${m.roas == null ? '—' : `${m.roas.toFixed(1)}x`}${reportDelta(m.roas, o.roas)}`)}
+    </div>
+    <p class="muted">De los leads que llegaron en el periodo, comparado con el periodo anterior del mismo largo. La inversión es la de los meses que toca el periodo.</p>
+    <h2>Campañas</h2>${rTable(['Campaña', 'Leads', 'Con perfil', 'Inversión', 'Por lead con perfil', 'Cierres', 'Ventas', 'Retorno'],
+      cur.campaignFunnel.map((r) => `<tr>${rCell(esc(r.key))}${rCell(r.recibidos)}${rCell(r.perfilados)}${rCell(r.inversion > 0 ? money(r.inversion) : '—')}${rCell(per(r, 'perfilados'))}${rCell(r.cerrados)}${rCell(r.ingresos ? money(r.ingresos) : '—')}${rCell(r.inversion > 0 && r.ingresos ? `${(r.ingresos / r.inversion).toFixed(1)}x` : '—')}</tr>`))}
+    <h2>Anuncios</h2>${rTable(['Anuncio', 'Leads', 'Con perfil', 'Cierres'],
+      cur.adFunnel.slice(0, 15).map((r) => `<tr>${rCell(esc(r.key))}${rCell(r.recibidos)}${rCell(r.perfilados)}${rCell(r.cerrados)}</tr>`), 'Sin anuncios identificados')}
+    <h2>Por qué se descartan</h2>${rTable(['Motivo', 'Leads'], cur.touches.declineReasons.map((r) => `<tr>${rCell(esc(r.key))}${rCell(r.n)}</tr>`), 'Sin descartes')}
+    <h2>Audiencias para remarketing</h2>${rTable(['Audiencia', 'Contactos'], AUDIENCES.map(([k, t]) => `<tr>${rCell(esc(t))}${rCell(cur.audiences[k] ?? 0)}</tr>`))}`;
+  return { title: 'Reporte de marketing', body };
+}
+
+// Asignación: cuántos leads llegaron, de dónde, cuánto tardaron en tener vendedor y a quién se repartieron.
+async function assignReport(range) {
+  const [a, p] = await Promise.all([api(`/api/activity?${rangeQuery(range)}`), api(`/api/activity?${rangeQuery(prevRange(range))}`)]);
+  const r = a.recibidos;
+  const body = `
+    <div class="kpis">
+      ${rKpi('Leads recibidos', `${r.n}${reportDelta(r.n, p.recibidos.n)}`)}
+      ${rKpi('Con vendedor', `${r.asignados} de ${r.n}`)}
+      ${rKpi('Tiempo promedio para asignar', `${hours(r.horas_asignar)}${reportDelta(r.horas_asignar, p.recibidos.horas_asignar, true)}`)}
+      ${rKpi('Sin asignar hoy', r.sin_asignar_hoy)}
+    </div>
+    <p class="muted">Comparado con el periodo anterior del mismo largo.</p>
+    <h2>De dónde llegaron</h2>${rTable(['Campaña o canal', 'Leads'], r.por_origen.map((x) => `<tr>${rCell(esc(x.key))}${rCell(x.n)}</tr>`))}
+    <h2>Cómo se repartieron</h2>${rTable(['Vendedor', 'Leads asignados', 'Primer toque (promedio)'],
+      a.sellers.map((x) => `<tr>${rCell(esc(x.name))}${rCell(x.asignados)}${rCell(hours(x.horas_primer_toque))}</tr>`))}`;
+  return { title: 'Reporte de asignación', body };
+}
+
+// Escribe el reporte en la pestaña nueva, con botones para imprimir/PDF y para descargar en Excel (CSV con acentos).
+function writeReport(w, title, sub, body) {
+  const company = state.company.name;
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+    body{font:14px/1.45 system-ui,sans-serif;color:#1f2433;max-width:980px;margin:24px auto;padding:0 16px}h1{margin:0}h2{margin:24px 0 8px;font-size:16px}
+    .muted{color:#6b7189}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.k{border:1px solid #e4e8f1;border-radius:10px;padding:10px}
+    .k b{display:block;font-size:19px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e4e8f1}
+    th{font-size:12px;color:#6b7189}.top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.top img{height:40px;max-width:160px;object-fit:contain}
+    .actions{margin-left:auto;display:flex;gap:8px}.actions a,.actions button{padding:8px 14px;font:inherit;border:1px solid #c9d1e3;border-radius:8px;background:#fff;color:#1f2433;text-decoration:none;cursor:pointer}
+    @media (max-width:640px){.kpis{grid-template-columns:1fr 1fr}}@media print{.actions{display:none}}</style></head><body>
+    <div class="top">${state.company.logo ? `<img src="${esc(state.company.logo)}" alt="">` : ''}<div><h1>${esc(title)}</h1>
+      <p class="muted" style="margin:2px 0 0">${company ? `${esc(company)} · ` : ''}${esc(sub)}</p></div>
+      <div class="actions"><a id="csv" download>Descargar Excel</a><button onclick="print()">Imprimir o guardar PDF</button></div></div>
+    ${body}
+    <p class="muted" style="margin-top:28px">Generado el ${esc(new Date().toLocaleString('es-MX', { dateStyle: 'long', timeStyle: 'short' }))}${state.me ? ` por ${esc(state.me.name)}` : ''}.</p>
+    </body></html>`;
+  w.document.open(); w.document.write(html); w.document.close();
+  // Excel: cada tabla del reporte, con su título; los números de arriba como primera sección.
+  const doc = w.document; const q = (v) => `"${String(v).replace(/\s+/g, ' ').trim().replace(/"/g, '""')}"`;
+  const lines = [[title], [`${company ? `${company} · ` : ''}${sub}`], [], ['Resumen']];
+  doc.querySelectorAll('.k').forEach((k) => lines.push([k.firstChild.textContent, k.querySelector('b').textContent]));
+  doc.querySelectorAll('h2').forEach((h) => {
+    const t = h.nextElementSibling;
+    if (t?.tagName !== 'TABLE') return;
+    lines.push([], [h.textContent]);
+    t.querySelectorAll('tr').forEach((tr) => lines.push([...tr.children].map((c) => c.textContent)));
+  });
+  const csv = `﻿${lines.map((l) => l.map(q).join(',')).join('\r\n')}`;
+  const a = doc.getElementById('csv');
+  a.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
+  a.download = `${slug(title)}-${ymdLocal(new Date())}.csv`;
 }
 
 // ---------- Asignación: carga por vendedor y leads sin dueño ----------
@@ -1818,6 +1988,7 @@ async function renderAssign() {
     </div>`).join('');
 
   $('#view-assign').innerHTML = `<div class="assign">
+    <div class="stats-actions"><button type="button" class="ghost" id="assign-report">${icon('file', 16)} Reporte de asignación</button></div>
     <label class="switch-row card compact-card"><input type="checkbox" id="auto-assign" ${w.auto_assign ? 'checked' : ''}>
       <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
       <span class="muted">Apagado, asignas tú cada lead aquí o al capturarlo, con la sugerencia de a quién le toca. Encendido, cada lead que llega sin vendedor se asigna solo.</span></span></label>
@@ -1833,6 +2004,7 @@ async function renderAssign() {
   </div>`;
 
   const view = $('#view-assign');
+  $('#assign-report').addEventListener('click', () => openReport('asignacion', 'mes'));
   $('#auto-assign').addEventListener('change', async (e) => {
     try {
       await api('/api/assign-settings', { method: 'PATCH', body: { auto_assign: e.target.checked } });
@@ -1863,33 +2035,45 @@ async function renderAssign() {
 async function renderUsers() {
   state.users = await api('/api/users');
   const roleOpts = (sel) => state.meta.roles.map((r) => `<option value="${r}" ${r === sel ? 'selected' : ''}>${ROLE_NAMES[r] || r}</option>`).join('');
+  // Estado de acceso: invitación pendiente (aún no crea su contraseña), activo con su último acceso, o desactivado.
+  const status = (u) => {
+    if (!u.active) return '<span class="muted user-status">Desactivado</span>';
+    if (u.pendiente) {
+      const expired = !u.link_vence || u.link_vence < Date.now();
+      return `<span class="touch-badge ${expired ? 'late' : 'today'} user-status">${expired ? 'Invitación vencida' : 'Invitación pendiente'}</span>`;
+    }
+    return `<span class="muted user-status">${u.last_login_at ? `Último acceso ${timeAgo(u.last_login_at)}` : 'Activo'}</span>`;
+  };
   $('#view-users').innerHTML = `
     <div class="card" style="margin: 12px 0">
       <h3 style="margin-top:0">Agregar usuario</h3>
       <form id="user-form" class="row" style="flex-wrap:wrap; align-items:end">
         <label>Nombre <input name="name" required></label>
         <label>Email <input name="email" type="email" required></label>
-        <label>Contraseña <input name="password" type="text" minlength="8" required></label>
         <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
         <label class="inline-check" id="op-question"><input type="checkbox" name="can_assign" value="1"> También asigna leads</label>
-        <button type="submit" style="flex:0 0 auto">Crear</button>
+        <button type="submit" style="flex:0 0 auto">Crear e invitar</button>
       </form>
       <p class="error" id="user-error"></p>
+      <p class="muted">Al crearlo se genera un <b>link de invitación</b> (vence en 72 horas) para mandárselo por WhatsApp o correo. Con ese link la persona
+        crea su propia contraseña: así confirmas que el acceso le llegó a ella y nadie más la conoce. Si alguien olvida su contraseña,
+        dale clic a "Link para contraseña nueva" en su renglón y mándaselo igual.</p>
       <p class="muted"><b>Gerente:</b> dirige; ve Equipo hoy, el Resumen y todos los leads, pide seguimientos y corrige; reasigna solo en emergencias.
         <b>Coordinador de leads:</b> su único trabajo es capturar y asignar leads y corregir sus datos; no ve reportes. <b>Vendedor:</b> trabaja los leads que le asignan y ve su propio Resumen.
         <b>Gerente de marketing:</b> Resumen de marketing, campañas a revisar, ficha de cada campaña, links y audiencias. <b>Analista:</b> solo lectura.</p>
       <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el gerente en un equipo chico).
         Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo.</p>
     </div>
-    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Asigna leads</th><th>Activo</th><th></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Asigna leads</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
       <td>${esc(u.name)}${u.role === 'vendedor' && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
-      <td><select data-f="role">${roleOpts(u.role)}</select></td>
+      <td><select data-f="role" aria-label="Rol">${roleOpts(u.role)}</select></td>
       <td>${u.role === 'operador' ? '<span class="muted">Es su trabajo</span>' : `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>`}</td>
-      <td><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''}></td>
-      <td><button class="ghost" data-f="password">Cambiar contraseña</button></td>
+      <td>${status(u)}</td>
+      <td><input type="checkbox" data-f="active" aria-label="Activo" ${u.active ? 'checked' : ''}></td>
+      <td>${u.active && u.id !== state.me.id ? `<button class="ghost small" data-f="link">${u.pendiente ? 'Reenviar invitación' : 'Link para contraseña nueva'}</button>` : ''}</td>
     </tr>`).join('')}
-    </tbody></table>`;
+    </tbody></table></div>`;
 
   // Al Coordinador de leads no se le pregunta: asignar ya es su trabajo.
   const roleSel = $('#user-form [name=role]');
@@ -1901,10 +2085,11 @@ async function renderUsers() {
   roleSel.addEventListener('change', syncQuestion); syncQuestion();
   $('#user-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target));
     try {
-      const body = Object.fromEntries(new FormData(e.target));
-      await api('/api/users', { method: 'POST', body });
+      const r = await api('/api/users', { method: 'POST', body });
       state.users = await api('/api/users'); fillFilters(); renderUsers();
+      showAccessLink({ name: body.name, email: body.email }, r);
     } catch (err) { $('#user-error').textContent = err.message; }
   });
   $('#view-users').querySelectorAll('tbody tr').forEach((tr) => {
@@ -1935,11 +2120,36 @@ async function renderUsers() {
       if (!e.target.checked && !await confirmRelease(e.target, (el) => { el.checked = true; })) return;
       released(await patch({ active: e.target.checked }));
     });
-    $('[data-f=password]', tr).addEventListener('click', async () => {
-      const password = await ask('Nueva contraseña (mínimo 8 caracteres):', { input: true, okLabel: 'Cambiar' });
-      if (password) patch({ password });
+    $('[data-f=link]', tr)?.addEventListener('click', async () => {
+      try {
+        const r = await api(`/api/users/${u.id}/access-link`, { method: 'POST' });
+        renderUsers();
+        showAccessLink(u, r);
+      } catch (err) { toast(err.message, 'error'); }
     });
   });
+}
+
+// Muestra el link de acceso listo para mandar: copiar, WhatsApp o correo. El link anterior de esa persona deja de servir.
+async function showAccessLink(u, r) {
+  const first = String(u.name || '').split(/\s+/)[0];
+  const company = state.company.name || 'la empresa';
+  const msg = r.kind === 'invite'
+    ? `Hola ${first}, te di de alta en el CRM de ${company}. Entra a este link para crear tu contraseña (vence en 72 horas): ${r.link}`
+    : `Hola ${first}, este es tu link para crear una contraseña nueva en el CRM de ${company} (vence en 72 horas): ${r.link}`;
+  const done = askForm(r.kind === 'invite' ? `Invitación para ${u.name}` : `Contraseña nueva para ${u.name}`, `
+    <p class="muted" style="margin:0">Mándale este link. Es de un solo uso y vence en 72 horas; si generas otro, este deja de servir.</p>
+    <div class="link-box"><input readonly value="${esc(r.link)}" aria-label="Link de acceso"><button type="button" class="ghost small" id="link-copy">Copiar</button></div>
+    <div class="link-box">
+      <a class="wa-btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}">${WA_ICON}<span>Mandar por WhatsApp</span></a>
+      <a class="button-link ghost small" href="mailto:${encodeURIComponent(u.email || '')}?subject=${encodeURIComponent(`Tu acceso al CRM de ${company}`)}&body=${encodeURIComponent(msg)}">Mandar por correo</a>
+    </div>`, 'Listo');
+  $('#link-copy').addEventListener('click', async (e) => {
+    const input = e.target.previousElementSibling; input.select();
+    try { await navigator.clipboard.writeText(msg); } catch { document.execCommand('copy'); }
+    e.target.textContent = 'Copiado con mensaje';
+  });
+  await done;
 }
 
 // ---------- Primer uso ----------
@@ -1947,6 +2157,7 @@ $('#setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     state.me = await api('/api/setup', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    applyCompany(await api('/api/company'));
     $('#setup').classList.add('hidden');
     state.view = 'settings';
     start();
@@ -2001,11 +2212,29 @@ async function renderSettings() {
   const sys = can('gerente') ? await api('/api/system').catch(() => null) : null;
   const kb = (b) => (b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
   // Pestañas para no tener todo en una sola página.
-  const groups = [['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(sys ? [['datos', 'Respaldos']] : [])];
-  const active = groups.some(([k]) => k === state.settingsTab) ? state.settingsTab : groups.some(([k]) => k === pref.get('settingsTab')) ? pref.get('settingsTab') : 'campanas';
+  const groups = [...(can('gerente') ? [['empresa', 'Empresa']] : []), ['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(sys ? [['datos', 'Respaldos']] : [])];
+  const active = groups.some(([k]) => k === state.settingsTab) ? state.settingsTab : groups.some(([k]) => k === pref.get('settingsTab')) ? pref.get('settingsTab') : groups[0][0];
+  const co = state.company;
   const g = (k) => `data-group="${k}" class="settings-group ${k === active ? '' : 'hidden'}"`;
   $('#view-settings').innerHTML = `<div class="settings">
     <div class="tabs settings-tabs" role="tablist">${groups.map(([k, t]) => `<button type="button" role="tab" data-stab="${k}" class="${k === active ? 'active' : ''}">${t}</button>`).join('')}</div>
+    <div ${g('empresa')}>
+    ${can('gerente') ? `<div class="card">
+      ${cardTitle('layers', 'var(--accent)', 'Tu empresa', 'aparece en la app, los mensajes de WhatsApp y los reportes')}
+      <form id="company-form">
+        <label>Nombre de la empresa <input name="name" value="${esc(co.name)}" required maxlength="80"></label>
+        <label>Logo <span class="muted small">(PNG, JPG o WebP; se ajusta solo)</span></label>
+        <div class="price-row">${co.logo ? `<img class="logo-preview" src="${esc(co.logo)}" alt="Logo actual">` : '<span class="muted">Sin logo</span>'}
+          <input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp" aria-label="Subir logo">
+          ${co.logo ? '<button type="button" class="ghost small" id="logo-remove">Quitar logo</button>' : ''}</div>
+        <label>¿Cómo le llamas a lo que vendes y se renueva?
+          <select name="term">${Object.entries(F.TERMS).map(([k, [w]]) => `<option value="${k}" ${k === co.term ? 'selected' : ''}>${esc(cap(w))}</option>`).join('')}</select></label>
+        <label class="inline-check"><input type="checkbox" name="renewals" ${co.renewals ? 'checked' : ''}> Mis clientes renuevan: al cerrar una venta se pregunta cuándo termina y se avisa al vendedor 30 días antes para ofrecer la renovación</label>
+        <p class="muted small-note">Si lo que vendes es de una sola vez (por ejemplo, un equipo o un evento), quita la casilla: después de vender solo se pedirán referidos.</p>
+        <button type="submit">Guardar</button>
+      </form>
+    </div>` : ''}
+    </div>
     <div ${g('datos')}>
     ${sys ? `<div class="card">
       ${cardTitle('layers', 'var(--f-cerrados)', 'Respaldos y datos')}
@@ -2024,9 +2253,9 @@ async function renderSettings() {
     <div class="card">
       ${cardTitle('chat', 'var(--whatsapp)', 'Mensajes de WhatsApp')}
       <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
-        Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code> y <code>{producto}</code>.</p>
+        Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code>, <code>{producto}</code>, <code>{empresa}</code> y <code>{servicio}</code> (${esc(F.term())}).</p>
       <form id="wa-form" class="wa-form">
-        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', 'Cliente: cómo va la campaña y referidos'], ['renovacion', 'Cliente: ofrecer la renovación']]
+        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', `Cliente: cómo va ${F.theTerm()} y referidos`], ...(renewals() ? [['renovacion', 'Cliente: ofrecer la renovación']] : [])]
           .map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000">${esc(s.wa_templates[k])}</textarea></label>`).join('')}
         <p class="muted small-note">Si dejas uno vacío, vuelve al mensaje de fábrica.</p>
         <button type="submit">Guardar mensajes</button>
@@ -2035,7 +2264,7 @@ async function renderSettings() {
     </div>
     <div ${g('listas')}>
     <div class="lists">
-      ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
+      ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Paquete básico, Plan anual')}
       ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
     </div>
     </div>
@@ -2044,7 +2273,7 @@ async function renderSettings() {
       ${cardTitle('file', 'var(--accent)', 'Formulario de tu página web')}
       <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
       <p class="muted">En cada anuncio usa el link de tu página con la campaña y el nombre del anuncio, por ejemplo
-        <code>https://TU-SITIO/?utm_campaign=FB-Espectaculares-Oct&amp;utm_source=facebook&amp;utm_content=video-carretera</code>.
+        <code>https://TU-SITIO/?utm_campaign=FB-Promo-Octubre&amp;utm_source=facebook&amp;utm_content=video-testimonio</code>.
         El formulario los guarda solos y el Resumen te dice qué campaña y qué anuncio cierran.</p>
       <label>Dirección a donde se envía el formulario</label>${copyField(s.form_url)}
       <label>Clave del formulario</label>${copyField(s.form_api_key)}
@@ -2072,7 +2301,8 @@ async function renderSettings() {
     const name = f.elements.name.value.trim();
     if (!name) return;
     try {
-      await api('/api/catalog', { method: 'POST', body: { kind: f.dataset.kind, name } });
+      const extra = f.dataset.kind === 'producto' ? { price: f.elements.price.value || null, fixed_price: f.elements.fixed_price.checked } : {};
+      await api('/api/catalog', { method: 'POST', body: { kind: f.dataset.kind, name, ...extra } });
       await reloadCatalog();
       toast(`"${name}" agregado`, 'ok');
     } catch (err) { toast(err.message, 'error'); }
@@ -2084,6 +2314,15 @@ async function renderSettings() {
       if (!name) return;
       try { await api(`/api/catalog/${id}`, { method: 'PATCH', body: { name } }); await reloadCatalog(); } catch (err) { toast(err.message, 'error'); }
     });
+    const savePrice = async () => {
+      try {
+        await api(`/api/catalog/${id}`, { method: 'PATCH', body: { price: $('[data-price]', row).value || null, fixed_price: $('[data-fixed]', row).checked } });
+        toast('Precio guardado', 'ok');
+      } catch (err) { toast(err.message, 'error'); }
+      await reloadCatalog();
+    };
+    $('[data-price]', row)?.addEventListener('change', savePrice);
+    $('[data-fixed]', row)?.addEventListener('change', savePrice);
     $('[data-toggle]', row).addEventListener('click', async () => {
       const active = row.dataset.active !== '1';
       await api(`/api/catalog/${id}`, { method: 'PATCH', body: { active } });
@@ -2112,6 +2351,38 @@ async function renderSettings() {
     } catch (err) { toast(err.message, 'error'); }
   });
   wireLinkBuilder();
+  $('#company-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      applyCompany(await api('/api/company', { method: 'PATCH', body: { name: f.elements.name.value, term: f.elements.term.value, renewals: f.elements.renewals.checked } }));
+      toast('Datos de la empresa guardados', 'ok');
+      renderSettings();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  // El logo se reduce en el navegador (máx. 480×120) para que pese poco y se vea bien en cualquier lado.
+  $('#logo-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const url = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const k = Math.min(1, 480 / img.width, 120 / img.height);
+          const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+          resolve(cv.toDataURL('image/png'));
+        };
+        img.onerror = () => reject(new Error('No se pudo leer la imagen'));
+        img.src = URL.createObjectURL(file);
+      });
+      applyCompany(await api('/api/company', { method: 'PATCH', body: { logo: url } }));
+      toast('Logo guardado', 'ok'); renderSettings();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('#logo-remove')?.addEventListener('click', async () => {
+    applyCompany(await api('/api/company', { method: 'PATCH', body: { logo: '' } })); renderSettings();
+  });
   $('#view-settings').querySelectorAll('[data-camp-channel]').forEach((sel) => sel.addEventListener('change', async () => {
     try { await api(`/api/catalog/${sel.dataset.campChannel}`, { method: 'PATCH', body: { channel_id: sel.value || null } }); toast('Canal guardado', 'ok'); } catch (err) { toast(err.message, 'error'); }
   }));
@@ -2130,6 +2401,25 @@ async function renderSettings() {
   });
 }
 
+// Rango de un periodo, por días completos en hora local: { from, to } con `to` exclusivo. null si las fechas no sirven.
+function periodRange(key, fromStr, toStr) {
+  const d = new Date(); const y = d.getFullYear(); const m = d.getMonth();
+  const tomorrow = new Date(y, m, d.getDate() + 1);
+  const back = (days) => ({ from: new Date(y, m, d.getDate() + 1 - days), to: tomorrow });
+  if (key === '7' || key === '30' || key === '90') return back(Number(key));
+  if (key === 'mes') return { from: new Date(y, m, 1), to: tomorrow };
+  if (key === 'mes_pasado') return { from: new Date(y, m - 1, 1), to: new Date(y, m, 1) };
+  if (key === 'anio') return { from: new Date(y, 0, 1), to: tomorrow };
+  if (key === 'custom') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr || '') || !/^\d{4}-\d{2}-\d{2}$/.test(toStr || '')) return null;
+    const from = new Date(`${fromStr}T00:00:00`); const to = new Date(new Date(`${toStr}T00:00:00`).getTime() + 86400e3);
+    return from < to ? { from, to } : null;
+  }
+  return null;
+}
+const ymdLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+const rangeText = (r) => `${r.from.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })} al ${new Date(r.to - 1).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+
 // 'YYYY-MM' de hace `back` meses, en hora local.
 function monthKey(back) {
   const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - back);
@@ -2147,7 +2437,7 @@ function linkBuilder() {
     ${cardTitle('megaphone', 'var(--llamada)', 'Links para anuncios')}
     <p class="muted">Arma aquí el link de cada anuncio. Así la campaña y el anuncio llegan bien escritos y el Resumen los mide sin partirse en nombres parecidos.</p>
     <form id="link-form" class="link-form" onsubmit="return false">
-      <label>Página a donde lleva el anuncio<input name="url" type="url" placeholder="https://tu-sitio.com/espectaculares" value="${esc(pref.get('landingUrl') || '')}"></label>
+      <label>Página a donde lleva el anuncio<input name="url" type="url" placeholder="https://tu-sitio.com/promocion" value="${esc(pref.get('landingUrl') || '')}"></label>
       <div class="row">
         <label>Campaña<select name="campaign">${camps.length ? camps.map((c) => `<option>${esc(c.name)}</option>`).join('') : '<option value="">Primero da de alta una campaña</option>'}</select></label>
         <label>Dónde se publica<select name="source">${UTM_SOURCES.map(([v, , t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
@@ -2192,7 +2482,7 @@ function campaignEditor() {
     <p class="muted">Las que el vendedor puede elegir en cada lead. A cada campaña ponle su canal (Facebook, Google…) y lo que se invirtió cada mes:
       con eso el Resumen calcula cuánto cuesta cada lead y cada cierre en el periodo que elijas. Si llega una campaña nueva desde un anuncio, se agrega sola aquí.</p>
     <form id="campaign-form" class="list-form">
-      <input name="name" placeholder="Ej. FB Espectaculares Octubre" aria-label="Nombre de la campaña" maxlength="120">
+      <input name="name" placeholder="Ej. FB Promo Octubre" aria-label="Nombre de la campaña" maxlength="120">
       <select name="channel_id" aria-label="Canal" class="small-select"><option value="">Canal…</option>
         ${state.catalog.canal.filter((c) => c.active).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
       <input name="budget" inputmode="decimal" placeholder="Inversión de ${monthName(months[0])}" aria-label="Inversión de este mes" style="max-width:170px">
@@ -2225,11 +2515,16 @@ function listEditor(kind, title, help, placeholder) {
     <p class="muted">${esc(help)}</p>
     <form class="list-form" data-kind="${kind}">
       <input name="name" placeholder="${esc(placeholder)}" aria-label="Agregar a ${esc(title)}" maxlength="120">
+      ${kind === 'producto' ? `<input name="price" inputmode="decimal" placeholder="Precio (opcional)" aria-label="Precio de lista" style="max-width:150px">
+        <label class="inline-check"><input type="checkbox" name="fixed_price"> Precio fijo</label>` : ''}
       <button type="submit">Agregar</button>
     </form>
+    ${kind === 'producto' ? '<p class="muted small-note">Con <b>precio fijo</b>, al cotizar o vender el monto se calcula solo (precio × cantidad) y el vendedor no lo puede cambiar; solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el real.</p>' : ''}
     <ul class="items">
       ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
         <span>${esc(i.name)}${i.active ? '' : ' <small>(quitado)</small>'}</span>
+        ${kind === 'producto' ? `<span class="price-row"><input data-price inputmode="decimal" value="${i.price ?? ''}" placeholder="Precio" aria-label="Precio de ${esc(i.name)}">
+          <label class="inline-check"><input type="checkbox" data-fixed ${i.fixed_price ? 'checked' : ''}> fijo</label></span>` : ''}
         <button type="button" class="ghost small" data-rename>Renombrar</button>
         <button type="button" class="ghost small" data-toggle>${i.active ? 'Quitar' : 'Volver a usar'}</button>
       </li>`).join('') || '<li class="muted">Todavía no hay nada. Agrega el primero arriba.</li>'}
@@ -2246,7 +2541,14 @@ async function reloadCatalog() {
 
 // ---------- Arranque ----------
 (async () => {
+  // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
+  setInterval(() => {
+    if (state.me && $('#drawer').classList.contains('hidden') && document.activeElement?.id !== 'today-q' && !['users', 'settings', 'assign', 'team', 'seller', 'campaign'].includes(state.view)) refresh();
+  }, 30000);
   state.meta = await api('/api/meta');
+  applyCompany(await api('/api/company'));
+  const accessToken = new URLSearchParams(location.search).get('acceso');
+  if (accessToken) return showAccess(accessToken);
   if ((await api('/api/setup')).needed) {
     $('#setup').classList.remove('hidden');
     return;
@@ -2257,8 +2559,4 @@ async function reloadCatalog() {
   } catch {
     showLogin();
   }
-  // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
-  setInterval(() => {
-    if ($('#drawer').classList.contains('hidden') && document.activeElement?.id !== 'today-q' && !['users', 'settings', 'assign', 'team', 'seller', 'campaign'].includes(state.view)) refresh();
-  }, 30000);
 })();

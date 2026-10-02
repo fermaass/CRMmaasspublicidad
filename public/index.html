@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CRM Maass Publicidad</title>
+  <title>CRM</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
@@ -12,12 +12,26 @@
 <body>
   <section id="login" class="login hidden">
     <form id="login-form" class="card">
-      <h1>CRM Maass</h1>
+      <img class="brand-logo login-logo hidden" alt="">
+      <h1 class="brand-name">CRM</h1>
       <p class="muted">Leads de marketing y ventas</p>
       <label>Email <input type="email" name="email" required autocomplete="username"></label>
       <label>Contraseña <input type="password" name="password" required autocomplete="current-password"></label>
       <p id="login-error" class="error"></p>
       <button type="submit">Entrar</button>
+      <p class="muted small-note login-help">¿Olvidaste tu contraseña? Pídele a tu gerente un link para crear una nueva.</p>
+    </form>
+  </section>
+
+  <section id="access" class="login hidden">
+    <form id="access-form" class="card">
+      <img class="brand-logo login-logo hidden" alt="">
+      <h1 id="access-title">Crea tu contraseña</h1>
+      <p class="muted" id="access-sub"></p>
+      <label>Contraseña nueva (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+      <label>Repítela <input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>
+      <p id="access-error" class="error"></p>
+      <button type="submit">Guardar y entrar</button>
     </form>
   </section>
 
@@ -25,6 +39,7 @@
     <form id="setup-form" class="card">
       <h1>Bienvenido</h1>
       <p class="muted">Crea tu usuario de gerente. Con él darás de alta al resto del equipo.</p>
+      <label>Nombre de tu empresa <input name="company" required maxlength="80" placeholder="Así aparece en la app, los mensajes y los reportes"></label>
       <label>Tu nombre <input name="name" required></label>
       <label>Email <input type="email" name="email" required autocomplete="username"></label>
       <label>Contraseña (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
@@ -42,7 +57,7 @@
 
   <section id="app" class="hidden">
     <header class="topbar">
-      <strong class="brand">CRM Maass</strong>
+      <span class="brand"><img class="brand-logo hidden" alt=""><strong class="brand-name">CRM</strong></span>
       <nav id="nav">
         <button data-view="today" data-role="vendedor">Mi día</button>
         <button data-view="team" data-role="gerente,analista">Equipo hoy</button>
@@ -53,7 +68,7 @@
         <button data-view="settings" data-role="gerente,marketing">Configuración</button>
       </nav>
       <span class="spacer"></span>
-      <span id="me" class="muted"></span>
+      <button type="button" id="me" class="ghost me-btn" title="Cambiar mi contraseña"></button>
       <button id="logout" class="ghost">Salir</button>
     </header>
 
@@ -67,7 +82,9 @@
       <select id="f-period" aria-label="Periodo">
         <option value="">Todo el tiempo</option><option value="mes">Este mes</option><option value="mes_pasado">Mes pasado</option>
         <option value="30">Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="anio">Este año</option>
+        <option value="custom">Elegir fechas…</option>
       </select>
+      <span id="f-custom" class="period-custom hidden"><input type="date" id="f-from" aria-label="Desde"><input type="date" id="f-to" aria-label="Hasta"></span>
       <select id="f-assigned" aria-label="Vendedor"><option value="">Todos los vendedores</option><option value="none">Sin asignar</option></select>
       <select id="f-campaign" aria-label="Campaña"><option value="">Todas las campañas</option></select>
       <button type="button" id="more-filters" class="ghost" aria-expanded="false" aria-controls="extra-filters">Más filtros</button>

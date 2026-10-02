@@ -17,6 +17,17 @@
 
   const ms = (iso) => new Date(iso).getTime();
 
+  // Cómo le llama cada negocio a lo que vende y que se renueva (campaña, contrato, membresía…). Se configura por empresa.
+  const TERMS = { campana: ['campaña', 'la'], contrato: ['contrato', 'el'], membresia: ['membresía', 'la'], servicio: ['servicio', 'el'],
+    poliza: ['póliza', 'la'], suscripcion: ['suscripción', 'la'], proyecto: ['proyecto', 'el'] };
+  const config = { term: 'campana', renewals: true };
+  function configure(opts = {}) {
+    if (TERMS[opts.term]) config.term = opts.term;
+    if (opts.renewals !== undefined) config.renewals = Boolean(opts.renewals);
+  }
+  const term = () => TERMS[config.term][0];
+  const theTerm = () => `${TERMS[config.term][1]} ${TERMS[config.term][0]}`;
+
   // Etapas que se ven (tablero, Mi día, Resumen). Salen de la etapa guardada y de los toques; nadie las cambia a mano.
   //   Nuevo: nadie lo ha tocado · Contactando: ya se intentó y no contesta · Contestó: respondió, falta perfilar.
   //   Los declinados se separan en con perfil (base para campañas futuras) y sin perfil.
@@ -34,11 +45,11 @@
   function nextAction(l) {
     if (l.status === 'vendido') {
       if (l.won_at && !l.postsale_at) {
-        return { kind: 'postventa', n: null, due: new Date(ms(l.won_at) + REFERRAL_AFTER * DAY), label: '¿Cómo va la campaña? Pedir referidos' };
+        return { kind: 'postventa', n: null, due: new Date(ms(l.won_at) + REFERRAL_AFTER * DAY), label: `¿Cómo va ${theTerm()}? Pedir referidos` };
       }
-      if (l.campaign_end && l.renewal_for !== l.campaign_end) {
+      if (config.renewals && l.campaign_end && l.renewal_for !== l.campaign_end) {
         const end = new Date(`${l.campaign_end}T09:00:00`);
-        return { kind: 'renovacion', n: null, due: new Date(end.getTime() - RENEW_BEFORE * DAY), label: `Renovación: la campaña termina el ${fmtDay(end)}` };
+        return { kind: 'renovacion', n: null, due: new Date(end.getTime() - RENEW_BEFORE * DAY), label: `Renovación: ${theTerm()} termina el ${fmtDay(end)}` };
       }
       return null;
     }
@@ -88,7 +99,7 @@
     return d.length >= 11 && d.length <= 15 ? d : null;
   }
 
-  // Liga para abrir WhatsApp con el mensaje ya escrito. vars: { nombre, vendedor, producto }.
+  // Liga para abrir WhatsApp con el mensaje ya escrito. vars: { nombre, vendedor, producto, empresa }.
   function waLink(phone, template, vars = {}) {
     const n = waNumber(phone);
     if (!n) return null;
@@ -96,12 +107,14 @@
     const text = String(template || '')
       .replace(/\{nombre\}/g, first)
       .replace(/\{vendedor\}/g, vars.vendedor || '')
-      .replace(/\{producto\}/g, vars.producto || 'nuestros espacios')
+      .replace(/\{producto\}/g, vars.producto || 'nuestros servicios')
+      .replace(/\{empresa\}/g, vars.empresa || '')
+      .replace(/\{servicio\}/g, term())
       .replace(/ {2,}/g, ' ').replace(/ ,/g, ',').trim();
     return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   }
 
-  const api = { DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, STAGES, stageOf, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
+  const api = { TERMS, configure, term, theTerm, DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, STAGES, stageOf, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);

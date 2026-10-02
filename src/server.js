@@ -46,8 +46,15 @@ const CHANNEL_EXPR = `COALESCE(l.channel_id, (SELECT cc.channel_id FROM catalog_
 const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
 const isDateTime = (v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v)) && !Number.isNaN(new Date(v).getTime());
 
+// Bloqueo por intentos fallidos: 5 seguidos con el mismo email bloquean 15 minutos (en memoria; se reinicia con el servidor).
+const LOGIN_MAX_FAILS = 5; const LOGIN_LOCK_MS = 15 * 60e3;
+const ACCESS_LINK_HOURS = 72;
+const sha256 = (v) => require('node:crypto').createHash('sha256').update(String(v)).digest('hex');
+
 function createApp({ db, config }) {
   ensureSettings(db, config);
+  FOLLOWUP.configure({ term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0' });
+  const loginFails = new Map();
   const app = transactionalRoutes(express(), db);
   app.disable('x-powered-by');
   // Detrás del proxy HTTPS del hosting: así sabemos si la conexión es segura y la URL pública real.
@@ -82,9 +89,10 @@ function createApp({ db, config }) {
 
   app.post('/api/setup', (req, res) => {
     if (userCount() > 0) return res.status(409).json({ error: 'La app ya está configurada' });
-    const { name, email, password, can_assign: operates } = req.body || {};
+    const { name, email, password, can_assign: operates, company } = req.body || {};
     if (!name || !email || !password) return res.status(400).json({ error: 'Faltan datos' });
     if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    if (company && String(company).trim()) setSetting(db, 'company_name', String(company).trim().slice(0, 80));
     const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
       .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), 'gerente', assignFlag('gerente', operates));
     startSession(req, res, Number(lastInsertRowid));
@@ -94,10 +102,23 @@ function createApp({ db, config }) {
   // ---------- Sesión ----------
   app.post('/api/login', (req, res) => {
     const { email, password } = req.body || {};
-    const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(String(email || '').trim());
-    if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
-      return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+    const key = String(email || '').trim().toLowerCase();
+    const fails = loginFails.get(key);
+    if (fails && fails.until > Date.now()) {
+      const min = Math.ceil((fails.until - Date.now()) / 60e3);
+      return res.status(429).json({ error: `Demasiados intentos. Espera ${min} ${min === 1 ? 'minuto' : 'minutos'} o pídele a tu gerente un link para crear una contraseña nueva.` });
     }
+    const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(String(email || '').trim());
+    if (user && !user.password_hash) {
+      return res.status(401).json({ error: 'Todavía no activas tu acceso: abre el link de invitación que te mandó tu gerente.' });
+    }
+    if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
+      const n = (fails?.until && fails.until <= Date.now() ? 0 : fails?.n || 0) + 1; // si ya pasó el bloqueo, cuenta de nuevo
+      loginFails.set(key, { n, until: n >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0 });
+      return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele a tu gerente un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos' });
+    }
+    loginFails.delete(key);
+    db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
     startSession(req, res, user.id);
     res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: canAssign(user) ? 1 : 0 });
   });
@@ -108,6 +129,72 @@ function createApp({ db, config }) {
   });
 
   app.get('/api/me', auth.requireUser, (req, res) => res.json(req.user));
+
+  // Cambiar mi contraseña: pide la actual. Cierra mis otras sesiones (la de este dispositivo sigue).
+  app.post('/api/me/password', auth.requireUser, (req, res) => {
+    const { current, password } = req.body || {};
+    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+    if (!auth.verifyPassword(String(current || ''), user.password_hash)) return res.status(400).json({ error: 'Tu contraseña actual no es correcta' });
+    if (String(password || '').length < 8) return res.status(400).json({ error: 'La contraseña nueva debe tener al menos 8 caracteres' });
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(String(password)), req.user.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.sessionToken);
+    res.json({ ok: true });
+  });
+
+  // ---------- Acceso por link (invitación o contraseña nueva) ----------
+  // El gerente genera el link y lo manda por WhatsApp o correo; quien lo abre elige su contraseña. Un solo uso, vence en 72 h.
+  function accessLink(req, userId, kind) {
+    const token = require('node:crypto').randomBytes(24).toString('base64url');
+    db.prepare('DELETE FROM user_tokens WHERE user_id = ? AND used_at IS NULL').run(userId);
+    const expires = Date.now() + ACCESS_LINK_HOURS * 3600e3;
+    db.prepare('INSERT INTO user_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, ?, ?)').run(sha256(token), userId, kind, expires);
+    return { link: `${req.protocol}://${req.get('host')}/?acceso=${token}`, kind, expires_at: new Date(expires).toISOString() };
+  }
+  const findToken = (token) => db.prepare(`SELECT t.*, u.name, u.email, u.active FROM user_tokens t JOIN users u ON u.id = t.user_id
+    WHERE t.token_hash = ?`).get(sha256(token));
+  app.get('/api/access/:token', (req, res) => {
+    const t = findToken(req.params.token);
+    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+    res.json({ name: t.name, email: t.email, kind: t.kind });
+  });
+  app.post('/api/access/:token', (req, res) => {
+    const t = findToken(req.params.token);
+    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+    const password = String(req.body?.password || '');
+    if (password.length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    const ts = new Date().toISOString();
+    db.prepare('UPDATE users SET password_hash = ?, last_login_at = ? WHERE id = ?').run(auth.hashPassword(password), ts, t.user_id);
+    db.prepare('UPDATE user_tokens SET used_at = ? WHERE token_hash = ?').run(ts, t.token_hash);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(t.user_id); // con contraseña nueva, se cierran las sesiones anteriores
+    loginFails.delete(String(t.email).toLowerCase());
+    startSession(req, res, t.user_id);
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(t.user_id);
+    res.json({ id: u.id, name: u.name, email: u.email, role: u.role, can_assign: canAssign(u) ? 1 : 0 });
+  });
+
+  // ---------- Empresa: nombre, logo y cómo se llama lo que vende (cada instalación es de una empresa) ----------
+  const company = () => ({ name: getSetting(db, 'company_name') || '', logo: getSetting(db, 'company_logo') || '',
+    term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0' });
+  app.get('/api/company', (req, res) => res.json(company()));
+  app.patch('/api/company', auth.requireRole('gerente'), (req, res) => {
+    const b = req.body || {};
+    if (b.name !== undefined) {
+      if (!String(b.name).trim()) return res.status(400).json({ error: 'Escribe el nombre de la empresa' });
+      setSetting(db, 'company_name', String(b.name).trim().slice(0, 80));
+    }
+    if (b.logo !== undefined) {
+      // Solo imágenes PNG, JPG o WebP de hasta ~300 KB (se guardan dentro de la base).
+      if (b.logo && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(b.logo)) return res.status(400).json({ error: 'El logo debe ser PNG, JPG o WebP' });
+      if (b.logo && b.logo.length > 420000) return res.status(400).json({ error: 'El logo pesa demasiado: usa uno de menos de 300 KB' });
+      setSetting(db, 'company_logo', b.logo || '');
+    }
+    if (b.term !== undefined) {
+      if (!FOLLOWUP.TERMS[b.term]) return res.status(400).json({ error: 'Opción inválida' });
+      setSetting(db, 'service_term', b.term); FOLLOWUP.configure({ term: b.term });
+    }
+    if (b.renewals !== undefined) { setSetting(db, 'renewals', b.renewals ? '1' : '0'); FOLLOWUP.configure({ renewals: Boolean(b.renewals) }); }
+    res.json(company());
+  });
 
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
     touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
@@ -170,7 +257,7 @@ function createApp({ db, config }) {
   };
 
   app.get('/api/catalog', auth.requireUser, (req, res) => {
-    const items = db.prepare('SELECT id, kind, name, active, budget, channel_id FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
+    const items = db.prepare('SELECT id, kind, name, active, budget, channel_id, price, fixed_price FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
     const budgets = db.prepare('SELECT campaign_id, month, amount FROM campaign_budgets ORDER BY month').all();
     items.filter((i) => i.kind === 'campana').forEach((c) => {
       c.budgets = budgets.filter((b) => b.campaign_id === c.id).map(({ month, amount }) => ({ month, amount }));
@@ -190,10 +277,15 @@ function createApp({ db, config }) {
     }
     let budget = null;
     try { budget = kind === 'campana' ? money(req.body?.budget) ?? null : null; } catch (err) { return res.status(400).json({ error: err.message }); }
-    let channelId = null;
-    try { channelId = kind === 'campana' ? catalogId('canal', req.body?.channel_id) ?? null : null; } catch (err) { return res.status(400).json({ error: err.message }); }
-    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name, budget, channel_id) VALUES (?, ?, ?, ?)')
-      .run(kind, name.slice(0, 120), budget, channelId);
+    let channelId = null; let price = null;
+    try {
+      channelId = kind === 'campana' ? catalogId('canal', req.body?.channel_id) ?? null : null;
+      price = kind === 'producto' ? money(req.body?.price) ?? null : null;
+    } catch (err) { return res.status(400).json({ error: err.message }); }
+    const fixed = kind === 'producto' && req.body?.fixed_price && price > 0 ? 1 : 0;
+    if (kind === 'producto' && req.body?.fixed_price && !(price > 0)) return res.status(400).json({ error: 'Para precio fijo escribe el precio' });
+    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name, budget, channel_id, price, fixed_price) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(kind, name.slice(0, 120), budget, channelId, price, fixed);
     res.status(201).json({ id: Number(lastInsertRowid) });
   });
 
@@ -204,14 +296,22 @@ function createApp({ db, config }) {
     const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : item.name;
     if (!name) return res.status(400).json({ error: 'Escribe un nombre' });
     const active = req.body?.active !== undefined ? (req.body.active ? 1 : 0) : item.active;
-    let budget; let channelId;
+    let budget; let channelId; let price;
     try {
       budget = item.kind === 'campana' ? money(req.body?.budget) : undefined;
       channelId = item.kind === 'campana' ? catalogId('canal', req.body?.channel_id) : undefined;
+      price = item.kind === 'producto' ? money(req.body?.price) : undefined;
     } catch (err) { return res.status(400).json({ error: err.message }); }
+    // Precio de lista y precio fijo: solo productos. Precio fijo sin precio no tiene sentido.
+    const newPrice = price === undefined ? item.price : price;
+    let fixed = item.kind === 'producto' && req.body?.fixed_price !== undefined ? (req.body.fixed_price ? 1 : 0) : item.fixed_price;
+    if (fixed && !(newPrice > 0)) {
+      if (req.body?.fixed_price) return res.status(400).json({ error: 'Para precio fijo escribe el precio' });
+      fixed = 0;
+    }
     try {
-      db.prepare('UPDATE catalog_items SET name = ?, active = ?, budget = ?, channel_id = ? WHERE id = ?')
-        .run(name, active, budget === undefined ? item.budget : budget, channelId === undefined ? item.channel_id : channelId, item.id);
+      db.prepare('UPDATE catalog_items SET name = ?, active = ?, budget = ?, channel_id = ?, price = ?, fixed_price = ? WHERE id = ?')
+        .run(name, active, budget === undefined ? item.budget : budget, channelId === undefined ? item.channel_id : channelId, newPrice, fixed, item.id);
     } catch {
       return res.status(409).json({ error: 'Ya hay otro elemento con ese nombre' });
     }
@@ -247,22 +347,35 @@ function createApp({ db, config }) {
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
-    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at,
+    // pendiente = todavía no abre su invitación (no tiene contraseña).
+    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at, last_login_at, password_hash = '' AS pendiente,
+      (SELECT MAX(expires_at) FROM user_tokens t WHERE t.user_id = users.id AND t.used_at IS NULL) AS link_vence,
       (SELECT COUNT(*) FROM leads l WHERE l.assigned_to = users.id AND l.status IN ('nuevo', 'nuevo_perfil', 'cotizando')) AS en_curso
       FROM users ORDER BY active DESC, name`).all());
   });
 
   app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
+    // Desde la pantalla se da de alta sin contraseña y se manda el link de invitación; con password (scripts de carga) queda activo.
     const { name, email, password, role, can_assign: operates } = req.body || {};
-    if (!name || !email || !password || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
-    if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    if (!name || !email || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email inválido' });
+    if (password !== undefined && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    let id;
     try {
-      const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
-        .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), role, assignFlag(role, operates));
-      res.status(201).json({ id: Number(lastInsertRowid) });
+      id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
+        .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', role, assignFlag(role, operates)).lastInsertRowid);
     } catch {
-      res.status(409).json({ error: 'Ya existe un usuario con ese email' });
+      return res.status(409).json({ error: 'Ya existe un usuario con ese email' });
     }
+    res.status(201).json({ id, ...(password ? {} : accessLink(req, id, 'invite')) });
+  });
+
+  // Link de acceso: invitación (si aún no entra) o para crear una contraseña nueva (si la olvidó).
+  app.post('/api/users/:id/access-link', auth.requireRole('gerente'), (req, res) => {
+    const user = db.prepare('SELECT id, active, password_hash FROM users WHERE id = ?').get(Number(req.params.id));
+    if (!user) return res.status(404).json({ error: 'No existe' });
+    if (!user.active) return res.status(400).json({ error: 'Primero reactiva al usuario' });
+    res.json(accessLink(req, user.id, user.password_hash ? 'reset' : 'invite'));
   });
 
   app.patch('/api/users/:id', auth.requireRole('gerente'), (req, res) => {
@@ -274,18 +387,16 @@ function createApp({ db, config }) {
     if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
       return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de gerente' });
     }
-    if (password !== undefined && String(password).length < 8) {
-      return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
-    }
-    db.prepare('UPDATE users SET name = ?, role = ?, active = ?, password_hash = ? WHERE id = ?').run(
+    // El gerente no escribe contraseñas: genera un link para que cada quien elija la suya.
+    if (password !== undefined) return res.status(400).json({ error: 'Las contraseñas las elige cada usuario: genera un link de acceso' });
+    db.prepare('UPDATE users SET name = ?, role = ?, active = ? WHERE id = ?').run(
       name ? String(name).trim() : user.name, role || user.role,
-      active === undefined ? user.active : (active ? 1 : 0),
-      password ? auth.hashPassword(String(password)) : user.password_hash, id);
+      active === undefined ? user.active : (active ? 1 : 0), id);
     // "También asigna leads": se conserva al cambiar de rol (salvo al pasar a Coordinador de leads, donde es su trabajo).
     const newRole = role || user.role;
     const flag = operates !== undefined ? assignFlag(newRole, operates) : assignFlag(newRole, user.can_assign);
     db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(flag, id);
-    if (active === false || password) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    if (active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     // Si deja de ser vendedor activo, sus leads en curso vuelven a "Sin asignar" para no perderse.
     const leftSales = user.role === 'vendedor' && user.active && (active === false || (role && role !== 'vendedor'));
     const released = leftSales ? releaseLeads(db, id, req.user.id, user.name) : 0;
@@ -695,6 +806,24 @@ function createApp({ db, config }) {
     } catch (err) {
       return { status: 400, error: err.message };
     }
+    // Cantidad (piezas, meses…) y precio fijo: con un producto de precio fijo el monto es precio × cantidad y el vendedor
+    // no lo puede cambiar, para evitar equivocaciones. El gerente sí puede corregirlo.
+    let quantity = lead.quantity;
+    if (b.quantity !== undefined) {
+      if (b.quantity === null || b.quantity === '') quantity = null;
+      else {
+        quantity = Number(String(b.quantity).replace(',', '.'));
+        if (!(quantity > 0) || quantity > 100000) return { status: 400, error: 'Cantidad inválida' };
+      }
+    }
+    const product = productId ? db.prepare('SELECT price, fixed_price FROM catalog_items WHERE id = ?').get(productId) : null;
+    if (product?.fixed_price && product.price > 0 && user.role !== 'gerente') {
+      const total = Math.round(product.price * (quantity || 1) * 100) / 100;
+      const settingQuote = b.quote_amount !== undefined || b.quantity !== undefined || b.product_id !== undefined || (next.status === 'cotizando' && lead.status !== 'cotizando');
+      const settingSale = b.sale_amount !== undefined || b.quantity !== undefined || b.product_id !== undefined || (next.status === 'vendido' && lead.status !== 'vendido');
+      if (settingQuote && ['cotizando', 'vendido'].includes(next.status)) quoteAmount = total;
+      if (settingSale && next.status === 'vendido') saleAmount = total;
+    }
     // Sin montos no hay pipeline, venta esperada, ticket ni descuento: son obligatorios al cotizar y al vender.
     if (next.status === 'cotizando' && lead.status !== 'cotizando' && !(quoteAmount > 0)) {
       return { status: 400, error: 'Escribe el monto de la cotización' };
@@ -743,11 +872,11 @@ function createApp({ db, config }) {
     db.prepare(`UPDATE leads SET name = ?, phone = ?, phone_key = ?, email = ?, campaign = ?, status = ?, profile = ?,
       decline_reason = ?, assigned_to = ?, channel_id = ?, product_id = ?, assigned_at = ?, contacted_at = ?,
       profiled_at = ?, quoted_at = ?, won_at = ?, declined_at = ?, sale_amount = ?, response_touch = ?, quote_touch = ?,
-      quote_amount = ?, recontact_at = ?, updated_at = ? WHERE id = ?`)
+      quote_amount = ?, recontact_at = ?, quantity = ?, updated_at = ? WHERE id = ?`)
       .run(field('name'), phone, phoneKey(phone), field('email'), campaign, next.status, next.profile,
         declineReason, assigned, channelId, productId, m.assigned_at, m.contacted_at,
         m.profiled_at, m.quoted_at, m.won_at, m.declined_at, saleAmount, responseTouch, quoteTouch,
-        quoteAmount, recontactAt, ts, lead.id);
+        quoteAmount, recontactAt, quantity, ts, lead.id);
     // Cambio de etapa a mano (o reactivación): la cuenta de seguimientos sin respuesta empieza de nuevo.
     if (next.status !== lead.status) db.prepare('UPDATE leads SET silent_streak = 0 WHERE id = ?').run(lead.id);
 
@@ -832,6 +961,11 @@ function createApp({ db, config }) {
       if (lead.profile === 'sin_perfilar') changes.profile = 'cumple';
     }
     if (outcome === 'vendido') Object.assign(changes, { status: 'vendido', sale_amount: req.body.sale_amount ?? undefined });
+    // Al cotizar o vender se puede elegir el producto y la cantidad (con precio fijo, el monto sale de ahí).
+    if (['cotizado', 'vendido'].includes(outcome)) {
+      if (req.body.product_id !== undefined && req.body.product_id !== '') changes.product_id = req.body.product_id;
+      if (req.body.quantity !== undefined && req.body.quantity !== '') changes.quantity = req.body.quantity;
+    }
     if (outcome === 'rechazo') {
       if (!DECLINE_REASONS.includes(req.body.decline_reason)) return res.status(400).json({ error: 'Elige el motivo' });
       Object.assign(changes, { status: 'declinado', decline_reason: req.body.decline_reason });
@@ -871,6 +1005,10 @@ function createApp({ db, config }) {
 
     const err = updateLead(req.user, getLead(req, lead.id), changes);
     if (err) return res.status(err.status).json({ error: err.error });
+    // El monto queda en el toque con su fecha: los reportes por periodo suman cotizaciones, ventas y renovaciones del periodo.
+    const after = db.prepare('SELECT quote_amount, sale_amount FROM leads WHERE id = ?').get(lead.id);
+    const touchAmount = outcome === 'cotizado' ? after.quote_amount : outcome === 'vendido' ? after.sale_amount : outcome === 'renovo' ? renewalAmount : null;
+    if (touchAmount != null) db.prepare('UPDATE lead_touches SET amount = ? WHERE lead_id = ? AND n = ?').run(touchAmount, lead.id, n);
     res.status(201).json({ ok: true, n, auto_declined: autoDecline, reason: autoDecline ? changes.decline_reason : null });
   });
 
@@ -1036,6 +1174,59 @@ function createApp({ db, config }) {
       total, byStatus: group('l.status'), byStage: group(STAGE_SQL), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
       byChannel: byItem(CHANNEL_EXPR, 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
     });
+  });
+
+  // ---------- Reporte de actividad de un periodo (lo que pasó entre dos fechas, por fecha de cada hecho) ----------
+  // A diferencia del Resumen (que sigue a los leads que llegaron en el periodo), aquí cuenta la venta el día que se cerró,
+  // la cotización el día que se envió y la renovación el día que se registró. Cada rol ve lo suyo.
+  app.get('/api/activity', auth.requireRole('gerente', 'analista', 'vendedor', 'operador'), (req, res) => {
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(0);
+    const to = req.query.to ? new Date(String(req.query.to)) : new Date(Date.now() + 60e3);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) return res.status(400).json({ error: 'Periodo inválido' });
+    const F = from.toISOString(); const T = to.toISOString();
+    const seller = req.user.role === 'vendedor';
+    const coord = req.user.role === 'operador';
+    const sellers = db.prepare(`SELECT id, name, active FROM users WHERE role = 'vendedor' ${seller ? 'AND id = ?' : ''}
+      AND (active = 1 OR id IN (SELECT assigned_to FROM leads WHERE assigned_at >= ? AND assigned_at < ?)) ORDER BY name`)
+      .all(...(seller ? [req.user.id] : []), F, T);
+    const ids = sellers.map((u) => u.id);
+    const inIds = ids.length ? `IN (${ids.map(() => '?').join(',')})` : 'IN (NULL)';
+    const by = (sql, ...extra) => Object.fromEntries(db.prepare(sql).all(...ids, ...extra).map((r) => [r.k, r]));
+    const assigned = by(`SELECT assigned_to AS k, COUNT(*) AS n, AVG(CASE WHEN first_touch_at IS NOT NULL THEN (julianday(first_touch_at) - julianday(assigned_at)) * 24 END) AS h
+      FROM leads WHERE assigned_to ${inIds} AND assigned_at >= ? AND assigned_at < ? GROUP BY 1`, F, T);
+    const touches = by(`SELECT user_id AS k, COUNT(*) AS n FROM lead_touches WHERE user_id ${inIds} AND created_at >= ? AND created_at < ? GROUP BY 1`, F, T);
+    const contacted = by(`SELECT assigned_to AS k, COUNT(*) AS n FROM leads WHERE assigned_to ${inIds} AND contacted_at >= ? AND contacted_at < ? GROUP BY 1`, F, T);
+    const quotes = by(`SELECT assigned_to AS k, COUNT(*) AS n, COALESCE(SUM(quote_amount), 0) AS m FROM leads WHERE assigned_to ${inIds} AND quoted_at >= ? AND quoted_at < ? GROUP BY 1`, F, T);
+    const sales = by(`SELECT assigned_to AS k, COUNT(*) AS n, COALESCE(SUM(sale_amount), 0) AS m FROM leads WHERE assigned_to ${inIds} AND won_at >= ? AND won_at < ? GROUP BY 1`, F, T);
+    const renewals = by(`SELECT user_id AS k, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS m FROM lead_touches WHERE user_id ${inIds} AND outcome = 'renovo' AND created_at >= ? AND created_at < ? GROUP BY 1`, F, T);
+    const declined = by(`SELECT assigned_to AS k, COUNT(*) AS n FROM leads WHERE assigned_to ${inIds} AND declined_at >= ? AND declined_at < ? AND status = 'declinado' GROUP BY 1`, F, T);
+    const rows = sellers.map((u) => ({ id: u.id, name: u.name, asignados: assigned[u.id]?.n || 0, horas_primer_toque: assigned[u.id]?.h ?? null,
+      toques: touches[u.id]?.n || 0, contestaron: contacted[u.id]?.n || 0, cotizaciones: quotes[u.id]?.n || 0, cotizado: quotes[u.id]?.m || 0,
+      ventas: sales[u.id]?.n || 0, vendido: sales[u.id]?.m || 0, renovaciones: renewals[u.id]?.n || 0, renovado: renewals[u.id]?.m || 0,
+      declinados: declined[u.id]?.n || 0 }));
+    // Leads que llegaron en el periodo y cómo se repartieron (lo que mide el coordinador).
+    const own = seller ? 'AND l.assigned_to = ?' : '';
+    const ownP = seller ? [req.user.id] : [];
+    const received = db.prepare(`SELECT COUNT(*) AS n, SUM(l.assigned_at IS NOT NULL) AS asignados,
+        AVG(CASE WHEN l.assigned_at IS NOT NULL THEN (julianday(l.assigned_at) - julianday(l.created_at)) * 24 END) AS horas_asignar
+      FROM leads l WHERE l.created_at >= ? AND l.created_at < ? ${own}`).get(F, T, ...ownP);
+    const porOrigen = db.prepare(`SELECT COALESCE(l.campaign, c.name, 'Sin origen') AS key, COUNT(*) AS n FROM leads l
+      LEFT JOIN catalog_items c ON c.id = l.channel_id WHERE l.created_at >= ? AND l.created_at < ? ${own} GROUP BY 1 ORDER BY n DESC`).all(F, T, ...ownP);
+    const out = { from: F, to: T, sellers: rows,
+      recibidos: { n: received.n || 0, asignados: received.asignados || 0, horas_asignar: received.horas_asignar, por_origen: porOrigen,
+        sin_asignar_hoy: seller ? 0 : db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n } };
+    if (coord) return res.json(out); // el coordinador ve recepción y reparto, no montos
+    const list = (col, amount) => db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, u.name AS seller, l.${col} AS at, l.${amount} AS amount,
+        l.status, p.name AS product, l.quantity FROM leads l LEFT JOIN users u ON u.id = l.assigned_to LEFT JOIN catalog_items p ON p.id = l.product_id
+      WHERE l.${col} >= ? AND l.${col} < ? AND l.assigned_to ${inIds} ORDER BY l.${col}`).all(F, T, ...ids);
+    out.ventas = list('won_at', 'sale_amount');
+    out.cotizaciones = list('quoted_at', 'quote_amount');
+    out.renovaciones = db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, u.name AS seller, t.created_at AS at, t.amount FROM lead_touches t
+      JOIN leads l ON l.id = t.lead_id LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.outcome = 'renovo' AND t.created_at >= ? AND t.created_at < ? AND t.user_id ${inIds} ORDER BY t.created_at`).all(F, T, ...ids);
+    out.motivos = db.prepare(`SELECT COALESCE(decline_reason, 'Sin motivo') AS key, COUNT(*) AS n FROM leads
+      WHERE status = 'declinado' AND declined_at >= ? AND declined_at < ? AND assigned_to ${inIds} GROUP BY 1 ORDER BY n DESC`).all(F, T, ...ids);
+    res.json(out);
   });
 
   app.use(express.static(path.join(__dirname, '..', 'public')));

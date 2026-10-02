@@ -77,6 +77,20 @@ label input, label select, label textarea { display: block; width: 100%; margin-
 .topbar nav button:hover { background: var(--hover); color: var(--accent); filter: none; }
 .topbar nav button.active { background: var(--grad); color: #fff; box-shadow: 0 4px 12px rgba(21, 112, 239, .28); }
 #me { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); background: #f1f4fa; padding: 4px 12px 4px 4px; border-radius: 999px; }
+#me.me-btn { border: 0; box-shadow: none; cursor: pointer; }
+#me.me-btn:hover { background: var(--hover); filter: none; }
+/* Con logo de la empresa, el logo reemplaza al cuadro de color. */
+.brand.has-logo::before { display: none; }
+.brand-logo { height: 32px; max-width: 140px; object-fit: contain; border-radius: 6px; }
+.login-logo { display: block; height: 56px; max-width: 220px; margin: 0 auto 10px; object-fit: contain; }
+.login-help { margin: 12px 0 0; text-align: center; }
+.logo-preview { height: 48px; max-width: 200px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: #fff; }
+.link-box { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.link-box input { flex: 1 1 260px; font-size: 12px; }
+.user-status { font-size: 12px; }
+.price-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.price-row input[type=text], .price-row input:not([type]) { width: 110px; }
+.period-custom { display: flex; gap: 8px; flex-wrap: wrap; }
 .avatar.big { width: 30px; height: 30px; font-size: 12px; margin: 0; vertical-align: middle; background: var(--grad); }
 .page-head { padding: 18px 16px 0; }
 .page-head h1 { margin: 0; font-size: 28px; }
@@ -556,3 +570,7 @@ button.link.name, .sellers-table button.link, .team-table button.link { font-siz
 .settings-tabs { margin-bottom: 4px; }
 .settings-group { display: grid; gap: 14px; }
 .hero::after { pointer-events: none; } .hero-btn { position: relative; z-index: 1; }
+a.button-link.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+a.button-link.small { padding: 5px 10px; font-size: 12px; }
+.stats-actions { display: flex; justify-content: flex-end; grid-column: 1 / -1; }
+.stats-actions .ico { margin-right: 4px; vertical-align: -3px; }
