@@ -144,3 +144,27 @@ test('el CSV no deja correr fórmulas que lleguen en el formulario público', as
   assert.ok(csv.includes(`"'=HYPERLINK(""http://x"",""clic"")"`), csv);
   assert.ok(csv.includes(',+52 55 1234 5678,'), 'el teléfono queda igual');
 });
+
+test('seguridad: encabezados, errores sin detalles internos y datos de usuarios solo para el gerente', async () => {
+  const { openDb } = require('../src/db');
+  const { createApp, seedAdmin } = require('../src/server');
+  const db = openDb(':memory:'); seedAdmin(db, { adminEmail: 'g3@t.com', adminPassword: 'clave-gerente' });
+  const srv = createApp({ db, config: {} }).listen(0); await new Promise((r) => srv.once('listening', r));
+  const b = `http://127.0.0.1:${srv.address().port}`;
+  const j = (path, opts = {}) => fetch(b + path, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  const login = async (email, password) => (await j('/api/login', { method: 'POST', body: JSON.stringify({ email, password }) })).headers.get('set-cookie').split(';')[0];
+  const g = await login('g3@t.com', 'clave-gerente');
+  await j('/api/users', { method: 'POST', headers: { cookie: g }, body: JSON.stringify({ name: 'V', email: 'v3@t.com', role: 'vendedor', password: 'password123' }) });
+  const v = await login('v3@t.com', 'password123');
+  const home = await fetch(`${b}/`);
+  assert.equal(home.headers.get('x-frame-options'), 'DENY');
+  assert.equal(home.headers.get('x-content-type-options'), 'nosniff');
+  const bad = await fetch(`${b}/api/leads.csv?audience=constructor`, { headers: { cookie: g } });
+  assert.equal(bad.status, 200, 'un valor raro se ignora en vez de tronar');
+  const broken = await j('/api/login', { method: 'POST', body: '{malo' });
+  assert.equal(broken.status, 400); assert.equal((await broken.json()).error, 'Datos inválidos');
+  const seen = await (await fetch(`${b}/api/users`, { headers: { cookie: v } })).json();
+  assert.ok(seen.every((u) => !('email' in u) && !('last_login_at' in u)), 'la vendedora no ve correos ni accesos');
+  assert.ok((await (await fetch(`${b}/api/users`, { headers: { cookie: g } })).json()).every((u) => 'email' in u));
+  srv.close();
+});

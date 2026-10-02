@@ -150,6 +150,14 @@ Maass Leads se puede **instalar como app**: en el celular abre la dirección del
 - **Bloqueo:** 5 intentos fallidos seguidos bloquean ese email 15 minutos (el link de contraseña nueva lo desbloquea).
 - En Usuarios se ve el estado de cada quien: invitación pendiente o vencida, último acceso o desactivado.
 
+## Tu cartera: tus datos son tuyos
+
+En **Configuración → Tus datos**, el gerente descarga **su cartera completa en Excel**: una hoja con todos los contactos y una por clasificación (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen, perfil y fechas; además cada toque, el historial de cada contacto, productos con precios, campañas con su inversión por mes, canales y el equipo. Si la empresa deja la plataforma, se lleva todo en un archivo que abre cualquier hoja de cálculo. Solo el gerente la descarga porque trae los datos de contacto de todos los clientes.
+
+## Seguridad
+
+Contraseñas cifradas (scrypt), sesión en cookie segura, solo el gerente ve correos y accesos del equipo, la app no se puede incrustar en otra página, los errores no muestran detalles internos, y los Excel exportados no dejan correr fórmulas que lleguen en el formulario público.
+
 ## Productos y precios
 
 Cada producto puede tener **precio de lista**. Con la casilla **precio fijo**, al cotizar o vender se elige producto y cantidad y el monto se calcula solo (precio × cantidad); el vendedor no lo puede cambiar y solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el monto real.

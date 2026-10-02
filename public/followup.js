@@ -22,7 +22,7 @@
     poliza: ['póliza', 'la'], suscripcion: ['suscripción', 'la'], proyecto: ['proyecto', 'el'] };
   const config = { term: 'campana', renewals: true };
   function configure(opts = {}) {
-    if (TERMS[opts.term]) config.term = opts.term;
+    if (Object.prototype.hasOwnProperty.call(TERMS, opts.term)) config.term = opts.term;
     if (opts.renewals !== undefined) config.renewals = Boolean(opts.renewals);
   }
   const term = () => TERMS[config.term][0];

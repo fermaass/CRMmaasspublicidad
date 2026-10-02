@@ -7,6 +7,7 @@ const {
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
+const xlsx = require('./xlsx');
 const { transactionalRoutes } = require('./tx');
 const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
 const fs = require('node:fs');
@@ -57,6 +58,13 @@ function createApp({ db, config }) {
   const loginFails = new Map();
   const app = transactionalRoutes(express(), db);
   app.disable('x-powered-by');
+  // Encabezados de seguridad: nadie puede meter la app dentro de otra página (engaños de clic), el navegador no adivina tipos
+  // de archivo y los links de invitación no se filtran a otros sitios en el "Referer".
+  app.use((req, res, next) => {
+    res.set({ 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
+      'Content-Security-Policy': "frame-ancestors 'none'" });
+    next();
+  });
   // Detrás del proxy HTTPS del hosting: así sabemos si la conexión es segura y la URL pública real.
   app.set('trust proxy', 1);
   // Salud: confirma que la base responde (Railway reinicia el servicio si esto falla).
@@ -189,7 +197,7 @@ function createApp({ db, config }) {
       setSetting(db, 'company_logo', b.logo || '');
     }
     if (b.term !== undefined) {
-      if (!FOLLOWUP.TERMS[b.term]) return res.status(400).json({ error: 'Opción inválida' });
+      if (!Object.hasOwn(FOLLOWUP.TERMS, String(b.term))) return res.status(400).json({ error: 'Opción inválida' });
       setSetting(db, 'service_term', b.term); FOLLOWUP.configure({ term: b.term });
     }
     if (b.renewals !== undefined) { setSetting(db, 'renewals', b.renewals ? '1' : '0'); FOLLOWUP.configure({ renewals: Boolean(b.renewals) }); }
@@ -347,6 +355,8 @@ function createApp({ db, config }) {
 
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
+    // Los demás solo necesitan nombres y roles (listas de vendedores); correos y accesos son del gerente.
+    if (req.user.role !== 'gerente') return res.json(db.prepare('SELECT id, name, role, active FROM users ORDER BY active DESC, name').all());
     // pendiente = todavía no abre su invitación (no tiene contraseña).
     res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at, last_login_at, password_hash = '' AS pendiente,
       (SELECT MAX(expires_at) FROM user_tokens t WHERE t.user_id = users.id AND t.used_at IS NULL) AS link_vence,
@@ -428,7 +438,7 @@ function createApp({ db, config }) {
     else if (q.assigned) { where.push('l.assigned_to = ?'); params.push(Number(q.assigned)); }
     if (q.campaign) { where.push('l.campaign = ?'); params.push(String(q.campaign)); }
     if (q.reason) { where.push('l.decline_reason = ?'); params.push(String(q.reason)); }
-    if (AUDIENCES[q.audience]) { where.push(`(${AUDIENCES[q.audience][0]})`); params.push(...AUDIENCES[q.audience][1]); }
+    if (Object.hasOwn(AUDIENCES, String(q.audience))) { where.push(`(${AUDIENCES[q.audience][0]})`); params.push(...AUDIENCES[q.audience][1]); }
     for (const [param, col] of [['channel', CHANNEL_EXPR], ['product', 'l.product_id']]) {
       if (q[param] === 'none') where.push(`${col} IS NULL`);
       else if (q[param]) { where.push(`${col} = ?`); params.push(Number(q[param])); }
@@ -799,7 +809,7 @@ function createApp({ db, config }) {
       if (b.campaign_end && !isDate(b.campaign_end)) throw new Error('Fecha de fin de campaña inválida');
       if (b.next_step_at && !isDateTime(b.next_step_at)) throw new Error('Fecha del próximo paso inválida');
       for (const k of Object.keys(QUICK_PROFILE)) {
-        if (b[k] && !QUICK_PROFILE[k].options[b[k]]) throw new Error('Respuesta de perfil inválida');
+        if (b[k] && !Object.hasOwn(QUICK_PROFILE[k].options, String(b[k]))) throw new Error('Respuesta de perfil inválida');
       }
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
       saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
@@ -1232,8 +1242,84 @@ function createApp({ db, config }) {
     res.json(out);
   });
 
+  // ---------- Tu cartera completa en Excel: los datos son de la empresa y se los puede llevar cuando quiera ----------
+  // Una hoja por clasificación, más toques, historial, productos, campañas e inversión, y el equipo. Solo el gerente.
+  app.get('/api/export/cartera.xlsx', auth.requireRole('gerente'), (req, res) => {
+    const when = (iso) => (iso ? new Date(iso).toLocaleString('sv-SE', { timeZone: 'America/Mexico_City', dateStyle: 'short', timeStyle: 'short' }) : '');
+    const day = (v) => (v ? String(v).slice(0, 10) : '');
+    const yes = (v) => (v ? 'Sí' : 'No');
+    const company = getSetting(db, 'company_name') || 'Mi empresa';
+    const term = FOLLOWUP.term();
+    const leads = db.prepare(`${leadSelect} ORDER BY l.created_at`).all();
+    const answer = (l, k) => (l[k] ? QUICK_PROFILE[k].options[l[k]] || l[k] : '');
+    const head = ['ID', 'Nombre', 'Teléfono', 'Email', 'Clasificación', 'Perfil', 'Producto', 'Cantidad', 'Monto cotizado', 'Monto vendido',
+      'Renovaciones', `Fin de ${term}`, 'Motivo de declinación', 'Volver a contactar', 'Vendedor', 'Llegó por', 'Campaña', 'Canal', 'Anuncio',
+      QUICK_PROFILE.decision_maker.label, QUICK_PROFILE.budget_status.label, QUICK_PROFILE.start_window.label,
+      'Toques', 'Último toque', 'Próximo paso', 'Fecha del próximo paso', 'Recibido', 'Contestó', 'Cotizado', 'Vendido', 'Mensaje', 'Última nota'];
+    const row = (l) => [l.id, l.name || '', l.phone || '', l.email || '', LABELS[FOLLOWUP.stageOf(l)] || l.status, LABELS[l.profile] || l.profile,
+      l.product_name || '', l.quantity ?? '', l.quote_amount ?? '', l.sale_amount ?? '', l.renewal_amount || '', day(l.campaign_end),
+      l.decline_reason || '', day(l.recontact_at), l.assigned_name || 'Sin asignar', LABELS[l.source] || l.source, l.campaign || '', l.channel_name || '',
+      l.utm_content || '', answer(l, 'decision_maker'), answer(l, 'budget_status'), answer(l, 'start_window'),
+      l.touch_count || 0, when(l.last_touch_at), l.next_step || '', when(l.next_step_at), when(l.created_at), when(l.contacted_at), when(l.quoted_at),
+      when(l.won_at), l.message || '', l.last_note || ''];
+    const groups = [
+      ['Clientes', ['vendido']], ['Cotizando', ['cotizando']], ['En proceso', ['nuevo', 'contactando', 'contesto', 'nuevo_perfil']],
+      ['Declinados con perfil', ['declinado_perfil']], ['Declinados sin perfil', ['declinado_sin']],
+    ].map(([name, stages]) => ({ name, list: leads.filter((l) => stages.includes(FOLLOWUP.stageOf(l))) }));
+    const sum = (list, k) => list.reduce((t, l) => t + (l[k] || 0), 0);
+    const resumen = [
+      ['Cartera de', company], ['Descargada el', when(new Date().toISOString())], ['Descargó', req.user.name], [],
+      ['Clasificación', 'Contactos', 'Monto'],
+      ...groups.map((g) => [g.name, g.list.length,
+        g.name === 'Clientes' ? sum(g.list, 'sale_amount') + sum(g.list, 'renewal_amount') : g.name === 'Cotizando' ? sum(g.list, 'quote_amount') : '']),
+      ['Total', leads.length, ''], [],
+      ['Qué trae este archivo'],
+      ['Toda la cartera', 'Todos los contactos con todos sus datos, en una sola hoja'],
+      ['Una hoja por clasificación', 'Clientes (vendidos, con ventas y renovaciones), Cotizando, En proceso y Declinados con o sin perfil'],
+      ['Toques', 'Cada intento de contacto: fecha, medio, resultado y monto'],
+      ['Historial', 'Todo lo que pasó con cada contacto: notas, cambios de etapa, asignaciones'],
+      ['Productos, Campañas, Inversión por mes y Equipo', 'Tus listas y tu equipo, para volver a armar todo en otro sistema'],
+    ];
+    const touches = db.prepare(`SELECT t.*, COALESCE(l.name, l.phone, l.email) AS lead, u.name AS who FROM lead_touches t
+      JOIN leads l ON l.id = t.lead_id LEFT JOIN users u ON u.id = t.user_id ORDER BY t.created_at`).all();
+    const events = db.prepare(`SELECT e.*, COALESCE(l.name, l.phone, l.email) AS lead, u.name AS who FROM lead_events e
+      JOIN leads l ON l.id = e.lead_id LEFT JOIN users u ON u.id = e.user_id ORDER BY e.created_at, e.id`).all();
+    const items = db.prepare('SELECT c.*, ch.name AS channel FROM catalog_items c LEFT JOIN catalog_items ch ON ch.id = c.channel_id ORDER BY c.kind, c.name').all();
+    const budgets = db.prepare(`SELECT c.name, b.month, b.amount FROM campaign_budgets b JOIN catalog_items c ON c.id = b.campaign_id ORDER BY c.name, b.month`).all();
+    const users = db.prepare('SELECT name, email, role, active FROM users ORDER BY active DESC, name').all();
+    const ROLE = { gerente: 'Gerente', marketing: 'Gerente de marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Coordinador de leads' };
+    const file = xlsx.workbook([
+      { name: 'Resumen', rows: resumen },
+      { name: 'Toda la cartera', rows: [head, ...leads.map(row)] },
+      ...groups.map((g) => ({ name: g.name, rows: [head, ...g.list.map(row)] })),
+      { name: 'Toques', rows: [['Fecha', 'ID', 'Contacto', 'Toque', 'Medio', 'Resultado', 'Monto', 'Registró'],
+        ...touches.map((t) => [when(t.created_at), t.lead_id, t.lead || '', t.n, LABELS[t.channel] || t.channel, TOUCH_OUTCOMES[t.outcome] || t.outcome, t.amount ?? '', t.who || ''])] },
+      { name: 'Historial', rows: [['Fecha', 'ID', 'Contacto', 'Tipo', 'Detalle', 'Usuario'],
+        ...events.map((e) => [when(e.created_at), e.lead_id, e.lead || '', e.type, e.content || '', e.who || ''])] },
+      { name: 'Productos', rows: [['Producto', 'Precio de lista', 'Precio fijo', 'En uso'],
+        ...items.filter((i) => i.kind === 'producto').map((i) => [i.name, i.price ?? '', yes(i.fixed_price), yes(i.active)])] },
+      { name: 'Campañas', rows: [['Campaña', 'Canal', 'En uso'], ...items.filter((i) => i.kind === 'campana').map((i) => [i.name, i.channel || '', yes(i.active)])] },
+      { name: 'Inversión por mes', rows: [['Campaña', 'Mes', 'Inversión'], ...budgets.map((b) => [b.name, b.month, b.amount])] },
+      { name: 'Canales', rows: [['Canal', 'En uso'], ...items.filter((i) => i.kind === 'canal').map((i) => [i.name, yes(i.active)])] },
+      { name: 'Equipo', rows: [['Nombre', 'Email', 'Rol', 'Activo'], ...users.map((u) => [u.name, u.email, ROLE[u.role] || u.role, yes(u.active)])] },
+    ]);
+    const slugName = company.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'empresa';
+    res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="cartera-${slugName}-${new Date().toISOString().slice(0, 10)}.xlsx"` });
+    res.send(file);
+  });
+
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
+  // Cualquier falla inesperada: se registra en el servidor y al usuario se le dice algo claro, sin detalles internos.
+  app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+    console.error(err);
+    if (res.headersSent) return;
+    const status = err.status && err.status < 500 ? err.status : 500;
+    const msg = status === 500 ? 'Algo salió mal y no se guardó. Intenta de nuevo; si sigue, avisa al gerente.'
+      : err.type === 'entity.parse.failed' ? 'Datos inválidos' : err.type === 'entity.too.large' ? 'Lo que mandaste es demasiado grande' : err.message;
+    res.status(status).json({ error: msg });
+  });
   return app;
 }
 

@@ -140,3 +140,28 @@ test('reporte de actividad: ventas por fecha de cierre, y cada rol ve lo suyo', 
   assert.equal((await req('/api/activity?from=x', { cookie: boss })).status, 400);
   assert.equal(r.status, 201);
 });
+
+test('cartera en Excel: el gerente se lleva todo, con una hoja por clasificación; nadie más la descarga', async () => {
+  const zlib = require('node:zlib');
+  // Lee las partes del .xlsx (zip con encabezados locales).
+  const unzip = (buf) => {
+    const out = {}; let i = 0;
+    while (buf.readUInt32LE(i) === 0x04034b50) {
+      const size = buf.readUInt32LE(i + 18); const nameLen = buf.readUInt16LE(i + 26); const extra = buf.readUInt16LE(i + 28);
+      const name = buf.subarray(i + 30, i + 30 + nameLen).toString(); const start = i + 30 + nameLen + extra;
+      out[name] = zlib.inflateRawSync(buf.subarray(start, start + size)).toString(); i = start + size;
+    }
+    return out;
+  };
+  const r = await fetch(`${base}/api/export/cartera.xlsx`, { headers: { cookie: boss } });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-disposition'), /cartera-gimnasio-fuerte-\d{4}-\d{2}-\d{2}\.xlsx/);
+  const parts = unzip(Buffer.from(await r.arrayBuffer()));
+  for (const sheet of ['Resumen', 'Toda la cartera', 'Clientes', 'Cotizando', 'En proceso', 'Declinados con perfil', 'Declinados sin perfil', 'Toques', 'Historial', 'Productos', 'Equipo']) {
+    assert.ok(parts['xl/workbook.xml'].includes(`name="${sheet}"`), sheet);
+  }
+  const all = Object.keys(parts).filter((k) => k.startsWith('xl/worksheets/')).map((k) => parts[k]).join('');
+  assert.ok(all.includes('Membresía mensual') && all.includes('Fin de membresía'), 'trae productos y usa la palabra de la empresa');
+  const ana = (await login('ana@t.com', 'recuperada2026')).cookie;
+  assert.equal((await fetch(`${base}/api/export/cartera.xlsx`, { headers: { cookie: ana } })).status, 403);
+});

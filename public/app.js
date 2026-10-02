@@ -2226,7 +2226,7 @@ async function renderSettings() {
   const sys = can('gerente') ? await api('/api/system').catch(() => null) : null;
   const kb = (b) => (b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
   // Pestañas para no tener todo en una sola página.
-  const groups = [...(can('gerente') ? [['empresa', 'Empresa']] : []), ['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(sys ? [['datos', 'Respaldos']] : [])];
+  const groups = [...(can('gerente') ? [['empresa', 'Empresa']] : []), ['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(can('gerente') ? [['datos', 'Tus datos']] : [])];
   const active = groups.some(([k]) => k === state.settingsTab) ? state.settingsTab : groups.some(([k]) => k === pref.get('settingsTab')) ? pref.get('settingsTab') : groups[0][0];
   const co = state.company;
   const g = (k) => `data-group="${k}" class="settings-group ${k === active ? '' : 'hidden'}"`;
@@ -2250,11 +2250,19 @@ async function renderSettings() {
     </div>` : ''}
     </div>
     <div ${g('datos')}>
+    ${can('gerente') ? `<div class="card">
+      ${cardTitle('file', 'var(--accent)', 'Descarga tu cartera', 'tus datos son tuyos: llévatelos cuando quieras')}
+      <p class="muted">Un archivo de Excel con <b>todos tus contactos y su clasificación</b>: una hoja con toda la cartera y una por clasificación
+        (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen y fechas. Trae también cada toque, el historial
+        de cada contacto, tus productos con precios, campañas con su inversión y tu equipo. Se abre en Excel, Google Sheets o Numbers.</p>
+      <a class="button-link" id="cartera-download" href="/api/export/cartera.xlsx" download>Descargar mi cartera (Excel)</a>
+      <p class="muted small-note">Solo el gerente puede descargarla: trae los datos de contacto de todos tus clientes. Guárdala en un lugar seguro.</p>
+    </div>` : ''}
     ${sys ? `<div class="card">
       ${cardTitle('layers', 'var(--f-cerrados)', 'Respaldos y datos')}
       ${sys.storage_warning ? '<p class="decline-note">La base de datos no está en un disco persistente: se borrará en la próxima actualización. En Railway agrega un volumen montado en /data.</p>' : ''}
-      <p class="muted">Se hace una copia completa de la base cada día y se guardan las últimas 14 en el servidor. Descarga una copia de vez en cuando (por ejemplo cada semana)
-        y guárdala en tu computadora o en Drive: así tus datos están a salvo aunque le pase algo al servidor.</p>
+      <p class="muted">Copia técnica de todo el sistema, para restaurarlo si algo falla (no se abre en Excel; para ver tus datos usa "Descargar mi cartera").
+        Se hace una cada día y se guardan las últimas 14 en el servidor. Descarga una de vez en cuando (por ejemplo cada semana) y guárdala en tu computadora o en Drive.</p>
       <p>${sys.leads} leads · base de ${kb(sys.size)} · ${sys.last_backup ? `último respaldo automático: ${shortDate(`${sys.last_backup}T12:00:00`)} (${sys.backups} guardados)` : 'aún sin respaldo automático'}</p>
       <a class="button-link" href="/api/backup" download>Descargar respaldo completo</a>
     </div>` : ''}
@@ -2365,6 +2373,7 @@ async function renderSettings() {
     } catch (err) { toast(err.message, 'error'); }
   });
   wireLinkBuilder();
+  $('#cartera-download')?.addEventListener('click', (e) => { if (window.crmCartera) { e.preventDefault(); window.crmCartera(); } });
   $('#company-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
