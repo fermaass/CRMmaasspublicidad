@@ -175,15 +175,32 @@ Cada rol tiene su reporte con **las fechas que elija** (últimos 7 días, este m
 
 En el de ventas cada venta cuenta **el día que se cerró** y cada cotización el día que se envió, aunque el lead haya llegado antes; trae además el embudo de los leads que llegaron en el periodo. Todos se comparan contra el periodo anterior del mismo largo. El Resumen también acepta "Elegir fechas…".
 
-## Empresa nueva
+## Dar de alta un cliente nuevo (cada uno en su subdominio)
 
-Cada empresa es una instalación aparte: repite los pasos de "Publicarlo en Railway" con un servicio y un volumen nuevos. En el primer uso la app pide el nombre de la empresa y crea al gerente. Luego, en **Configuración → Empresa**:
+Cada cliente es una **instalación aparte** con su propio subdominio, su base de datos y sus sesiones: los datos de un cliente nunca se cruzan con los de otro. Ejemplo: `maass.maassleads.com`, `gimnasiofuerte.maassleads.com`.
 
-- nombre y logo (salen en la app, los mensajes de WhatsApp y los reportes);
-- cómo le llama a lo que vende y se renueva (campaña, contrato, membresía, servicio, póliza, suscripción o proyecto);
-- si sus clientes **renuevan**: si no, al vender no se pregunta cuándo termina y solo se piden referidos.
+**Una sola vez (para toda la plataforma)**
+1. El dominio de la plataforma (por ejemplo `maassleads.com`) en Cloudflare.
+2. **Captcha:** en Cloudflare → Turnstile → *Add widget*, con el dominio de la plataforma como hostname (revisa al crearlo que cubra los subdominios). Copia la *Site key* y la *Secret key*: sirven para todos los clientes.
 
-Después: productos con sus precios, canales, campañas y los usuarios por invitación.
+**Por cada cliente (unos 15 minutos)**
+1. **Railway:** en el proyecto, *New → GitHub Repo* con este repositorio (un servicio por cliente) y nómbralo como el cliente.
+2. **Volumen:** clic derecho en el servicio → *Attach volume* con ruta `/data`. Sin volumen los datos se borran en cada actualización.
+3. **Variables** del servicio: `TURNSTILE_SITE_KEY` y `TURNSTILE_SECRET_KEY` (las del captcha). Opcional: `SETUP_CODE` si quieres poner tú el código de instalación; si no, se genera solo.
+4. **Subdominio:** *Settings → Networking → Custom Domain* → `cliente.maassleads.com`. Railway te da un destino; en Cloudflare → DNS agrega un **CNAME** `cliente` hacia ese destino, con la nube naranja (proxy) encendida. SSL/TLS en modo *Full (strict)*.
+5. **Código de instalación:** en Railway → el servicio → *Deploy Logs* aparece `Código de instalación: XXXX-XXXX` (o el que pusiste en `SETUP_CODE`).
+6. Abre `https://cliente.maassleads.com`: pide el código, el nombre de la empresa y el gerente. Elige **"Lo instalo para un cliente"**: la app crea a su gerente y te da un **link de invitación** para mandárselo por WhatsApp o correo. Él crea su contraseña; tú nunca la conoces. Si eres tú el gerente (como en Maass), elige "Yo, soy el gerente".
+7. El gerente del cliente entra, completa **Configuración → Empresa** (logo, cómo le llama a lo que vende, renovaciones), productos y precios, y da de alta a su equipo por invitación.
+
+Sin el código nadie puede crear la primera cuenta, aunque abra el subdominio antes que tú; después de usarlo deja de servir.
+
+**Actualizaciones:** todos los servicios salen del mismo repositorio, así que una actualización llega a todos los clientes a la vez (los cambios de la base se aplican solos al arrancar). Recomendado: un servicio de **pruebas** que siga otra rama, para probar ahí antes de actualizar a todos.
+
+## Seguridad de acceso
+
+- **Captcha** (Cloudflare Turnstile) en entrar, crear contraseña y primer uso, si el servicio tiene sus claves. Para la mayoría es invisible o una casilla.
+- **Límites:** 5 intentos fallidos bloquean ese email 15 minutos; 30 fallidos desde una misma conexión, 15 minutos. El formulario público acepta hasta 20 envíos por conexión cada 10 minutos.
+- **Código de instalación** para la primera cuenta.
 
 ## Publicarlo en Railway (recomendado)
 
@@ -191,7 +208,7 @@ Después: productos con sus precios, canales, campañas y los usuarios por invit
 2. **New Project → Deploy from GitHub repo** y elige este repositorio.
 3. Cuando aparezca el servicio, clic derecho sobre él → **Attach volume** (o *Add Volume*), con ruta `/data`. Ahí se guarda la base de datos; sin volumen se borraría en cada actualización.
 4. En el servicio: **Settings → Networking → Generate Domain**. Esa es la dirección de tu CRM.
-5. Abre esa dirección: la app te pide el nombre de la empresa y crear el usuario gerente. Luego entra a **Configuración** para conectar el formulario de tu página.
+5. Abre esa dirección: la app pide el **código de instalación** (en *Deploy Logs*), el nombre de la empresa y el gerente. Luego entra a **Configuración** para conectar el formulario de tu página. Para clientes con subdominio sigue "Dar de alta un cliente nuevo".
 
 No hace falta configurar variables de entorno: la app detecta el volumen y genera sola sus claves.
 

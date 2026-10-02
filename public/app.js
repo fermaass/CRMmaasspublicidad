@@ -30,7 +30,27 @@ function applyCompany(c) {
   document.title = c.name ? `${PLATFORM} · ${c.name}` : PLATFORM;
 }
 // Portada de acceso (entrar, crear contraseña, primer uso): se ve mientras no haya sesión.
-const showAuth = (on) => $('#auth').classList.toggle('hidden', !on);
+const showAuth = (on) => { $('#auth').classList.toggle('hidden', !on); if (on) setTimeout(setupCaptcha, 0); };
+
+// Captcha (Cloudflare Turnstile): solo si la instalación tiene clave. Se dibuja en el formulario visible.
+const captchaWidgets = {};
+function setupCaptcha() {
+  const key = state.company.captcha_site_key;
+  if (!key) return;
+  const render = () => document.querySelectorAll('.captcha-box').forEach((el) => {
+    if (el.dataset.ready || !el.offsetParent) return;
+    el.dataset.ready = '1';
+    captchaWidgets[el.id] = window.turnstile.render(el, { sitekey: key, language: 'es', theme: 'light' });
+  });
+  if (window.turnstile) { render(); return; }
+  if (document.getElementById('turnstile-js')) return;
+  window.onTurnstileLoad = render;
+  const sc = document.createElement('script');
+  sc.id = 'turnstile-js'; sc.async = true; sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad';
+  document.head.append(sc);
+}
+const captchaToken = (id) => (window.turnstile && captchaWidgets[id] !== undefined ? window.turnstile.getResponse(captchaWidgets[id]) || undefined : undefined);
+const captchaReset = (id) => { if (window.turnstile && captchaWidgets[id] !== undefined) window.turnstile.reset(captchaWidgets[id]); };
 // ¿Sus clientes renuevan? (campañas, contratos, membresías). Si no, no se pregunta cuándo termina ni se avisa la renovación.
 const renewals = () => state.company.renewals !== false;
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
@@ -175,11 +195,12 @@ $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   try {
-    state.me = await api('/api/login', { method: 'POST', body: { email: f.get('email'), password: f.get('password') } });
+    state.me = await api('/api/login', { method: 'POST', body: { email: f.get('email'), password: f.get('password'), captcha: captchaToken('cap-login') } });
     $('#login-error').textContent = '';
     start();
   } catch (err) {
     $('#login-error').textContent = err.message;
+    captchaReset('cap-login'); // cada verificación sirve una sola vez
   }
 });
 
@@ -207,12 +228,12 @@ async function showAccess(token) {
     const f = new FormData(e.target);
     if (f.get('password') !== f.get('password2')) { $('#access-error').textContent = 'Las contraseñas no coinciden'; return; }
     try {
-      state.me = await api(`/api/access/${encodeURIComponent(token)}`, { method: 'POST', body: { password: f.get('password') } });
+      state.me = await api(`/api/access/${encodeURIComponent(token)}`, { method: 'POST', body: { password: f.get('password'), captcha: captchaToken('cap-access') } });
       history.replaceState(null, '', location.pathname);
       $('#access').classList.add('hidden');
       toast('Listo: ya tienes acceso', 'ok');
       start();
-    } catch (err) { $('#access-error').textContent = err.message; }
+    } catch (err) { $('#access-error').textContent = err.message; captchaReset('cap-access'); }
   };
 }
 
@@ -2167,15 +2188,32 @@ async function showAccessLink(u, r) {
 }
 
 // ---------- Primer uso ----------
+// ¿Quién usará la cuenta? Si es para un cliente, no se pide contraseña: al final sale su link de invitación.
+$('#setup-form').querySelectorAll('[name=who]').forEach((r) => r.addEventListener('change', () => {
+  const client = $('#setup-form [name=who]:checked').value === 'client';
+  $('#setup-pass').classList.toggle('hidden', client);
+  $('#setup-form [name=password]').required = !client; $('#setup-form [name=password]').disabled = client;
+  $('#setup-client-note').classList.toggle('hidden', !client);
+  $('[data-who-label]').textContent = client ? 'Nombre del gerente del cliente' : 'Tu nombre';
+  $('[data-who-mail]').textContent = client ? 'Su email' : 'Tu email';
+  $('#setup-submit').textContent = client ? 'Crear e invitar' : 'Crear y entrar';
+}));
 $('#setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    state.me = await api('/api/setup', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    const { who, ...body } = Object.fromEntries(new FormData(e.target));
+    const r = await api('/api/setup', { method: 'POST', body: { ...body, captcha: captchaToken('cap-setup') } });
     applyCompany(await api('/api/company'));
     $('#setup').classList.add('hidden');
+    if (r.invited) {
+      await showAccessLink({ name: r.name, email: r.email }, r);
+      showLogin();
+      return;
+    }
+    state.me = r;
     state.view = 'settings';
     start();
-  } catch (err) { $('#setup-error').textContent = err.message; }
+  } catch (err) { $('#setup-error').textContent = err.message; captchaReset('cap-setup'); }
 });
 
 // ---------- Configuración ----------

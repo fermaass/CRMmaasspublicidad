@@ -17,10 +17,10 @@ const tokenOf = (link) => new URL(link).searchParams.get('acceso');
 
 before(async () => {
   const db = openDb(':memory:');
-  server = createApp({ db, config: { formApiKey: 'k' } }).listen(0);
+  server = createApp({ db, config: { formApiKey: 'k', setupCode: 'PRUEBA-1234' } }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  const s = await req('/api/setup', { method: 'POST', body: { name: 'Dueña', email: 'd@t.com', password: 'password123', company: 'Gimnasio Fuerte' } });
+  const s = await req('/api/setup', { method: 'POST', body: { name: 'Dueña', email: 'd@t.com', password: 'password123', company: 'Gimnasio Fuerte', setup_code: 'prueba1234' } });
   boss = s.cookie;
 });
 after(() => server.close());

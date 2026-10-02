@@ -8,8 +8,17 @@ const pick = (body, ...keys) => {
   return null;
 };
 
+// Límite por IP del formulario público: un visitante real manda uno o dos; un bot manda cientos.
+const FORM_MAX = 20; const FORM_WINDOW_MS = 10 * 60e3;
+
 function webhooksRouter(db) {
   const router = transactionalRoutes(express.Router(), db);
+  const hits = new Map();
+  const tooMany = (ip) => {
+    const now = Date.now(); const h = hits.get(ip);
+    if (!h || h.start + FORM_WINDOW_MS < now) { hits.set(ip, { start: now, n: 1 }); if (hits.size > 5000) hits.clear(); return false; }
+    h.n += 1; return h.n > FORM_MAX;
+  };
 
   // Formularios web, landing pages, Zapier/Make (Meta Lead Ads, Google Ads, etc.)
   router.options('/form', (req, res) => {
@@ -26,6 +35,7 @@ function webhooksRouter(db) {
     const key = req.get('x-api-key') || req.query.key || body.key;
     const formKey = getSetting(db, 'form_api_key');
     if (!formKey || key !== formKey) return res.status(401).json({ error: 'Clave inválida' });
+    if (tooMany(String(req.get('cf-connecting-ip') || req.ip || ''))) return res.status(429).json({ error: 'Demasiados envíos. Intenta más tarde.' });
 
     // Campo trampa para bots: si viene lleno, se responde OK pero no se guarda.
     if (body.website) return res.json({ ok: true });

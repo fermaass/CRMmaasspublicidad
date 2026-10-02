@@ -43,14 +43,14 @@ test('simulación: un lead de punta a punta y el resto del equipo, de hace 80 d�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crm-sim-'));
   const dbPath = path.join(dir, 'crm.db');
   const db = openDb(dbPath);
-  const server = createApp({ db, config: { dbPath } }).listen(0);
+  const server = createApp({ db, config: { dbPath, setupCode: 'SIM-0001' } }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
   const ACT = (l) => { const a = F.nextAction(l); return a ? { ...a, days: F.dayDiff(a.due) } : null; };
 
   // ===== Día -80: arranque =====
   at(-80, 8);
-  const setup = await call('', '/api/setup', 'POST', { name: 'Fer Maass', email: 'fer@maass.mx', password: PW, can_assign: '' });
+  const setup = await call('', '/api/setup', 'POST', { name: 'Fer Maass', email: 'fer@maass.mx', password: PW, can_assign: '', company: 'Maass Publicidad', setup_code: 'SIM-0001' });
   check('primer uso crea al gerente', setup.status === 201);
   const G = await as('fer@maass.mx');
   const ids = {};

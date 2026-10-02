@@ -16,7 +16,7 @@ const login = async (email) => (await req('/api/login', { method: 'POST', body: 
 
 before(async () => {
   const db = openDb(':memory:');
-  server = createApp({ db, config: { formApiKey: 'k' } }).listen(0);
+  server = createApp({ db, config: { formApiKey: 'k', setupCode: 'PRUEBA-1234' } }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -24,7 +24,7 @@ after(() => server.close());
 
 test('en equipos chicos el gerente también opera: se decide al crearlo y se puede cambiar', async () => {
   // Primer uso: el gerente dice que también asignará
-  const setup = await req('/api/setup', { method: 'POST', body: { name: 'Dueño', email: 'd@t.com', password: 'password123', can_assign: '1' } });
+  const setup = await req('/api/setup', { method: 'POST', body: { name: 'Dueño', email: 'd@t.com', password: 'password123', can_assign: '1', company: 'Dueño SA', setup_code: 'PRUEBA-1234' } });
   assert.equal(setup.json.can_assign, 1);
   const boss = setup.cookie;
   assert.equal((await req('/api/me', { cookie: boss })).json.can_assign, 1);

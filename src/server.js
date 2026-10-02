@@ -51,11 +51,58 @@ const isDateTime = (v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v)) && !N
 const LOGIN_MAX_FAILS = 5; const LOGIN_LOCK_MS = 15 * 60e3;
 const ACCESS_LINK_HOURS = 72;
 const sha256 = (v) => require('node:crypto').createHash('sha256').update(String(v)).digest('hex');
+// IP real del visitante: detrás de Cloudflare viene en CF-Connecting-IP; si no, la que da el proxy de Railway.
+const clientIp = (req) => String(req.get('cf-connecting-ip') || req.ip || '');
+// Límite simple por IP en memoria: máx. `max` eventos por ventana de `ms`. Devuelve true si ya se pasó.
+function rateLimiter(max, ms) {
+  const hits = new Map();
+  return {
+    hit(key) {
+      const now = Date.now(); const h = hits.get(key);
+      if (!h || h.start + ms < now) { hits.set(key, { start: now, n: 1 }); return false; }
+      h.n += 1; if (hits.size > 5000) for (const [k, v] of hits) if (v.start + ms < now) hits.delete(k);
+      return h.n > max;
+    },
+    blocked(key) { const h = hits.get(key); return Boolean(h && h.start + ms >= Date.now() && h.n > max); },
+  };
+}
+// Código de instalación: sin él nadie puede crear la primera cuenta, aunque abra el subdominio antes que tú.
+// Viene en SETUP_CODE o se genera solo y se muestra en el registro del servidor (Railway → Deploy Logs).
+function setupCode(db, config) {
+  if (config.setupCode) return String(config.setupCode);
+  let code = getSetting(db, 'setup_code');
+  if (!code) {
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const bytes = require('node:crypto').randomBytes(8);
+    code = Array.from(bytes, (b) => abc[b % abc.length]).join('').replace(/^(.{4})/, '$1-');
+    setSetting(db, 'setup_code', code);
+  }
+  return code;
+}
+const normCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 function createApp({ db, config }) {
   ensureSettings(db, config);
   FOLLOWUP.configure({ term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0' });
   const loginFails = new Map();
+  const loginByIp = rateLimiter(30, 15 * 60e3); // 30 intentos fallidos por IP en 15 min
+  const setupTries = rateLimiter(10, 15 * 60e3);
+  // Captcha (Cloudflare Turnstile): si hay claves, entrar, crear contraseña y el primer uso piden comprobar que no es un robot.
+  const captcha = async (req, res, next) => {
+    if (!config.turnstileSecret) return next();
+    const token = req.body?.captcha;
+    if (!token) return res.status(400).json({ error: 'Confirma que no eres un robot (la casilla de verificación).', captcha: true });
+    try {
+      const r = await fetch(config.turnstileVerifyUrl || 'https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(8000),
+        body: new URLSearchParams({ secret: config.turnstileSecret, response: String(token), remoteip: clientIp(req) }),
+      });
+      const out = await r.json();
+      if (!out.success) return res.status(400).json({ error: 'No pudimos comprobar que no eres un robot. Intenta de nuevo.', captcha: true });
+    } catch {
+      return res.status(503).json({ error: 'No se pudo comprobar la verificación. Revisa tu internet e intenta de nuevo.', captcha: true });
+    }
+    return next();
+  };
   const app = transactionalRoutes(express(), db);
   app.disable('x-powered-by');
   // Encabezados de seguridad: nadie puede meter la app dentro de otra página (engaños de clic), el navegador no adivina tipos
@@ -86,6 +133,9 @@ function createApp({ db, config }) {
     next();
   });
 
+  // Instalación nueva: el código se crea al arrancar (fuera de cualquier petición, para que un intento fallido no lo cambie).
+  if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) setupCode(db, config);
+
   const startSession = (req, res, userId) => {
     const { token, expires } = auth.createSession(db, userId);
     res.set('Set-Cookie', auth.sessionCookie(token, expires, config.cookieSecure || req.secure));
@@ -95,22 +145,35 @@ function createApp({ db, config }) {
   // ---------- Primer uso: crear el gerente desde la pantalla ----------
   app.get('/api/setup', (req, res) => res.json({ needed: userCount() === 0 }));
 
-  app.post('/api/setup', (req, res) => {
+  // Dos formas: el gerente se da de alta él mismo (con contraseña), o quien instala para un cliente deja creado al
+  // gerente del cliente y recibe un link de invitación para mandárselo (así nunca conoce su contraseña).
+  app.post('/api/setup', captcha, (req, res) => {
     if (userCount() > 0) return res.status(409).json({ error: 'La app ya está configurada' });
-    const { name, email, password, can_assign: operates, company } = req.body || {};
-    if (!name || !email || !password) return res.status(400).json({ error: 'Faltan datos' });
-    if (String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
-    if (company && String(company).trim()) setSetting(db, 'company_name', String(company).trim().slice(0, 80));
-    const { lastInsertRowid } = db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
-      .run(String(name).trim(), String(email).trim(), auth.hashPassword(String(password)), 'gerente', assignFlag('gerente', operates));
-    startSession(req, res, Number(lastInsertRowid));
-    res.status(201).json({ id: Number(lastInsertRowid), name, email, role: 'gerente', can_assign: assignFlag('gerente', operates) });
+    const ip = clientIp(req);
+    if (setupTries.blocked(ip)) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos.' });
+    const { name, email, password, can_assign: operates, company, setup_code: code } = req.body || {};
+    const expected = normCode(setupCode(db, config));
+    const given = normCode(code);
+    const ok = given.length === expected.length && require('node:crypto').timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    if (!ok) { setupTries.hit(ip); return res.status(403).json({ error: 'Código de instalación incorrecto. Está en el registro del servidor (Railway → Deploy Logs) o en la variable SETUP_CODE.' }); }
+    if (!name || !email || !String(company || '').trim()) return res.status(400).json({ error: 'Faltan datos' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email inválido' });
+    if (password !== undefined && password !== '' && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    setSetting(db, 'company_name', String(company).trim().slice(0, 80));
+    const id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
+      .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', 'gerente', assignFlag('gerente', operates)).lastInsertRowid);
+    db.prepare("DELETE FROM settings WHERE key = 'setup_code'").run();
+    if (!password) return res.status(201).json({ invited: true, name, email, ...accessLink(req, id, 'invite') });
+    startSession(req, res, id);
+    res.status(201).json({ id, name, email, role: 'gerente', can_assign: assignFlag('gerente', operates) });
   });
 
   // ---------- Sesión ----------
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', captcha, (req, res) => {
     const { email, password } = req.body || {};
     const key = String(email || '').trim().toLowerCase();
+    const ip = clientIp(req);
+    if (loginByIp.blocked(ip)) return res.status(429).json({ error: 'Demasiados intentos desde esta conexión. Espera 15 minutos.' });
     const fails = loginFails.get(key);
     if (fails && fails.until > Date.now()) {
       const min = Math.ceil((fails.until - Date.now()) / 60e3);
@@ -121,6 +184,7 @@ function createApp({ db, config }) {
       return res.status(401).json({ error: 'Todavía no activas tu acceso: abre el link de invitación que te mandó tu gerente.' });
     }
     if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
+      loginByIp.hit(ip);
       const n = (fails?.until && fails.until <= Date.now() ? 0 : fails?.n || 0) + 1; // si ya pasó el bloqueo, cuenta de nuevo
       loginFails.set(key, { n, until: n >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0 });
       return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele a tu gerente un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos' });
@@ -165,7 +229,7 @@ function createApp({ db, config }) {
     if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
     res.json({ name: t.name, email: t.email, kind: t.kind });
   });
-  app.post('/api/access/:token', (req, res) => {
+  app.post('/api/access/:token', captcha, (req, res) => {
     const t = findToken(req.params.token);
     if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
     const password = String(req.body?.password || '');
@@ -182,7 +246,7 @@ function createApp({ db, config }) {
 
   // ---------- Empresa: nombre, logo y cómo se llama lo que vende (cada instalación es de una empresa) ----------
   const company = () => ({ name: getSetting(db, 'company_name') || '', logo: getSetting(db, 'company_logo') || '',
-    term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0' });
+    term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0', captcha_site_key: config.turnstileSiteKey || '' });
   app.get('/api/company', (req, res) => res.json(company()));
   app.patch('/api/company', auth.requireRole('gerente'), (req, res) => {
     const b = req.body || {};
@@ -1362,6 +1426,10 @@ function loadConfig(env = process.env) {
     adminPassword: env.ADMIN_PASSWORD,
     formApiKey: env.FORM_API_KEY,
     cookieSecure: env.COOKIE_SECURE === 'true',
+    setupCode: env.SETUP_CODE,
+    // Captcha de Cloudflare Turnstile (opcional): sitio y secreto del widget. Sin ellos no se pide captcha.
+    turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+    turnstileSecret: env.TURNSTILE_SECRET_KEY,
   };
 }
 
@@ -1371,7 +1439,7 @@ if (require.main === module) {
   const db = openDb(config.dbPath);
   if (seedAdmin(db, config)) console.log(`Usuario gerente creado: ${config.adminEmail}`);
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
-    console.log('Primer uso: abre la app en el navegador para crear el usuario gerente.');
+    console.log(`Primer uso: abre la app en el navegador. Código de instalación: ${setupCode(db, config)}`);
   }
   const check = db.prepare('PRAGMA quick_check').get().quick_check;
   if (check !== 'ok') console.error(`ATENCIÓN: la revisión de la base de datos encontró problemas: ${check}. Restaura el último respaldo.`);
