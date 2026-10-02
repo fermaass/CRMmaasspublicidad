@@ -96,14 +96,16 @@ Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola list
 - En **Resumen → Ventas**: lectura rápida del equipo (quién tiene vencidos, venta esperada, cotizaciones frías y ventas contra el periodo anterior), embudo, pipeline con venta esperada y una tabla de vendedores con lo que sirve para decidir. "¿En qué toque responden?" queda plegada.
 - No registra toques en leads de otros, pero puede corregir datos y etapas y reasignar en emergencias.
 
-## Para marketing
+## Para el gerente de marketing
 
-- Marketing entra directo al **Resumen → Marketing**. No tiene Mi día ni registra toques ni mueve etapas (eso es de ventas y ensuciaría sus números); desde la ficha solo corrige el origen, el producto y los datos de contacto, y puede dejar notas.
-- **Indicadores con comparación**: leads, % que cumple perfil, inversión, costo por lead, **costo por lead con perfil** (la señal temprana de calidad), costo por cierre, retorno y leads sin origen, cada uno contra el periodo anterior equivalente cuando se elige un periodo.
-- **Una sola tabla de campañas** con calidad, costo y retorno: leads, cumplen perfil, cotizados, cierres, inversión, costo por lead, por lead con perfil y por cierre, ventas, retorno, **días a cerrar** y **por qué se descartan**. La misma lectura por anuncio.
-- **Links para anuncios** en Configuración: se elige la campaña, dónde se publica y el nombre del anuncio, y la app arma el link con los UTM correctos.
-- **Audiencias "Para Meta / Google"**: el CSV trae teléfono internacional (+52…), correo y nombre separados para subirlo como público personalizado.
-- Al capturar un lead a mano, **"¿De dónde viene?" es obligatorio**: sin origen no se puede medir la inversión.
+- El rol se llama **Gerente de marketing**. Entra directo al **Resumen de marketing** (no ve la pestaña de ventas ni evalúa vendedores), no registra toques ni mueve etapas; desde la ficha de un lead solo corrige origen, producto y contacto, y deja notas.
+- **Lectura rápida:** cuántas campañas hay que revisar, de dónde viene el lead con perfil más barato del mes y cuántos leads no tienen origen. Desde ahí sale el **reporte mensual** (mes pasado contra el anterior), listo para imprimir o guardar en PDF.
+- **Campañas a revisar (mes en curso):** rojo si una campaña tiene inversión y no trae leads en 7 días, si ninguno de 5 o más leads cumple perfil, o si cada lead con perfil cuesta más del doble del promedio. Amarillo si trajo leads sin inversión capturada (sus costos saldrían en cero) o si la mitad de sus descartes son por un mismo motivo.
+- **Indicadores con comparación** contra el periodo anterior: leads, % que cumple perfil, inversión, costo por lead, **costo por lead con perfil**, costo por cierre, retorno y leads sin origen.
+- **Tabla de campañas** con lo que decide la inversión: leads, cumplen perfil, inversión, costo por lead con perfil, cierres, retorno y por qué se descartan. Clic en una campaña abre su **ficha**: indicadores contra el promedio, tendencia semanal de leads y leads con perfil (muestra cuándo un anuncio se cansa), inversión contra leads por mes, sus anuncios, **lo que dicen sus leads** (perfil rápido: decisor, presupuesto, cuándo arranca) y por qué se descartan.
+- **Por anuncio**, **audiencias** (lista completa o formato para Meta / Google), leads por día, de dónde vienen y por producto.
+- **Configuración en pestañas:** Campañas y links (inversión por mes, canal y generador de links con UTM), Formulario y WhatsApp, y Productos y canales.
+- Al capturar un lead a mano, **"¿De dónde viene?" es obligatorio**.
 
 ## Listas: productos y canales de percepción
 
@@ -123,7 +125,7 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 | Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración. Opcional: funciones de operador en equipos chicos |
 | Operador | Captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
 | Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
-| Marketing | Resumen de marketing, campañas, listas, links y audiencias; corrige el origen de los leads |
+| Gerente de marketing | Resumen de marketing, campañas a revisar, ficha de cada campaña, links, audiencias y reporte mensual; corrige el origen de los leads (no toques ni etapas) |
 | Analista | Solo lectura: Equipo hoy, Resumen y exportar CSV |
 
 ## Publicarlo en Railway (recomendado)

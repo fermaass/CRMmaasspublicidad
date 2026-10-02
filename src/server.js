@@ -482,6 +482,80 @@ function createApp({ db, config }) {
     res.json({ ok: true });
   });
 
+  // ---------- Marketing: campañas a revisar y ficha de campaña ----------
+  const monthOf = (d) => d.toISOString().slice(0, 7);
+  // Semáforo por campaña con lo del mes en curso: dónde se está yendo el dinero sin traer leads buenos.
+  app.get('/api/campaign-health', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
+    const nowMs = Date.now(); const month = monthOf(new Date());
+    const from = `${month}-01T00:00:00.000Z`;
+    const camps = db.prepare("SELECT id, name FROM catalog_items WHERE kind = 'campana' AND active = 1").all();
+    const budget = Object.fromEntries(db.prepare('SELECT campaign_id, amount FROM campaign_budgets WHERE month = ?').all(month).map((r) => [r.campaign_id, r.amount]));
+    const stats = Object.fromEntries(db.prepare(`SELECT campaign AS key, COUNT(*) AS leads,
+        SUM(COALESCE(profiled_at, quoted_at, won_at) IS NOT NULL) AS perfil FROM leads WHERE campaign IS NOT NULL AND created_at >= ? GROUP BY campaign`)
+      .all(from).map((r) => [r.key, r]));
+    const last = Object.fromEntries(db.prepare('SELECT campaign AS key, MAX(created_at) AS at FROM leads WHERE campaign IS NOT NULL GROUP BY campaign').all().map((r) => [r.key, r.at]));
+    const reasons = {};
+    db.prepare(`SELECT campaign AS key, COALESCE(decline_reason, 'Sin motivo') AS reason, COUNT(*) AS n FROM leads
+      WHERE campaign IS NOT NULL AND status = 'declinado' AND created_at >= ? GROUP BY 1, 2`).all(new Date(nowMs - 90 * 86400e3).toISOString())
+      .forEach((r) => { (reasons[r.key] ||= []).push(r); });
+    const rows = camps.map((c) => {
+      const st = stats[c.name] || { leads: 0, perfil: 0 };
+      const inv = budget[c.id] || 0;
+      const lastAt = last[c.name] || null;
+      const days = lastAt ? Math.floor((nowMs - new Date(lastAt).getTime()) / 86400e3) : null;
+      const rs = (reasons[c.name] || []).sort((a, b) => b.n - a.n);
+      const decl = rs.reduce((t, r) => t + r.n, 0);
+      return { id: c.id, key: c.name, inversion_mes: inv || null, leads_mes: st.leads, perfil_mes: st.perfil || 0, cplq_mes: inv && st.perfil ? inv / st.perfil : null,
+        ultimo_lead: lastAt, dias_sin_leads: days, descarte_top: rs[0] ? { key: rs[0].reason, share: rs[0].n / decl, n: decl } : null };
+    }).filter((r) => r.inversion_mes || r.leads_mes);
+    const invTot = rows.reduce((t, r) => t + (r.inversion_mes || 0), 0);
+    const perfTot = rows.filter((r) => r.inversion_mes).reduce((t, r) => t + r.perfil_mes, 0);
+    const avg = invTot && perfTot ? invTot / perfTot : null;
+    rows.forEach((r) => {
+      const why = []; let status = 'green';
+      if (r.inversion_mes && (r.dias_sin_leads == null || r.dias_sin_leads >= 7)) { status = 'red'; why.push(r.dias_sin_leads == null ? 'tiene inversión y nunca ha traído leads' : `tiene inversión y lleva ${r.dias_sin_leads} días sin traer leads`); }
+      if (r.inversion_mes && r.leads_mes >= 5 && !r.perfil_mes) { status = 'red'; why.push(`${r.leads_mes} leads este mes y ninguno cumple perfil`); }
+      if (r.cplq_mes && avg && r.cplq_mes > 2 * avg) { status = 'red'; why.push(`cada lead con perfil cuesta ${Math.round(r.cplq_mes / avg * 10) / 10} veces el promedio`); }
+      if (r.leads_mes && !r.inversion_mes) { if (status === 'green') status = 'yellow'; why.push('trajo leads este mes y no tiene inversión capturada: sus costos salen en cero'); }
+      if (r.descarte_top && r.descarte_top.n >= 4 && r.descarte_top.share >= 0.5) { if (status === 'green') status = 'yellow'; why.push(`${Math.round(r.descarte_top.share * 100)}% de sus descartes son por "${r.descarte_top.key}"`); }
+      r.status = status; r.motivos = why;
+    });
+    const order = { red: 0, yellow: 1, green: 2 };
+    rows.sort((a, b) => order[a.status] - order[b.status] || (b.inversion_mes || 0) - (a.inversion_mes || 0));
+    res.json({ month, campaigns: rows, cplq_promedio: avg });
+  });
+
+  // Ficha de campaña: tendencia semanal, inversión contra leads por mes y lo que dicen sus leads (perfil rápido).
+  app.get('/api/campaign-detail', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
+    const name = String(req.query.name || '');
+    const c = db.prepare("SELECT id, name, channel_id FROM catalog_items WHERE kind = 'campana' AND name = ?").get(name);
+    if (!c) return res.status(404).json({ error: 'No existe esa campaña' });
+    const since = new Date(Date.now() - 12 * 7 * 86400e3);
+    const weekStart = (iso) => { const d = new Date(iso); d.setUTCHours(0, 0, 0, 0); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
+    const leads = db.prepare('SELECT created_at, profiled_at, quoted_at, won_at, decision_maker, budget_status, start_window FROM leads WHERE campaign = ?').all(name);
+    const weeks = new Map();
+    for (let t = new Date(weekStart(since.toISOString())).getTime(); t <= Date.now(); t += 7 * 86400e3) weeks.set(new Date(t).toISOString().slice(0, 10), { week: new Date(t).toISOString().slice(0, 10), leads: 0, perfil: 0 });
+    const months = new Map();
+    const fit = (l) => Boolean(l.profiled_at || l.quoted_at || l.won_at);
+    for (const l of leads) {
+      const w = weeks.get(weekStart(l.created_at));
+      if (w) { w.leads++; if (fit(l)) w.perfil++; }
+      const m = l.created_at.slice(0, 7);
+      const mm = months.get(m) || { month: m, leads: 0, perfil: 0, inversion: null };
+      mm.leads++; if (fit(l)) mm.perfil++; months.set(m, mm);
+    }
+    for (const b of db.prepare('SELECT month, amount FROM campaign_budgets WHERE campaign_id = ?').all(c.id)) {
+      const mm = months.get(b.month) || { month: b.month, leads: 0, perfil: 0, inversion: null };
+      mm.inversion = b.amount; months.set(b.month, mm);
+    }
+    const perfilRapido = Object.fromEntries(Object.keys(QUICK_PROFILE).map((k) => {
+      const answered = leads.filter((l) => l[k]);
+      return [k, { label: QUICK_PROFILE[k].label, total: answered.length,
+        options: Object.entries(QUICK_PROFILE[k].options).map(([v, t]) => ({ value: v, label: t, n: answered.filter((l) => l[k] === v).length })) }];
+    }));
+    res.json({ id: c.id, name: c.name, weeks: [...weeks.values()], months: [...months.values()].sort((a, b) => b.month.localeCompare(a.month)).slice(0, 6), perfil_rapido: perfilRapido });
+  });
+
   // Equipo hoy: una fila por vendedor con lo que requiere atención del gerente.
   const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
   app.get('/api/team', auth.requireRole('gerente', 'analista'), (req, res) => {

@@ -520,3 +520,26 @@ details.fold-card > summary { list-style: none; cursor: pointer; }
 details.fold-card > summary::-webkit-details-marker { display: none; }
 details.fold-card:not([open]) .card-title { margin-bottom: 0; }
 button.link.name, .sellers-table button.link, .team-table button.link { font-size: 14px; }
+
+/* Marketing: campañas a revisar, ficha de campaña y pestañas de Configuración */
+.health-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.health-row .light { margin-top: 6px; }
+.health-main { flex: 1 1 320px; min-width: 0; }
+.health-main ul { margin: 4px 0 0; padding-left: 18px; color: #7a1633; font-size: 13px; }
+.health-nums { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.health-nums b { color: var(--text); }
+.hero { position: relative; }
+.hero-btn { margin-left: auto; align-self: center; background: rgba(255,255,255,.18); color: #fff; border-color: rgba(255,255,255,.5); }
+.hero-btn:hover { background: rgba(255,255,255,.28); }
+.week-bars { display: grid; grid-template-columns: repeat(var(--n, 12), 1fr); gap: 6px; align-items: end; height: 190px; }
+.wk { display: flex; flex-direction: column; align-items: center; height: 100%; gap: 4px; }
+.wk-bars { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+.wk-bars i { display: block; width: 42%; border-radius: 4px 4px 0 0; min-height: 2px; }
+.wk-bars i.all { background: var(--f-recibidos); }
+.wk-bars i.fit { background: var(--f-perfilados); }
+.wk span { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.qp-stat { margin-bottom: 14px; }
+.qp-stat .qp-q { display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px; }
+.settings-tabs { margin-bottom: 4px; }
+.settings-group { display: grid; gap: 14px; }
+.hero::after { pointer-events: none; } .hero-btn { position: relative; z-index: 1; }

@@ -48,8 +48,8 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 // Título de tarjeta con su cuadrito de color, como en el panel de referencia.
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
-const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Operador' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Gerente de marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Operador' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -280,7 +280,7 @@ function setView(view) {
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller', 'campaign'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
   if (view !== 'board') $('#board-alert').classList.add('hidden');
@@ -309,6 +309,7 @@ async function refresh() {
   if (state.view === 'assign') return renderAssign();
   if (state.view === 'team') return renderTeam();
   if (state.view === 'seller') return renderSeller();
+  if (state.view === 'campaign') return renderCampaign();
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
@@ -687,9 +688,11 @@ async function renderStats() {
   const f = s.funnel;
   // El vendedor ve solo su Resumen de ventas; lo de marketing (inversión, costos) no le aplica.
   const seller = state.me.role === 'vendedor';
-  const tab = seller ? 'ventas' : state.statsTab || pref.get('statsTab') || (state.me.role === 'marketing' ? 'marketing' : 'ventas');
+  // Vendedor: solo ventas. Gerente de marketing: solo marketing (evaluar vendedores no es su trabajo). Gerente y analista: ambas.
+  const tab = seller ? 'ventas' : state.me.role === 'marketing' ? 'marketing' : state.statsTab || pref.get('statsTab') || 'ventas';
   state.statsTab = tab;
-  const tabs = seller ? '' : `<div class="tabs" role="tablist">
+  const health = tab === 'marketing' ? await api('/api/campaign-health').catch(() => null) : null;
+  const tabs = !can('gerente', 'analista') ? '' : `<div class="tabs" role="tablist">
     <button type="button" role="tab" data-tab="ventas" class="${tab === 'ventas' ? 'active' : ''}">Ventas</button>
     <button type="button" role="tab" data-tab="marketing" class="${tab === 'marketing' ? 'active' : ''}">Marketing</button></div>`;
 
@@ -736,15 +739,18 @@ async function renderStats() {
       ${textKpi('target', 'Leads sin origen', String(m.sinOrigen), m.sinOrigen ? `${pct(m.sinOrigen, m.leads)}%: inversión que no se puede medir` : 'todos tienen origen', m.sinOrigen ? 'var(--declinado)' : 'var(--cumple)')}
     </div>
     ${!prevQ ? '<p class="muted small-note stats-hint">Elige un periodo arriba (por ejemplo "Este mes") para comparar contra el periodo anterior.</p>' : ''}
-    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Campañas', 'calidad, costo y retorno de cada una')}${campaignTable(s.campaignFunnel)}</div>
+    ${healthCard(health)}
+    <div class="card chart-card">${cardTitle('megaphone', 'var(--llamada)', 'Campañas', 'clic en una campaña para ver su ficha')}${campaignTable(s.campaignFunnel)}</div>
     <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Por anuncio', 'qué anuncio trae leads que cumplen perfil y cierran (utm_content)')}${adTable(s.adFunnel)}</div>
     <div class="card chart-card">${cardTitle('target', 'var(--nuevo_perfil)', 'Audiencias para remarketing', 'con los filtros de arriba')}${audienceCards(s.audiences)}</div>
     <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Leads recibidos', 'últimos 30 días')}${areaChart(s.byDay)}</div>
     <div class="card chart-card span-4">${cardTitle('radio', 'var(--whatsapp)', '¿De dónde vienen?', 'canal, incluido el de cada campaña')}${categoryBars(s.byChannel)}</div>
-    <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
-    <div class="card chart-card span-6">${cardTitle('layers', 'var(--whatsapp)', 'Por canal', 'etapa de cada lead')}${stageRows(s.channelStages)}</div>`;
+    <div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>`;
   }
-  $('#view-stats').innerHTML = `<div class="dash">${tabs}${tab === 'ventas' && !seller ? salesInsight(s, prev, prevQ) : insightBanner(s)}${body}</div>`;
+  const banner = tab === 'marketing' ? marketingInsight(s, health) : !seller ? salesInsight(s, prev, prevQ) : insightBanner(s);
+  $('#view-stats').innerHTML = `<div class="dash">${tabs}${banner}${body}</div>`;
+  $('#view-stats').querySelectorAll('[data-campaign-open]').forEach((b) => b.addEventListener('click', () => openCampaign(b.dataset.campaignOpen)));
+  $('#monthly-report')?.addEventListener('click', monthlyReport);
   $('#view-stats').querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
     exportCsv(`${filterQuery()}&audience=${b.dataset.audience}${b.dataset.format ? `&format=${b.dataset.format}` : ''}`);
@@ -938,26 +944,167 @@ function campaignTable(rows) {
       : '<p class="muted small-note">Captura la inversión de cada campaña en Configuración → Campañas para ver costos y retorno.</p>')
     : missing.length ? `<p class="muted small-note">Sin inversión por mes en ${missing.map(esc).join(', ')}: solo tienen el total, que no se puede repartir por periodo.</p>` : '';
   return `<div class="table-wrap"><table class="funnel-table campaigns-table"><thead><tr>
-    <th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Cotizados</th><th>Cierres</th><th>Inversión</th><th>Costo por lead</th>
-    <th>Por lead con perfil</th><th>Por cierre</th><th>Ventas</th><th>Retorno</th><th>Días a cerrar</th><th>Por qué se descartan</th>
+    <th>Campaña</th><th>Leads</th><th>Cumplen perfil</th><th>Inversión</th><th>Por lead con perfil</th><th>Cierres</th><th>Retorno</th><th>Por qué se descartan</th>
   </tr></thead><tbody>${order.map((r) => {
     const roas = roasOf(r);
     return `<tr>
-      <td><strong>${esc(r.key)}</strong>${r === best ? ' <span class="conv top">más eficiente</span>' : ''}</td>
+      <td>${r.key === 'Sin campaña' ? `<strong>${esc(r.key)}</strong>` : `<button type="button" class="link" data-campaign-open="${esc(r.key)}">${esc(r.key)}</button>`}${r === best ? ' <span class="conv top">más eficiente</span>' : ''}</td>
       <td class="num"><b>${r.recibidos}</b></td>
-      ${rateCell(r.perfilados, r.recibidos, 'perfilados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
+      ${rateCell(r.perfilados, r.recibidos, 'perfilados')}
       <td class="num">${r.inversion > 0 ? money(r.inversion) : '—'}</td>
-      <td class="num">${money(per(r, 'recibidos'))}</td>
       <td class="num"><b>${money(per(r, 'perfilados'))}</b></td>
-      <td class="num">${r.inversion > 0 ? (r.cerrados ? money(per(r, 'cerrados')) : 'sin cierres') : '—'}</td>
-      <td class="num">${r.ingresos ? money(r.ingresos) : '—'}</td>
+      ${rateCell(r.cerrados, r.recibidos, 'cerrados')}
       <td>${roas == null ? '—' : `<span class="conv ${roas >= 1 ? 'good' : 'bad'}" data-tip="${esc(`Por cada $1 invertido regresaron $${roas.toFixed(2)}`)}">${roas.toFixed(1)}x</span>`}</td>
-      ${daysCell(r.dias_cierre)}${discardCell(r)}
+      ${discardCell(r)}
     </tr>`;
   }).join('')}</tbody></table></div>
   <p class="muted small-note">"Por lead con perfil" es la señal temprana: los cierres tardan semanas, pero en días ya se sabe si una campaña trae leads que sí cumplen.
-    "Días a cerrar" ayuda a no juzgar una campaña antes de tiempo. Retorno = ventas ÷ inversión. Cada venta cuenta en la campaña y el periodo en que llegó el lead.</p>
+    Retorno = ventas ÷ inversión. Costo por lead, por cierre, cotizados y días a cerrar están en la ficha de cada campaña.</p>
   ${note}`;
+}
+
+// Campañas a revisar: el semáforo del mes en curso (rojas y amarillas; las verdes solo se cuentan).
+const LIGHT_LABEL = { red: 'Revisar ya', yellow: 'Vigilar', green: 'Bien' };
+function healthCard(h) {
+  if (!h) return '';
+  const bad = h.campaigns.filter((c) => c.status !== 'green');
+  const good = h.campaigns.length - bad.length;
+  const rows = bad.map((c) => `<div class="health-row">
+      <span class="light ${c.status}" title="${LIGHT_LABEL[c.status]}"></span>
+      <div class="health-main"><button type="button" class="link name" data-campaign-open="${esc(c.key)}">${esc(c.key)}</button>
+        <span class="muted small">${LIGHT_LABEL[c.status]}</span>
+        <ul>${c.motivos.map((m) => `<li>${esc(m)}</li>`).join('')}</ul></div>
+      <div class="health-nums"><span><b>${c.inversion_mes ? money(c.inversion_mes) : '—'}</b> invertido</span><span><b>${c.leads_mes}</b> leads</span>
+        <span><b>${c.perfil_mes}</b> con perfil</span><span><b>${c.cplq_mes ? money(c.cplq_mes) : '—'}</b> por lead con perfil</span></div>
+    </div>`).join('');
+  return `<div class="card chart-card">${cardTitle('target', 'var(--declinado)', 'Campañas a revisar', `este mes${h.cplq_promedio ? ` · lead con perfil promedio ${money(h.cplq_promedio)}` : ''}`)}
+    ${rows || '<p class="muted">Ninguna campaña requiere atención este mes.</p>'}
+    ${good ? `<p class="muted small-note">${good} ${good === 1 ? 'campaña va' : 'campañas van'} bien.</p>` : ''}
+    <p class="muted small-note">Rojo: tiene inversión y no trae leads en 7 días, ninguno cumple perfil, o cada lead con perfil cuesta más del doble del promedio.
+      Amarillo: trajo leads sin inversión capturada (sus costos salen en cero) o la mitad de sus descartes son por un mismo motivo.</p></div>`;
+}
+
+// Lectura rápida de marketing: dónde mover el dinero.
+function marketingInsight(s, h) {
+  const parts = [];
+  const red = h ? h.campaigns.filter((c) => c.status === 'red') : [];
+  const yellow = h ? h.campaigns.filter((c) => c.status === 'yellow') : [];
+  if (red.length) parts.push(`<b>${red.length} ${red.length === 1 ? 'campaña' : 'campañas'} para revisar ya</b>: ${red.slice(0, 3).map((c) => esc(c.key)).join(', ')}.`);
+  else if (h) parts.push('Ninguna campaña en rojo este mes.');
+  if (yellow.length) parts.push(`${yellow.length} en vigilancia.`);
+  const best = h ? h.campaigns.filter((c) => c.cplq_mes).sort((a, b) => a.cplq_mes - b.cplq_mes)[0] : null;
+  if (best) parts.push(`El lead con perfil más barato del mes viene de <b>${esc(best.key)}</b> (${money(best.cplq_mes)}).`);
+  if (s.funnel.sin_origen) parts.push(`${s.funnel.sin_origen} ${s.funnel.sin_origen === 1 ? 'lead sin origen' : 'leads sin origen'}: inversión que no se puede medir.`);
+  return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>${parts.join(' ')}</p></div>
+    <button type="button" class="ghost hero-btn" id="monthly-report">Reporte mensual</button></div>`;
+}
+
+// ---------- Ficha de campaña ----------
+function openCampaign(name) { state.campaignName = name; setView('campaign'); }
+async function renderCampaign() {
+  const name = state.campaignName;
+  const period = $('#f-period').value;
+  const base = new URLSearchParams(filterQuery()); ['assigned', 'campaign', 'q', 'stage', 'profile', 'source', 'product', 'channel', 'reason'].forEach((k) => base.delete(k));
+  const mineQ = new URLSearchParams(base); mineQ.set('campaign', name);
+  const [me, all, d] = await Promise.all([api(`/api/stats?${mineQ}`), api(`/api/stats?${base}`), api(`/api/campaign-detail?name=${encodeURIComponent(name)}`)]);
+  // Una campaña sin leads en el periodo no aparece en el embudo; su inversión se toma de los meses capturados.
+  const fromM = base.get('from') ? base.get('from').slice(0, 7) : '0000-00';
+  const toM = base.get('to') ? new Date(new Date(base.get('to')).getTime() - 1).toISOString().slice(0, 7) : '9999-99';
+  const invPeriod = d.months.filter((x) => x.inversion && x.month >= fromM && x.month <= toM).reduce((t, x) => t + x.inversion, 0) || null;
+  const row = me.campaignFunnel.find((r) => r.key === name) || { recibidos: 0, perfilados: 0, cotizados: 0, cerrados: 0, inversion: invPeriod, ingresos: 0 };
+  const m = marketingMetrics(all);
+  const per = (k) => (row.inversion > 0 && row[k] ? row.inversion / row[k] : null);
+  const roas = row.inversion > 0 && row.ingresos ? row.ingresos / row.inversion : null;
+  const vs = (txt, good) => `<div class="delta ${good == null ? '' : good ? 'good' : 'bad'}">${txt}</div>`;
+  const pctR = row.recibidos ? (row.perfilados / row.recibidos) * 100 : null;
+  const maxW = Math.max(1, ...d.weeks.map((w) => w.leads));
+  const weeks = `<div class="week-bars" style="--n:${d.weeks.length}" role="img" aria-label="Leads y leads con perfil por semana">${d.weeks.map((w) => `<div class="wk" data-tip="${esc(`Semana del ${shortDate(`${w.week}T12:00:00`)}\n${w.leads} leads · ${w.perfil} con perfil`)}">
+      <div class="wk-bars"><i class="all" style="height:${(w.leads / maxW) * 100}%"></i><i class="fit" style="height:${(w.perfil / maxW) * 100}%"></i></div>
+      <span>${shortDate(`${w.week}T12:00:00`)}</span></div>`).join('')}</div>
+    <div class="legend"><span style="--c:var(--f-recibidos)"><i></i>Leads</span><span style="--c:var(--f-perfilados)"><i></i>Con perfil</span></div>`;
+  const months = d.months.length ? `<div class="table-wrap"><table class="funnel-table"><thead><tr><th>Mes</th><th>Inversión</th><th>Leads</th><th>Con perfil</th><th>Por lead con perfil</th></tr></thead><tbody>
+      ${d.months.map((x) => `<tr><td>${monthName(x.month)}</td><td class="num">${x.inversion ? money(x.inversion) : '<span class="conv bad">sin capturar</span>'}</td>
+        <td class="num">${x.leads}</td><td class="num">${x.perfil}</td><td class="num"><b>${x.inversion && x.perfil ? money(x.inversion / x.perfil) : '—'}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Sin datos.</p>';
+  const COLORS = ['var(--f-cerrados)', 'var(--f-cotizados)', 'var(--declinado)'];
+  const qp = Object.values(d.perfil_rapido).map((q) => {
+    const parts = q.options.map((o, i) => ({ key: o.value, n: o.n, label: o.label, color: COLORS[i] || 'var(--empty)' }));
+    return `<div class="qp-stat"><span class="qp-q">${esc(q.label)} <span class="muted small">(${q.total} respondieron)</span></span>${q.total ? battery(parts, q.total, true) + legend(parts, q.total) : '<p class="muted small">Sin respuestas todavía.</p>'}</div>`;
+  }).join('');
+  const periods = [['', 'Todo el tiempo'], ['mes', 'Este mes'], ['mes_pasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['anio', 'Este año']];
+  $('#view-campaign').innerHTML = `<div class="dash">
+    <div class="seller-head">
+      <button type="button" class="ghost small" id="camp-back">← Resumen</button>
+      <h2>${icon('megaphone', 22)} ${esc(name)}</h2>
+      <select id="camp-period" aria-label="Periodo">${periods.map(([v, tx]) => `<option value="${v}" ${v === period ? 'selected' : ''}>${tx}</option>`).join('')}</select>
+    </div>
+    <div class="kpis" style="--cols:6">
+      ${textKpi('inbox', 'Leads', String(row.recibidos), `${row.cotizados} cotizados`, 'var(--f-recibidos)')}
+      ${textKpi('userCheck', 'Cumplen perfil', pctR == null ? '—' : `${Math.round(pctR)}%`, `${row.perfilados} leads`, 'var(--cumple)', m.perfil == null ? '' : vs(`promedio: ${Math.round(m.perfil)}%`, pctR == null ? null : pctR >= m.perfil))}
+      ${textKpi('money', 'Inversión', row.inversion > 0 ? money(row.inversion) : '—', 'en el periodo', 'var(--llamada)')}
+      ${textKpi('userCheck', 'Por lead con perfil', per('perfilados') ? money(per('perfilados')) : '—', `por lead: ${money(per('recibidos'))}`, 'var(--nuevo_perfil)', m.cplq == null ? '' : vs(`promedio: ${money(m.cplq)}`, per('perfilados') == null ? null : per('perfilados') <= m.cplq))}
+      ${textKpi('check', 'Cierres', String(row.cerrados), row.cerrados ? `por cierre: ${money(per('cerrados'))}` : 'sin cierres', 'var(--f-cerrados)')}
+      ${textKpi('trend', 'Retorno', roas == null ? '—' : `${roas.toFixed(1)}x`, row.dias_cierre ? `cierra en ~${Math.max(1, Math.round(row.dias_cierre))} días` : 'ventas ÷ inversión', 'var(--accent)', m.roas == null ? '' : vs(`promedio: ${m.roas.toFixed(1)}x`, roas == null ? null : roas >= m.roas))}
+    </div>
+    <div class="card chart-card span-8">${cardTitle('calendar', 'var(--f-recibidos)', 'Tendencia semanal', 'últimas 12 semanas: si los leads con perfil bajan, el anuncio se está cansando')}${weeks}</div>
+    <div class="card chart-card span-4">${cardTitle('funnel', 'var(--accent)', 'Su embudo')}${funnelChart(me.funnel)}</div>
+    <div class="card chart-card">${cardTitle('money', 'var(--llamada)', 'Inversión contra leads por mes')}${months}</div>
+    <div class="card chart-card">${cardTitle('sparkles', 'var(--nuevo_perfil)', 'Sus anuncios')}${adTable(me.adFunnel)}</div>
+    <div class="card chart-card span-6">${cardTitle('userCheck', 'var(--cumple)', 'Lo que dicen sus leads', 'perfil rápido que capturan los vendedores')}${qp}</div>
+    <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', 'Por qué se descartan')}${reasonBars(me.touches.declineReasons)}</div>
+  </div>`;
+  $('#camp-back').addEventListener('click', () => setView('stats'));
+  $('#camp-period').addEventListener('change', (e) => { $('#f-period').value = e.target.value; renderCampaign(); });
+  animateIn($('#view-campaign'));
+}
+
+// ---------- Reporte mensual de marketing (mes pasado completo contra el anterior) ----------
+async function monthlyReport() {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Permite las ventanas emergentes para abrir el reporte', 'error'); return; }
+  w.document.write('<p style="font-family:sans-serif">Preparando el reporte…</p>');
+  const d = new Date(); const first = (y, mo) => new Date(y, mo, 1).toISOString();
+  const q = (a, b) => `from=${a}&to=${b}`;
+  try {
+    const [cur, prev, h] = await Promise.all([
+      api(`/api/stats?${q(first(d.getFullYear(), d.getMonth() - 1), first(d.getFullYear(), d.getMonth()))}`),
+      api(`/api/stats?${q(first(d.getFullYear(), d.getMonth() - 2), first(d.getFullYear(), d.getMonth() - 1))}`),
+      api('/api/campaign-health')]);
+    const m = marketingMetrics(cur); const o = marketingMetrics(prev);
+    const mName = new Date(d.getFullYear(), d.getMonth() - 1, 15).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+    const ch = (a, b, lower) => (a == null || b == null || !b ? '' : (() => { const x = ((a - b) / b) * 100; const good = lower ? x < 0 : x > 0;
+      return ` <small style="color:${good ? '#037f4c' : '#c21e56'}">${x >= 0 ? '↑' : '↓'} ${Math.abs(Math.round(x))}%</small>`; })());
+    const cell = (v) => `<td>${v}</td>`;
+    const per = (r, k) => (r.inversion > 0 && r[k] ? money(r.inversion / r[k]) : '—');
+    w.document.open();
+    w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte mensual de marketing</title><style>
+      body{font:14px/1.45 system-ui,sans-serif;color:#1f2433;max-width:960px;margin:24px auto;padding:0 16px}h1{margin:0}h2{margin:24px 0 8px;font-size:16px}
+      .muted{color:#6b7189}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.k{border:1px solid #e4e8f1;border-radius:10px;padding:10px}
+      .k b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e4e8f1}
+      th{font-size:12px;color:#6b7189}@media print{button{display:none}}</style></head><body>
+      <button onclick="print()" style="float:right;padding:8px 14px">Imprimir o guardar PDF</button>
+      <h1>Reporte mensual de marketing</h1><p class="muted">${esc(mName)} · comparado con el mes anterior</p>
+      <div class="kpis">
+        <div class="k">Leads<b>${m.leads}${ch(m.leads, o.leads)}</b></div>
+        <div class="k">Cumplen perfil<b>${m.perfil == null ? '—' : `${Math.round(m.perfil)}%`}</b></div>
+        <div class="k">Inversión<b>${m.inv ? money(m.inv) : '—'}</b></div>
+        <div class="k">Costo por lead con perfil<b>${m.cplq ? money(m.cplq) : '—'}${ch(m.cplq, o.cplq, true)}</b></div>
+        <div class="k">Costo por cierre<b>${m.cpc ? money(m.cpc) : '—'}${ch(m.cpc, o.cpc, true)}</b></div>
+        <div class="k">Retorno<b>${m.roas == null ? '—' : `${m.roas.toFixed(1)}x`}${ch(m.roas, o.roas)}</b></div>
+      </div>
+      <h2>Campañas</h2>
+      <table><tr><th>Campaña</th><th>Leads</th><th>Con perfil</th><th>Inversión</th><th>Por lead con perfil</th><th>Cierres</th><th>Ventas</th></tr>
+        ${cur.campaignFunnel.map((r) => `<tr>${cell(esc(r.key))}${cell(r.recibidos)}${cell(r.perfilados)}${cell(r.inversion > 0 ? money(r.inversion) : '—')}${cell(per(r, 'perfilados'))}${cell(r.cerrados)}${cell(r.ingresos ? money(r.ingresos) : '—')}</tr>`).join('')}</table>
+      <h2>Anuncios</h2>
+      <table><tr><th>Anuncio</th><th>Leads</th><th>Con perfil</th><th>Cierres</th></tr>
+        ${cur.adFunnel.slice(0, 10).map((r) => `<tr>${cell(esc(r.key))}${cell(r.recibidos)}${cell(r.perfilados)}${cell(r.cerrados)}</tr>`).join('') || '<tr><td class="muted">Sin anuncios identificados</td></tr>'}</table>
+      <h2>Campañas a revisar (mes en curso)</h2>
+      <table>${h.campaigns.filter((c) => c.status !== 'green').map((c) => `<tr>${cell(esc(c.key))}${cell(c.motivos.map(esc).join('; '))}</tr>`).join('') || '<tr><td class="muted">Ninguna</td></tr>'}</table>
+      <h2>Audiencias disponibles</h2>
+      <table><tr><td>Cumplían perfil y no compraron</td><td>${cur.audiences.perfil}</td></tr><tr><td>Lo pospusieron</td><td>${cur.audiences.pospuso}</td></tr>
+        <tr><td>Contestaron pero no cumplían perfil</td><td>${cur.audiences.contestaron}</td></tr><tr><td>Clientes</td><td>${cur.audiences.clientes}</td></tr></table>
+      </body></html>`);
+    w.document.close();
+  } catch (err) { w.close(); toast(err.message, 'error'); }
 }
 
 // Barras por número de toque (T1…T5, 6+), con el acumulado: "con 3 toques ya respondió el 80%".
@@ -1664,7 +1811,7 @@ async function renderUsers() {
       <p class="muted"><b>Gerente:</b> dirige; ve Equipo hoy, el Resumen y todos los leads, pide seguimientos y corrige; reasigna solo en emergencias.
         En equipos chicos puede tener también las <b>funciones de operador</b> (pestaña Asignación).
         <b>Operador:</b> captura y asigna leads y corrige datos; no ve reportes. <b>Vendedor:</b> trabaja los leads que le asignan y ve su propio Resumen.
-        <b>Marketing:</b> Resumen de marketing, campañas y audiencias. <b>Analista:</b> solo lectura.</p>
+        <b>Gerente de marketing:</b> Resumen de marketing, campañas a revisar, ficha de cada campaña, links y audiencias. <b>Analista:</b> solo lectura.</p>
     </div>
     <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones de operador</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
@@ -1785,7 +1932,13 @@ async function renderSettings() {
 
   const sys = can('gerente') ? await api('/api/system').catch(() => null) : null;
   const kb = (b) => (b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+  // Pestañas para no tener todo en una sola página.
+  const groups = [['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(sys ? [['datos', 'Respaldos']] : [])];
+  const active = groups.some(([k]) => k === state.settingsTab) ? state.settingsTab : groups.some(([k]) => k === pref.get('settingsTab')) ? pref.get('settingsTab') : 'campanas';
+  const g = (k) => `data-group="${k}" class="settings-group ${k === active ? '' : 'hidden'}"`;
   $('#view-settings').innerHTML = `<div class="settings">
+    <div class="tabs settings-tabs" role="tablist">${groups.map(([k, t]) => `<button type="button" role="tab" data-stab="${k}" class="${k === active ? 'active' : ''}">${t}</button>`).join('')}</div>
+    <div ${g('datos')}>
     ${sys ? `<div class="card">
       ${cardTitle('layers', 'var(--f-cerrados)', 'Respaldos y datos')}
       ${sys.storage_warning ? '<p class="decline-note">La base de datos no está en un disco persistente: se borrará en la próxima actualización. En Railway agrega un volumen montado en /data.</p>' : ''}
@@ -1794,8 +1947,12 @@ async function renderSettings() {
       <p>${sys.leads} leads · base de ${kb(sys.size)} · ${sys.last_backup ? `último respaldo automático: ${shortDate(`${sys.last_backup}T12:00:00`)} (${sys.backups} guardados)` : 'aún sin respaldo automático'}</p>
       <a class="button-link" href="/api/backup" download>Descargar respaldo completo</a>
     </div>` : ''}
+    </div>
+    <div ${g('campanas')}>
     ${campaignEditor()}
     ${linkBuilder()}
+    </div>
+    <div ${g('canales')}>
     <div class="card">
       ${cardTitle('chat', 'var(--whatsapp)', 'Mensajes de WhatsApp')}
       <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
@@ -1807,10 +1964,14 @@ async function renderSettings() {
         <button type="submit">Guardar mensajes</button>
       </form>
     </div>
+    </div>
+    <div ${g('listas')}>
     <div class="lists">
       ${listEditor('producto', 'Productos', 'Lo que vendes. Se elige en cada lead como producto de interés.', 'Ej. Espectacular, Pantalla LED')}
       ${listEditor('canal', 'Canales de percepción', 'Cómo se enteró el cliente de ustedes.', 'Ej. Radio, Evento, TikTok')}
     </div>
+    </div>
+    <div ${g('canales')}>
     <div class="card">
       ${cardTitle('file', 'var(--accent)', 'Formulario de tu página web')}
       <p>Pásale esto a quien administra tu página web. Cada vez que alguien llene el formulario, el lead aparece aquí solo.</p>
@@ -1823,8 +1984,13 @@ async function renderSettings() {
       <p class="muted">Para anuncios de Facebook/Instagram (formularios de Meta) o Google Ads se conecta con Zapier o Make usando la misma dirección y clave.</p>
       <button type="button" class="ghost" id="regen">Cambiar la clave (si llega spam)</button>
     </div>
-
+    </div>
   </div>`;
+  $('#view-settings').querySelectorAll('[data-stab]').forEach((b) => b.addEventListener('click', () => {
+    state.settingsTab = b.dataset.stab; pref.set('settingsTab', b.dataset.stab);
+    $('#view-settings').querySelectorAll('[data-stab]').forEach((x) => x.classList.toggle('active', x === b));
+    $('#view-settings').querySelectorAll('.settings-group').forEach((x) => x.classList.toggle('hidden', x.dataset.group !== b.dataset.stab));
+  }));
 
   $('#view-settings').querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
     const field = b.previousElementSibling;
@@ -2025,6 +2191,6 @@ async function reloadCatalog() {
   }
   // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
   setInterval(() => {
-    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign', 'team', 'seller'].includes(state.view)) refresh();
+    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign', 'team', 'seller', 'campaign'].includes(state.view)) refresh();
   }, 30000);
 })();
