@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 
 const STATUSES = ['nuevo', 'nuevo_perfil', 'cotizando', 'declinado', 'vendido'];
 const PROFILES = ['sin_perfilar', 'cumple', 'no_cumple'];
-// Operador: captura leads, los asigna y corrige datos; no ve reportes ni registra toques.
+// 'operador' = Coordinador de leads: captura leads, los asigna y corrige datos; no ve reportes ni registra toques.
 const ROLES = ['gerente', 'marketing', 'vendedor', 'analista', 'operador'];
 const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 // Orígenes que se capturan a mano (el formulario es el único automático).

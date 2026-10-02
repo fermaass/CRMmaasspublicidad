@@ -24,20 +24,21 @@ const AUDIENCES = {
   pospuso: ["l.status = 'declinado' AND l.decline_reason = ?", [POSTPONED]],
   clientes: ["l.status = 'vendido'", []],
 };
-// Asignar leads es trabajo del Operador. En equipos chicos, un gerente puede tener también las funciones de operador (can_assign).
+// Asignar leads es el trabajo del Coordinador de leads (rol 'operador' por dentro). Además, a cualquier usuario
+// (gerente, gerente de marketing, vendedor o analista) se le puede dar la función con "También asigna leads" (can_assign).
 // Cualquier gerente puede reasignar desde la ficha (emergencias).
-const canAssign = (user) => Boolean(user && (user.role === 'operador' || (user.role === 'gerente' && user.can_assign)));
-// Solo un gerente puede llevar las funciones de operador; en otros roles el valor no aplica.
-const assignFlag = (role, value) => (role === 'gerente' && value ? 1 : 0);
-const canReassign = (user) => Boolean(user && ['operador', 'gerente'].includes(user.role));
+const canAssign = (user) => Boolean(user && (user.role === 'operador' || user.can_assign));
+// Al coordinador no le hace falta la casilla: asignar es su rol.
+const assignFlag = (role, value) => (role !== 'operador' && value ? 1 : 0);
+const canReassign = (user) => Boolean(user && (user.role === 'gerente' || canAssign(user)));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
-  if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo el operador asigna los leads' });
+  if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo quien asigna leads puede hacerlo' });
   next();
 };
 const requireReassigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
-  if (!canReassign(req.user)) return res.status(403).json({ error: 'Solo el operador o el gerente reasignan leads' });
+  if (!canReassign(req.user)) return res.status(403).json({ error: 'Solo quien asigna leads o el gerente pueden reasignarlos' });
   next();
 };
 // Canal efectivo del lead: el suyo o, si no tiene, el de su campaña.
@@ -280,7 +281,7 @@ function createApp({ db, config }) {
       name ? String(name).trim() : user.name, role || user.role,
       active === undefined ? user.active : (active ? 1 : 0),
       password ? auth.hashPassword(String(password)) : user.password_hash, id);
-    // Funciones de operador: solo para gerentes; si deja de ser gerente, se quitan.
+    // "También asigna leads": se conserva al cambiar de rol (salvo al pasar a Coordinador de leads, donde es su trabajo).
     const newRole = role || user.role;
     const flag = operates !== undefined ? assignFlag(newRole, operates) : assignFlag(newRole, user.can_assign);
     db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(flag, id);
@@ -302,8 +303,10 @@ function createApp({ db, config }) {
     const where = [];
     const params = [];
     const q = req.query;
-    // El vendedor ve solo sus leads (si además administra leads, también los que no tienen dueño, para asignarlos).
-    if (req.user.role === 'vendedor') {
+    // El vendedor ve solo sus leads. Si además asigna leads, en Asignación ve también los que no tienen dueño.
+    if (req.user.role === 'vendedor' && canAssign(req.user) && q.assigned === 'none') {
+      // sin restricción extra: abajo se filtra a los que no tienen vendedor
+    } else if (req.user.role === 'vendedor') {
       where.push('l.assigned_to = ?'); params.push(req.user.id);
     }
     if (STATUSES.includes(q.status)) { where.push('l.status = ?'); params.push(q.status); }
@@ -332,7 +335,7 @@ function createApp({ db, config }) {
   function getLead(req, id) {
     const lead = db.prepare(`${leadSelect} WHERE l.id = ?`).get(id);
     if (!lead) return null;
-    if (req.user.role === 'vendedor' && lead.assigned_to !== req.user.id) return null;
+    if (req.user.role === 'vendedor' && lead.assigned_to !== req.user.id && !(canAssign(req.user) && !lead.assigned_to)) return null;
     return lead;
   }
 
@@ -344,7 +347,7 @@ function createApp({ db, config }) {
     return user.role === 'vendedor' && lead.assigned_to === user.id;
   }
   const canTouch = (user, lead) => user.role === 'vendedor' && lead.assigned_to === user.id;
-  const canEditOrigin = (user) => [...EDITORS, 'operador'].includes(user.role);
+  const canEditOrigin = (user) => EDITORS.includes(user.role) || canAssign(user);
   const ORIGIN_FIELDS = ['campaign', 'channel_id', 'product_id', 'name', 'phone', 'email'];
 
   app.get('/api/leads', auth.requireUser, (req, res) => {
@@ -390,7 +393,10 @@ function createApp({ db, config }) {
       can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) });
   });
 
-  app.post('/api/leads', auth.requireRole('gerente', 'marketing', 'vendedor', 'operador'), (req, res) => {
+  app.post('/api/leads', auth.requireUser, (req, res) => {
+    if (!['gerente', 'marketing', 'vendedor', 'operador'].includes(req.user.role) && !canAssign(req.user)) {
+      return res.status(403).json({ error: 'No tienes permiso' });
+    }
     const b = req.body || {};
     try {
       if (!MANUAL_SOURCES.includes(b.source)) return res.status(400).json({ error: 'Indica por dónde llegó el lead' });
@@ -440,7 +446,7 @@ function createApp({ db, config }) {
     res.json({ sellers: workload(db), suggested: suggestSeller(db)?.id ?? null, unassigned: u.n, oldest_unassigned_at: u.oldest,
       auto_assign: getSetting(db, 'auto_assign') === '1' });
   });
-  // Reparto automático al de menor carga: lo decide el operador (o el gerente).
+  // Reparto automático al de menor carga: lo decide quien asigna (o el gerente).
   app.patch('/api/assign-settings', requireReassigner, (req, res) => {
     if (req.body?.auto_assign !== undefined) setSetting(db, 'auto_assign', req.body.auto_assign ? '1' : '0');
     res.json({ ok: true, auto_assign: getSetting(db, 'auto_assign') === '1' });
@@ -560,7 +566,10 @@ function createApp({ db, config }) {
   const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
   app.get('/api/team', auth.requireRole('gerente', 'analista'), (req, res) => {
     const nowMs = Date.now();
-    const sellers = db.prepare("SELECT id, name FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY name").all();
+    const sellers = db.prepare("SELECT id, name, can_assign FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY name").all();
+    // Vendedores que también asignan: cuántos leads repartieron en 7 días y cuántos se quedaron ellos (para que se note si se quedan de más).
+    const assignEvents = db.prepare(`SELECT user_id, content FROM lead_events WHERE type = 'asignacion' AND content LIKE 'Asignado%' AND created_at >= ?`)
+      .all(new Date(nowMs - 7 * 86400e3).toISOString());
     const leads = db.prepare(`SELECT * FROM leads WHERE assigned_to IS NOT NULL AND (status IN ('nuevo', 'nuevo_perfil', 'cotizando')
       OR (status = 'declinado' AND recontact_at IS NOT NULL) OR status = 'vendido')`).all();
     const touches = Object.fromEntries(db.prepare('SELECT user_id, COUNT(*) AS n FROM lead_touches WHERE created_at >= ? GROUP BY user_id')
@@ -604,6 +613,12 @@ function createApp({ db, config }) {
       r.pedidos_abiertos = myReqs.filter((q) => !q.done_at).map((q) => ({ id: q.lead_id, name: q.name || q.phone || q.email, text: q.text,
         horas: Math.round((nowMs - new Date(q.created_at).getTime()) / 3600e3) }));
       r.pedidos_tarde = r.pedidos_abiertos.filter((q) => q.horas > 24).length;
+      r.asigna = Boolean(u.can_assign);
+      if (r.asigna) {
+        const made = assignEvents.filter((e) => e.user_id === u.id);
+        r.asigno_7d = made.length;
+        r.autoasignados_7d = made.filter((e) => e.content === `Asignado a ${u.name}`).length;
+      }
       return r;
     });
     // Las cotizaciones vivas más grandes del equipo: los tratos que el gerente debe empujar en persona.
@@ -629,8 +644,10 @@ function createApp({ db, config }) {
       return res.status(409).json({ error: 'Alguien más cambió este lead mientras lo tenías abierto. Se recargó con los datos nuevos; revisa y vuelve a guardar.', stale: true });
     }
     if (!canEdit(req.user, lead)) {
-      if (!canEditOrigin(req.user)) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
-      body = Object.fromEntries(Object.entries(body).filter(([k]) => ORIGIN_FIELDS.includes(k)));
+      // Sin permiso de ventas solo se cambia el origen (marketing y quien asigna) y el vendedor (quien asigna).
+      const allowed = [...(canEditOrigin(req.user) ? ORIGIN_FIELDS : []), ...(canReassign(req.user) ? ['assigned_to'] : [])];
+      if (!allowed.length) return res.status(403).json({ error: 'No tienes permiso para editar este lead' });
+      body = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k) || k === 'base_updated_at'));
     }
     const err = updateLead(req.user, lead, body);
     if (err) return res.status(err.status).json({ error: err.error });
@@ -688,7 +705,7 @@ function createApp({ db, config }) {
 
     let assigned = lead.assigned_to;
     if (b.assigned_to !== undefined) {
-      if (!canReassign(user)) return { status: 403, error: 'Solo el operador o el gerente asignan leads' };
+      if (!canReassign(user)) return { status: 403, error: 'Solo quien asigna leads o el gerente pueden asignarlos' };
       assigned = b.assigned_to ? Number(b.assigned_to) : null;
       if (assigned && !db.prepare("SELECT 1 FROM users WHERE id = ? AND active = 1").get(assigned)) {
         return { status: 400, error: 'Usuario inválido' };

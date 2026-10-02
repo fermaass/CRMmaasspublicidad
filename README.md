@@ -31,13 +31,14 @@ El **Resumen del vendedor** dice cómo va su mes (ventas contra el mes pasado a 
 
 ## Asignación de leads
 
-Los vendedores no toman leads: los asigna el **Operador**, un rol pensado para quien captura leads, los reparte y corrige datos (no ve reportes ni registra toques).
+Los vendedores no toman leads: los asigna el **Coordinador de leads**, un rol para la persona cuyo único trabajo es capturar leads, repartirlos y corregir sus datos (no ve reportes ni registra toques).
 
-- Al capturar un lead con **+ Lead**, el operador elige al vendedor; viene preseleccionado el que tiene menos carga.
+- Al capturar un lead con **+ Lead**, el coordinador elige al vendedor; viene preseleccionado el que tiene menos carga.
 - En **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana, y abajo los leads sin dueño, del más viejo al más nuevo. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga. Ahí mismo se enciende o apaga la asignación automática (de fábrica, apagada).
 - La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
 - El gerente no asigna en su día a día; solo puede **reasignar desde la ficha** en una emergencia.
-- **Equipos chicos:** al crear un gerente (también en el primer uso) la app pregunta si también hará las **funciones de operador**. Si dice que sí, ve además la pestaña Asignación y elige vendedor al capturar. Se cambia después en Usuarios. Si un vendedor captura un lead que le escribió directo, se queda con él.
+- **Cualquier usuario puede asignar además de su trabajo:** en Usuarios, la casilla **"También asigna leads"** (gerente, gerente de marketing, vendedor o analista) le da la pestaña Asignación y le deja elegir vendedor al capturar. En el primer uso la app le pregunta al gerente si él asignará. Si un vendedor captura un lead que le escribió directo, se queda con él.
+- **Vendedor que también asigna:** en Asignación ve los leads sin dueño, pero en su tablero y su Resumen solo los suyos. Para que se note si se queda con los mejores, en **Equipo hoy** sale cuántos de los leads que repartió esa semana se asignó a sí mismo (en rojo si fueron más que su parte pareja).
 
 Si un vendedor se desactiva o deja de ser vendedor, sus leads en curso quedan **sin asignar** (con una nota en su historial) para repartirlos; antes de hacerlo, la app avisa cuántos son. La pestaña Asignación muestra cuántos leads esperan vendedor y se pone en rojo si alguno lleva más de 2 horas esperando.
 
@@ -128,8 +129,8 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 
 | Rol | Qué puede hacer |
 |---|---|
-| Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración. Opcional: funciones de operador en equipos chicos |
-| Operador | Captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
+| Gerente | Dirige: Equipo hoy, Resumen, todos los leads, pedir seguimiento, corregir y reasignar en emergencias; usuarios y configuración. Opcional: también asigna leads |
+| Coordinador de leads | Su único trabajo: captura y asigna leads (pestaña Asignación), corrige datos de contacto y origen; no ve reportes ni registra toques |
 | Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
 | Gerente de marketing | Resumen de marketing, campañas a revisar, ficha de cada campaña, links, audiencias y reporte mensual; corrige el origen de los leads (no toques ni etapas) |
 | Analista | Solo lectura: Equipo hoy, Resumen y exportar CSV |
