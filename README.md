@@ -183,7 +183,7 @@ Cada cliente es una **instalación aparte** con su propio subdominio, su base de
 1. El dominio de la plataforma (por ejemplo `maassleads.com`) en Cloudflare.
 2. **Captcha:** en Cloudflare → Turnstile → *Add widget*, con el dominio de la plataforma como hostname (revisa al crearlo que cubra los subdominios). Copia la *Site key* y la *Secret key*: sirven para todos los clientes.
 
-**Por cada cliente (unos 15 minutos)**
+**Por cada cliente (unos 15 minutos)** — la lista completa con todas las variables está en `PUBLICAR.md`.
 1. **Railway:** en el proyecto, *New → GitHub Repo* con este repositorio (un servicio por cliente) y nómbralo como el cliente.
 2. **Volumen:** clic derecho en el servicio → *Attach volume* con ruta `/data`. Sin volumen los datos se borran en cada actualización.
 3. **Variables** del servicio: `TURNSTILE_SITE_KEY` y `TURNSTILE_SECRET_KEY` (las del captcha). Opcional: `SETUP_CODE` si quieres poner tú el código de instalación; si no, se genera solo.
@@ -195,6 +195,16 @@ Cada cliente es una **instalación aparte** con su propio subdominio, su base de
 Sin el código nadie puede crear la primera cuenta, aunque abra el subdominio antes que tú; después de usarlo deja de servir.
 
 **Actualizaciones:** todos los servicios salen del mismo repositorio, así que una actualización llega a todos los clientes a la vez (los cambios de la base se aplican solos al arrancar). Recomendado: un servicio de **pruebas** que siga otra rama, para probar ahí antes de actualizar a todos.
+
+## Panel de Maass Leads (para ti, no para los clientes)
+
+Un servicio aparte que revisa todos los proyectos y te dice cuál está bien, cuál hay que revisar y cuál está caído: si responde, si la base está sana, respaldos (diario y fuera del servidor), fallas recientes del servidor y de los navegadores, versión, y actividad general (leads de la semana, último acceso). **No muestra nombres, correos ni teléfonos**: no entras a los proyectos de tus clientes. Se configura con `PANEL_INSTANCES`, `OPS_TOKEN` y `PANEL_PASSWORD` (ver `PUBLICAR.md`).
+
+Si alguna vez necesitas ver algo dentro del sistema de un cliente, pídele a su gerente que te invite como **Analista** (solo lectura) y que te desactive al terminar: queda visible y con su permiso.
+
+## Respaldos fuera del servidor
+
+Con las variables `BACKUP_S3_*` (Cloudflare R2 u otro almacenamiento compatible con S3), el respaldo de cada día también se sube comprimido fuera del servidor, en la carpeta del cliente. El gerente ve en Configuración → Tus datos si la copia externa está al día, y tú lo ves en el panel.
 
 ## Seguridad de acceso
 

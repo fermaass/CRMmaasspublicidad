@@ -8,6 +8,16 @@ const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
 const xlsx = require('./xlsx');
+const { offsiteConfig, uploadBackup } = require('./offsite');
+const STARTED_AT = new Date().toISOString();
+// Guarda una falla para el panel (se quedan las últimas 300). Solo datos técnicos: dónde y qué mensaje.
+function logOpsError(db, source, place, message) {
+  try {
+    db.prepare('INSERT INTO ops_errors (at, source, place, message) VALUES (?, ?, ?, ?)')
+      .run(new Date().toISOString(), source, String(place || '').slice(0, 120), String(message || '').slice(0, 300));
+    db.prepare('DELETE FROM ops_errors WHERE id <= (SELECT MAX(id) - 300 FROM ops_errors)').run();
+  } catch { /* el registro de fallas nunca debe tumbar la app */ }
+}
 const { transactionalRoutes } = require('./tx');
 const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
 const fs = require('node:fs');
@@ -279,7 +289,8 @@ function createApp({ db, config }) {
     const size = file && file !== ':memory:' && fs.existsSync(file) ? fs.statSync(file).size : null;
     const backups = file && file !== ':memory:' ? listBackups(file) : [];
     res.json({ storage_warning: Boolean(config.storageWarning), size, backups: backups.length, last_backup: backups.at(-1)?.file.slice(4, 14) || null,
-      leads: db.prepare('SELECT COUNT(*) AS n FROM leads').get().n });
+      leads: db.prepare('SELECT COUNT(*) AS n FROM leads').get().n,
+      offsite: { configured: Boolean(offsiteConfig()), last: getSetting(db, 'offsite_last'), error: getSetting(db, 'offsite_error') } });
   });
   // Descarga de un respaldo completo al momento, para guardarlo fuera del servidor.
   app.get('/api/backup', auth.requireRole('gerente'), (req, res) => {
@@ -1253,6 +1264,51 @@ function createApp({ db, config }) {
     });
   });
 
+  // ---------- Fallas del navegador: la app las reporta sola para el panel de Maass Leads ----------
+  const clientErrors = rateLimiter(20, 60 * 60e3);
+  app.post('/api/ops/client-error', auth.requireUser, (req, res) => {
+    if (clientErrors.hit(req.user.id)) return res.json({ ok: true }); // un navegador en bucle no llena el registro
+    logOpsError(db, 'navegador', `${String(req.body?.view || '').slice(0, 30)} (${req.user.role})`, req.body?.message);
+    res.json({ ok: true });
+  });
+
+  // ---------- Estado técnico para el panel de Maass Leads (con OPS_TOKEN). Sin nombres, correos ni teléfonos. ----------
+  app.get('/api/ops/status', (req, res) => {
+    const token = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+    const expected = config.opsToken ? Buffer.from(String(config.opsToken)) : null;
+    if (!expected || token.length !== expected.length || !require('node:crypto').timingSafeEqual(Buffer.from(token), expected)) {
+      return res.status(404).json({ error: 'No existe' });
+    }
+    const one = (sql, ...p) => db.prepare(sql).get(...p);
+    const since7 = new Date(Date.now() - 7 * 86400e3).toISOString();
+    const since24 = new Date(Date.now() - 86400e3).toISOString();
+    const file = config.dbPath;
+    const backups = file && file !== ':memory:' ? listBackups(file) : [];
+    res.json({
+      company: getSetting(db, 'company_name') || '',
+      version: `${require('../package.json').version}${process.env.RAILWAY_GIT_COMMIT_SHA ? `+${process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7)}` : ''}`,
+      started_at: STARTED_AT,
+      db_ok: one('PRAGMA quick_check').quick_check === 'ok',
+      db_size: file && file !== ':memory:' && fs.existsSync(file) ? fs.statSync(file).size : null,
+      storage_warning: Boolean(config.storageWarning),
+      captcha: Boolean(config.turnstileSecret),
+      setup_pending: userCount() === 0,
+      backups: { local_last: backups.at(-1)?.file.slice(4, 14) || null, local_count: backups.length,
+        offsite: { configured: Boolean(offsiteConfig()), last: getSetting(db, 'offsite_last'), error: getSetting(db, 'offsite_error') } },
+      activity: {
+        users_active: one("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND password_hash != ''").n,
+        users_pending: one("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND password_hash = ''").n,
+        leads_total: one('SELECT COUNT(*) AS n FROM leads').n,
+        leads_7d: one('SELECT COUNT(*) AS n FROM leads WHERE created_at >= ?', since7).n,
+        touches_7d: one('SELECT COUNT(*) AS n FROM lead_touches WHERE created_at >= ?', since7).n,
+        last_lead_at: one('SELECT MAX(created_at) AS t FROM leads').t,
+        last_login_at: one('SELECT MAX(last_login_at) AS t FROM users').t,
+      },
+      errors: { last_24h: one('SELECT COUNT(*) AS n FROM ops_errors WHERE at >= ?', since24).n,
+        recent: db.prepare('SELECT at, source, place, message FROM ops_errors ORDER BY id DESC LIMIT 20').all() },
+    });
+  });
+
   // ---------- Reporte de actividad de un periodo (lo que pasó entre dos fechas, por fecha de cada hecho) ----------
   // A diferencia del Resumen (que sigue a los leads que llegaron en el periodo), aquí cuenta la venta el día que se cerró,
   // la cotización el día que se envió y la renovación el día que se registró. Cada rol ve lo suyo.
@@ -1378,6 +1434,7 @@ function createApp({ db, config }) {
   // Cualquier falla inesperada: se registra en el servidor y al usuario se le dice algo claro, sin detalles internos.
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     console.error(err);
+    if (!err.status || err.status >= 500) logOpsError(db, 'servidor', `${req.method} ${req.path.replace(/\/\d+/g, '/:id')}`, err.message);
     if (res.headersSent) return;
     const status = err.status && err.status < 500 ? err.status : 500;
     const msg = status === 500 ? 'Algo salió mal y no se guardó. Intenta de nuevo; si sigue, avisa al gerente.'
@@ -1430,10 +1487,15 @@ function loadConfig(env = process.env) {
     // Captcha de Cloudflare Turnstile (opcional): sitio y secreto del widget. Sin ellos no se pide captcha.
     turnstileSiteKey: env.TURNSTILE_SITE_KEY,
     turnstileSecret: env.TURNSTILE_SECRET_KEY,
+    // Clave del panel de Maass Leads para leer el estado técnico (misma en todos los proyectos).
+    opsToken: env.OPS_TOKEN,
   };
 }
 
-if (require.main === module) {
+if (require.main === module && process.env.PANEL_INSTANCES) {
+  // Este mismo código corre como "Panel de Maass Leads" (servicio aparte) si tiene PANEL_INSTANCES.
+  require('./panel').startPanel();
+} else if (require.main === module) {
   try { process.loadEnvFile(); } catch { /* sin .env: se usan las variables del entorno */ }
   const config = loadConfig();
   const db = openDb(config.dbPath);
@@ -1447,7 +1509,23 @@ if (require.main === module) {
     console.error('ATENCIÓN: no hay volumen conectado. La base de datos se BORRARÁ en la próxima actualización. Agrega un volumen en Railway montado en /data.');
   }
   // Respaldo del día al arrancar y revisión cada 6 horas (solo crea uno por día; guarda los últimos 14).
-  const backup = () => { try { dailyBackup(db, config.dbPath); } catch (err) { console.error('No se pudo hacer el respaldo diario:', err.message); } };
+  // Si hay almacenamiento externo (R2/S3), el respaldo del día también se sube allá, una vez al día.
+  const offsite = offsiteConfig();
+  const backup = () => {
+    let file;
+    try { file = dailyBackup(db, config.dbPath); } catch (err) {
+      console.error('No se pudo hacer el respaldo diario:', err.message); logOpsError(db, 'respaldo', 'diario', err.message); return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (!offsite || !file || String(getSetting(db, 'offsite_last') || '').startsWith(today)) return;
+    uploadBackup(file, offsite).then((key) => {
+      setSetting(db, 'offsite_last', new Date().toISOString()); db.prepare("DELETE FROM settings WHERE key = 'offsite_error'").run();
+      console.log(`Respaldo copiado fuera del servidor: ${key}`);
+    }).catch((err) => {
+      setSetting(db, 'offsite_error', `${new Date().toISOString()} ${err.message}`.slice(0, 300));
+      console.error('No se pudo copiar el respaldo fuera del servidor:', err.message); logOpsError(db, 'respaldo', 'externo', err.message);
+    });
+  };
   backup();
   const timer = setInterval(backup, 6 * 3600e3); timer.unref();
   const server = createApp({ db, config }).listen(config.port, () => console.log(`CRM en http://localhost:${config.port}`));

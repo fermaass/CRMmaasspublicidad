@@ -107,18 +107,31 @@ async function api(path, opts = {}) {
     });
   } catch {
     // Sin internet o el servidor no respondió: se dice claro que NO se guardó, para que no se pierda el dato sin saberlo.
-    throw new Error(opts.method && opts.method !== 'GET'
-      ? 'Sin conexión: no se guardó. Revisa tu internet e intenta de nuevo.' : 'Sin conexión con el servidor. Revisa tu internet.');
+    throw Object.assign(new Error(opts.method && opts.method !== 'GET'
+      ? 'Sin conexión: no se guardó. Revisa tu internet e intenta de nuevo.' : 'Sin conexión con el servidor. Revisa tu internet.'), { api: true });
   }
   let data = null;
   try { data = res.headers.get('content-type')?.includes('json') ? await res.json() : null; } catch { /* respuesta incompleta */ }
-  if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Sesión expirada'); }
-  if (!res.ok) throw Object.assign(new Error(data?.error || `Error ${res.status}`), { data });
+  if (res.status === 401 && path !== '/api/login') { showLogin(); throw Object.assign(new Error('Sesión expirada'), { api: true }); }
+  if (!res.ok) throw Object.assign(new Error(data?.error || `Error ${res.status}`), { data, api: true });
   return data;
 }
 
+// Fallas de programación (no avisos normales como "contraseña incorrecta"): se reportan solas al registro técnico
+// para el panel de Maass Leads. Máximo 5 por visita; solo el mensaje y la pantalla, sin datos de clientes.
+let reportedErrors = 0;
+function reportError(message) {
+  if (!state.me || reportedErrors >= 5 || !message) return;
+  reportedErrors += 1;
+  fetch('/api/ops/client-error', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: String(message).slice(0, 300), view: state.view || '' }) }).catch(() => {});
+}
+window.addEventListener('error', (e) => reportError(e.message));
 // Cualquier error que no se haya atrapado se muestra (antes se perdía en silencio).
-window.addEventListener('unhandledrejection', (e) => { if (e.reason?.message) toast(e.reason.message, 'error'); });
+window.addEventListener('unhandledrejection', (e) => {
+  if (e.reason?.message) toast(e.reason.message, 'error');
+  if (!e.reason?.api) reportError(e.reason?.message || String(e.reason));
+});
 window.addEventListener('offline', () => toast('Sin internet: lo que registres no se guardará hasta que vuelva la conexión.', 'error'));
 window.addEventListener('online', () => { toast('Conexión de nuevo', 'ok'); if (state.me) refresh(); });
 const newRequestId = () => (window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -2302,6 +2315,9 @@ async function renderSettings() {
       <p class="muted">Copia técnica de todo el sistema, para restaurarlo si algo falla (no se abre en Excel; para ver tus datos usa "Descargar mi cartera").
         Se hace una cada día y se guardan las últimas 14 en el servidor. Descarga una de vez en cuando (por ejemplo cada semana) y guárdala en tu computadora o en Drive.</p>
       <p>${sys.leads} leads · base de ${kb(sys.size)} · ${sys.last_backup ? `último respaldo automático: ${shortDate(`${sys.last_backup}T12:00:00`)} (${sys.backups} guardados)` : 'aún sin respaldo automático'}</p>
+      <p>${!sys.offsite?.configured ? '<span class="touch-badge today">Sin copia fuera del servidor</span> <span class="muted">Pide a quien administra la plataforma que la active.</span>'
+        : sys.offsite.error && !sys.offsite.last ? `<span class="touch-badge late">La copia fuera del servidor falló</span> <span class="muted">${esc(sys.offsite.error)}</span>`
+        : `<span class="touch-badge ok">Copia fuera del servidor</span> <span class="muted">${sys.offsite.last ? `la última, ${timeAgo(sys.offsite.last)}` : 'se hará con el próximo respaldo'}</span>`}</p>
       <a class="button-link" href="/api/backup" download>Descargar respaldo completo</a>
     </div>` : ''}
     </div>

@@ -259,6 +259,15 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(leads)').all().some((c) => c.name === 'quantity')) db.exec('ALTER TABLE leads ADD COLUMN quantity REAL');
   if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'amount')) db.exec('ALTER TABLE lead_touches ADD COLUMN amount REAL');
 
+  // Registro técnico de fallas (servidor y navegadores) para el panel de Maass Leads. Sin datos de clientes.
+  db.exec(`CREATE TABLE IF NOT EXISTS ops_errors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      source TEXT NOT NULL,
+      place TEXT,
+      message TEXT
+    );`);
+
   // Toda campaña usada en algún lead aparece en la lista de campañas.
   db.exec(`INSERT OR IGNORE INTO catalog_items (kind, name)
     SELECT DISTINCT 'campana', campaign FROM leads WHERE campaign IS NOT NULL
