@@ -1495,9 +1495,13 @@ function loadConfig(env = process.env) {
 if (require.main === module && process.env.PANEL_INSTANCES) {
   // Este mismo código corre como "Panel de Maass Leads" (servicio aparte) si tiene PANEL_INSTANCES.
   require('./panel').startPanel();
-} else if (require.main === module) {
+} else if (require.main === module) (async () => {
   try { process.loadEnvFile(); } catch { /* sin .env: se usan las variables del entorno */ }
   const config = loadConfig();
+  // Restaurar un respaldo (RESTORE_FROM) antes de abrir la base. Si falla, no arranca: mejor detenido que con datos equivocados.
+  try { await require('./restore').restoreIfAsked({ dbPath: config.dbPath, source: process.env.RESTORE_FROM, offsite: offsiteConfig() }); } catch (err) {
+    console.error(`No se pudo restaurar el respaldo: ${err.message}`); process.exit(1);
+  }
   const db = openDb(config.dbPath);
   if (seedAdmin(db, config)) console.log(`Usuario gerente creado: ${config.adminEmail}`);
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
@@ -1537,6 +1541,6 @@ if (require.main === module && process.env.PANEL_INSTANCES) {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
-}
+})();
 
 module.exports = { createApp, seedAdmin, loadConfig };

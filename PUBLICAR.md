@@ -34,6 +34,7 @@ Sigue "Dar de alta un cliente nuevo" del README. Las variables de cada servicio 
 | `BACKUP_S3_KEY_ID`, `BACKUP_S3_SECRET` | las del token de R2 |
 | `BACKUP_S3_PREFIX` | nombre corto del cliente, sin espacios (por ejemplo `gimnasio-fuerte`); así cada cliente queda en su carpeta |
 | `SETUP_CODE` (opcional) | si quieres poner tú el código de instalación |
+| `RESTORE_FROM` (solo para restaurar) | el respaldo a recuperar; ver "Restaurar" en el README. Se quita después |
 
 - [ ] Volumen en `/data`.
 - [ ] Subdominio en Railway y su CNAME en Cloudflare (nube naranja).
@@ -60,7 +61,7 @@ Sigue "Dar de alta un cliente nuevo" del README. Las variables de cada servicio 
 - [ ] Al día siguiente, en el panel: respaldo diario y **respaldo externo** con fecha. En R2 aparece `maass/crm-AAAA-MM-DD.db.gz`.
 - [ ] Hacer un *Redeploy* en Railway y confirmar que los datos siguen (el volumen funciona).
 - [ ] Descargar un respaldo desde Configuración → Tus datos y guardarlo en tu computadora.
-- [ ] Ensayar una restauración en el servicio de pruebas (lo hacemos juntos la primera vez).
+- [ ] Ensayar una restauración en el servicio de pruebas: copia ahí un respaldo de R2 con `RESTORE_FROM=r2:maass/crm-AAAA-MM-DD.db.gz`, revisa que aparezcan los datos y quita la variable.
 
 **Panel**
 - [ ] El proyecto aparece en verde. Apaga un momento el servicio de pruebas y comprueba que el panel lo marca como caído.

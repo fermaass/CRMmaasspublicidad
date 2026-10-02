@@ -113,6 +113,7 @@ function createPanel({ instances, opsToken, user = 'maass', password, fetchImpl 
   const app = express();
   app.disable('x-powered-by');
   const fails = new Map();
+  app.get('/health', (req, res) => res.send('ok')); // Railway revisa que el servicio arrancó
   app.use((req, res, next) => {
     res.set({ 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' });
     // Usuario y contraseña del navegador (Basic). Con HTTPS de por medio, 20 intentos fallidos por conexión bloquean 15 min.

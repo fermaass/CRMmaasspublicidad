@@ -287,7 +287,11 @@ Si un **cliente que ya compró** vuelve a escribir, se abre una **oportunidad nu
 - **Datos que no se pisan:** si alguien cambió un lead mientras otra persona tenía la ficha abierta, al guardar se avisa y se recarga en vez de borrar lo nuevo.
 - **Sin internet:** la app avisa claramente "no se guardó" y lo escrito (por ejemplo una nota) se queda en pantalla para reintentar.
 - **Respaldo automático diario** en la carpeta `respaldos` del volumen (se guardan los últimos 14), y en **Configuración → Respaldos y datos** el gerente descarga una copia completa cuando quiera. Recomendado: descargar una cada semana y guardarla fuera del servidor (computadora o Drive).
-- **Restaurar:** detén el servicio, reemplaza `crm.db` del volumen por el respaldo (y borra `crm.db-wal` y `crm.db-shm` si existen) y vuelve a arrancar.
+- **Restaurar:** en Railway agrega la variable `RESTORE_FROM` con el respaldo y deja que el servicio se reinicie:
+  - `RESTORE_FROM=respaldos/crm-2026-10-01.db` para un respaldo diario del volumen;
+  - `RESTORE_FROM=r2:gimnasio-fuerte/crm-2026-10-01.db.gz` para uno de fuera del servidor (usa las variables `BACKUP_S3_*`).
+
+  Al arrancar revisa que el respaldo esté sano, guarda la base actual en `respaldos/antes-de-restaurar-<fecha>.db` y la reemplaza. Lo hace una sola vez: aunque la variable se quede puesta no lo repite, pero conviene quitarla. Si el respaldo no existe o está dañado, el servicio no arranca y el motivo aparece en *Deploy Logs*: así nunca queda funcionando con datos equivocados. Ensáyalo primero en el servicio de pruebas.
 - **Aviso sin volumen:** si la app corre en Railway sin volumen, lo dice en los registros y le muestra al gerente un aviso en rojo, porque la base se borraría en la siguiente actualización.
 - Al actualizar, el servidor termina las peticiones en curso y cierra la base de forma ordenada. Al arrancar revisa la integridad de la base.
 - Además, en Railway activa los respaldos del volumen desde la pestaña del volumen.

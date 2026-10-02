@@ -41,6 +41,7 @@ test('panel: con contraseña; muestra cada proyecto bien, por revisar o caído',
   assert.throws(() => createPanel({ instances, opsToken: 'x', password: 'corta' }), /PANEL_PASSWORD/);
   const p = await listen(createPanel({ instances, opsToken: 'tok-123456789', password: 'panel-seguro-2026' }));
   assert.equal((await fetch(p.url)).status, 401);
+  assert.equal(await (await fetch(`${p.url}/health`)).text(), 'ok', 'Railway revisa /health sin contraseña');
   const auth = { authorization: `Basic ${Buffer.from('maass:panel-seguro-2026').toString('base64')}` };
   const rows = await (await fetch(`${p.url}/estado.json`, { headers: auth })).json();
   const by = Object.fromEntries(rows.map((r) => [r.name, r]));
