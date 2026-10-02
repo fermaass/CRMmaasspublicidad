@@ -474,7 +474,10 @@ function createApp({ db, config }) {
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const text = String(req.body?.text || '').trim().slice(0, 300);
     if (text && !lead.assigned_to) return res.status(400).json({ error: 'Primero hay que asignar el lead a un vendedor' });
-    db.prepare('UPDATE leads SET manager_request = ?, manager_request_at = ? WHERE id = ?').run(text || null, text ? now() : null, lead.id);
+    const ts = now();
+    db.prepare('UPDATE manager_requests SET cancelled = 1, done_at = ? WHERE lead_id = ? AND done_at IS NULL').run(ts, lead.id);
+    if (text) db.prepare('INSERT INTO manager_requests (lead_id, seller_id, text, created_at) VALUES (?, ?, ?, ?)').run(lead.id, lead.assigned_to, text, ts);
+    db.prepare('UPDATE leads SET manager_request = ?, manager_request_at = ? WHERE id = ?').run(text || null, text ? ts : null, lead.id);
     addEvent(db, lead.id, req.user.id, 'nota', text ? `Seguimiento pedido por el gerente: ${text}` : 'El gerente quitó el pedido de seguimiento');
     res.json({ ok: true });
   });
@@ -488,6 +491,16 @@ function createApp({ db, config }) {
       OR (status = 'declinado' AND recontact_at IS NOT NULL) OR status = 'vendido')`).all();
     const touches = Object.fromEntries(db.prepare('SELECT user_id, COUNT(*) AS n FROM lead_touches WHERE created_at >= ? GROUP BY user_id')
       .all(new Date(nowMs - 7 * 86400e3).toISOString()).map((r) => [r.user_id, r.n]));
+    // Datos incompletos (últimos 90 días): sin ellos los reportes engañan.
+    const since90 = new Date(nowMs - 90 * 86400e3).toISOString();
+    const incomplete = db.prepare(`SELECT id, name, phone, email, status, assigned_to FROM leads WHERE assigned_to IS NOT NULL AND updated_at >= ? AND (
+        (status = 'vendido' AND COALESCE(sale_amount, 0) = 0) OR (status = 'cotizando' AND COALESCE(quote_amount, 0) = 0)
+        OR (status = 'declinado' AND decline_reason IS NULL))`).all(since90);
+    const MISSING = { vendido: 'venta sin monto', cotizando: 'cotización sin monto', declinado: 'declinado sin motivo' };
+    // Pedidos del gerente de los últimos 30 días: cuántos se atendieron en menos de 24 h y cuáles siguen abiertos.
+    const reqs = db.prepare(`SELECT r.*, l.name, l.phone, l.email FROM manager_requests r JOIN leads l ON l.id = r.lead_id
+      WHERE r.cancelled = 0 AND (r.created_at >= ? OR r.done_at IS NULL)`).all(new Date(nowMs - 30 * 86400e3).toISOString());
+    const DAY_MS = 86400e3;
     const rows = sellers.map((u) => {
       const mine = leads.filter((l) => l.assigned_to === u.id);
       const active = mine.filter((l) => ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status));
@@ -510,10 +523,27 @@ function createApp({ db, config }) {
         if (d != null && d < -2 && !r.alertas.some((x) => x.id === l.id)) alert(`${a.label}: ${-d} días tarde`);
       }
       r.alertas = r.alertas.slice(0, 8);
+      r.incompletos = incomplete.filter((l) => l.assigned_to === u.id).map((l) => ({ id: l.id, name: l.name || l.phone || l.email, why: MISSING[l.status] }));
+      const myReqs = reqs.filter((q) => q.seller_id === u.id);
+      const closed = myReqs.filter((q) => q.done_at);
+      r.pedidos_a_tiempo = closed.length ? closed.filter((q) => new Date(q.done_at) - new Date(q.created_at) <= DAY_MS).length / closed.length : null;
+      r.pedidos_abiertos = myReqs.filter((q) => !q.done_at).map((q) => ({ id: q.lead_id, name: q.name || q.phone || q.email, text: q.text,
+        horas: Math.round((nowMs - new Date(q.created_at).getTime()) / 3600e3) }));
+      r.pedidos_tarde = r.pedidos_abiertos.filter((q) => q.horas > 24).length;
       return r;
     });
+    // Las cotizaciones vivas más grandes del equipo: los tratos que el gerente debe empujar en persona.
+    const names = Object.fromEntries(sellers.map((u) => [u.id, u.name]));
+    const top = leads.filter((l) => l.status === 'cotizando' && l.quote_amount > 0).sort((a, b) => b.quote_amount - a.quote_amount).slice(0, 5)
+      .map((l) => {
+        const a = FOLLOWUP.nextAction(l);
+        const last = new Date(l.last_touch_at || l.quoted_at || l.updated_at).getTime();
+        return { id: l.id, name: l.name || l.phone || l.email, seller: names[l.assigned_to] || '—', amount: l.quote_amount,
+          dias_sin_contacto: Math.floor((nowMs - last) / DAY_MS), siguiente: l.next_step || a?.label || null,
+          vence: a ? FOLLOWUP.dayDiff(a.due) : null, pedido: l.manager_request };
+      });
     const unassigned = db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n;
-    res.json({ sellers: rows, unassigned, first_touch_hours: FIRST_TOUCH_HOURS, cold_days: COLD_DAYS });
+    res.json({ sellers: rows, unassigned, top_quotes: top, first_touch_hours: FIRST_TOUCH_HOURS, cold_days: COLD_DAYS });
   });
 
   app.patch('/api/leads/:id', auth.requireUser, (req, res) => {
@@ -573,6 +603,13 @@ function createApp({ db, config }) {
       productId = catalogId('producto', b.product_id) ?? (b.product_id === undefined ? lead.product_id : null);
     } catch (err) {
       return { status: 400, error: err.message };
+    }
+    // Sin montos no hay pipeline, venta esperada, ticket ni descuento: son obligatorios al cotizar y al vender.
+    if (next.status === 'cotizando' && lead.status !== 'cotizando' && !(quoteAmount > 0)) {
+      return { status: 400, error: 'Escribe el monto de la cotización' };
+    }
+    if (next.status === 'vendido' && lead.status !== 'vendido' && !(saleAmount > 0)) {
+      return { status: 400, error: 'Escribe el monto de la venta' };
     }
 
     let assigned = lead.assigned_to;
@@ -727,6 +764,7 @@ function createApp({ db, config }) {
     if (note) addEvent(db, lead.id, req.user.id, 'nota', note.slice(0, 5000));
     if (lead.manager_request) {
       db.prepare('UPDATE leads SET manager_request = NULL, manager_request_at = NULL WHERE id = ?').run(lead.id);
+      db.prepare('UPDATE manager_requests SET done_at = ? WHERE lead_id = ? AND done_at IS NULL').run(ts, lead.id);
       addEvent(db, lead.id, req.user.id, 'estado', 'Atendió el seguimiento que pidió el gerente');
     }
     if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);

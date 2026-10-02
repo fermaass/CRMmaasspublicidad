@@ -136,7 +136,7 @@ test('permisos: vendedor ve solo lo suyo, no toma leads; analista solo lee', asy
   assert.equal((await req(`/api/leads/${l2.id}/take`, { method: 'POST', cookie: vendedorB, body: {} })).status, 404);
   assert.equal((await req(`/api/leads/${l2.id}/assign`, { method: 'POST', cookie: vendedorB, body: { assigned_to: idB } })).status, 403);
   assert.equal((await req(`/api/leads/${l2.id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: idB } })).status, 200);
-  assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando' } })).status, 200);
+  assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { status: 'cotizando', quote_amount: 1000 } })).status, 200);
 
   // Si Ana registra un contacto que ya es de Beto, se le avisa sin mostrarle la ficha
   const taken = await req('/api/leads', { method: 'POST', cookie: vendedorA, body: { source: 'llamada', channel_id: 1, phone: l2.phone, email: l2.email } });

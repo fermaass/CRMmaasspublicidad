@@ -214,6 +214,17 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'request_id')) {
     db.exec('ALTER TABLE lead_touches ADD COLUMN request_id TEXT');
   }
+  // Historial de "Pedir seguimiento": para saber si el vendedor lo atendió y en cuánto tiempo.
+  db.exec(`CREATE TABLE IF NOT EXISTS manager_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      seller_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      done_at TEXT,
+      cancelled INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS manager_requests_seller ON manager_requests(seller_id, created_at);`);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS lead_touches_request ON lead_touches(request_id) WHERE request_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS lead_touches_user ON lead_touches(user_id, created_at);
     CREATE INDEX IF NOT EXISTS leads_assigned ON leads(assigned_to, status);

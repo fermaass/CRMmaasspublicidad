@@ -90,3 +90,33 @@ test('pipeline y tabla de vendedores: vivas, frías, venta esperada, ticket y de
   assert.ok(a.toques_7d > 0);
   assert.ok(a.pierde_por.some((x) => x.key === 'Precio'));
 });
+
+test('montos obligatorios al cotizar y al vender', async () => {
+  const id = await mk('5580000030');
+  await touch(id, 'cumple');
+  const r = await touch(id, 'cotizado');
+  assert.equal(r.status, 400); assert.match(r.json.error, /monto de la cotización/);
+  assert.equal((await req(`/api/leads/${id}`, { cookie: gerente })).json.touch_count, 1, 'el toque no quedó a medias');
+  await touch(id, 'cotizado', { quote_amount: 70000 });
+  assert.equal((await touch(id, 'vendido')).status, 400);
+  assert.equal((await touch(id, 'vendido', { sale_amount: '65,000' })).status, 201);
+});
+
+test('pedidos: a tiempo, tarde y abiertos; cotizaciones más grandes; datos incompletos', async () => {
+  const a = await mk('5580000040'); const b = await mk('5580000041');
+  await req(`/api/leads/${a}/request`, { method: 'POST', cookie: gerente, body: { text: 'Llámale hoy' } });
+  await req(`/api/leads/${b}/request`, { method: 'POST', cookie: gerente, body: { text: 'Mándale la propuesta' } });
+  // el pedido de b lleva 30 horas abierto
+  db.prepare('UPDATE manager_requests SET created_at = ? WHERE lead_id = ?').run(new Date(Date.now() - 30 * 3600e3).toISOString(), b);
+  await touch(a, 'sin_respuesta'); // atiende a tiempo
+  // un lead viejo quedó cotizando sin monto (datos de antes de la regla)
+  db.prepare("UPDATE leads SET status = 'cotizando', quote_amount = NULL WHERE id = ?").run(b);
+  const t = (await req('/api/team', { cookie: gerente })).json;
+  const ana = t.sellers.find((s) => s.name === 'Ana');
+  assert.equal(ana.pedidos_tarde, 1);
+  assert.ok(ana.pedidos_abiertos.some((p) => p.id === b && p.horas >= 30));
+  assert.ok(ana.pedidos_a_tiempo > 0);
+  assert.ok(ana.incompletos.some((x) => x.id === b && /sin monto/.test(x.why)));
+  assert.ok(t.top_quotes.length > 0);
+  assert.ok(t.top_quotes.every((q, i, arr) => i === 0 || arr[i - 1].amount >= q.amount), 'de mayor a menor');
+});

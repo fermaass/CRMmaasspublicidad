@@ -48,7 +48,7 @@ test('los toques mueven la etapa: responde en el 2, cumple perfil, se cotiza en 
   l = await lead(id);
   assert.equal(l.status, 'nuevo_perfil'); assert.equal(l.response_touch, 2); assert.ok(l.profiled_at);
 
-  await touch(id, 'cotizado');
+  await touch(id, 'cotizado', { quote_amount: 1000 });
   l = await lead(id);
   assert.equal(l.status, 'cotizando'); assert.equal(l.quote_touch, 3);
 
@@ -118,7 +118,7 @@ test('si ya contestó y deja de responder 3 seguimientos seguidos, se declina co
   const id = await newLead('5510000099');
   await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
   await touch(id, 'cumple');
-  await touch(id, 'cotizado');
+  await touch(id, 'cotizado', { quote_amount: 1000 });
   // Una respuesta a la mitad reinicia la cuenta
   assert.equal((await touch(id, 'sin_respuesta')).json.auto_declined, false);
   await touch(id, 'seguimiento');

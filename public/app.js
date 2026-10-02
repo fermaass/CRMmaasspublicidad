@@ -49,7 +49,7 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
 const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Operador' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -138,7 +138,7 @@ function askForm(message, fieldsHtml, okLabel = 'Registrar') {
       ok.onclick = null; $('#modal-cancel').onclick = null;
       resolve(value);
     };
-    ok.onclick = () => close(Object.fromEntries(new FormData(extra)));
+    ok.onclick = () => { if (!extra.reportValidity()) return; close(Object.fromEntries(new FormData(extra))); };
     $('#modal-cancel').onclick = () => close(null);
   });
 }
@@ -280,7 +280,7 @@ function setView(view) {
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
   if (view !== 'board') $('#board-alert').classList.add('hidden');
@@ -308,6 +308,7 @@ async function refresh() {
   if (state.view === 'stats') return renderStats();
   if (state.view === 'assign') return renderAssign();
   if (state.view === 'team') return renderTeam();
+  if (state.view === 'seller') return renderSeller();
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); return renderToday(); }
   state.leads = await api(`/api/leads?${filterQuery()}`);
@@ -509,7 +510,7 @@ const agreementFields = () => `<label>¿Qué se habló o acordó?<input name="no
   <label>¿Cuándo es el siguiente paso?<input type="datetime-local" name="next_step_at"></label>`;
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
-const moneyField = (name, text) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000"></label>`;
+const moneyField = (name, text, required = false) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000" ${required ? 'required pattern="[$0-9., ]*[1-9][$0-9., ]*"' : ''}></label>`;
 const dateField = (name, text) => `<label>${text}<input type="date" name="${name}"></label>`;
 
 // Registra un toque (desde Mi día o la ficha) pidiendo en un solo paso lo que haga falta según el resultado.
@@ -527,8 +528,8 @@ async function registerTouchOnce(l, channel, outcome) {
     cumple: ['Cumple perfil. Si puedes, responde (un toque cada una):', `${quickProfileFields(l)}${agreementFields()}`],
     conversacion: ['Contestó. ¿Qué quedaron?', agreementFields()],
     seguimiento: ['Sigue en conversación. ¿Qué quedaron?', agreementFields()],
-    cotizado: ['Cotización enviada', `${moneyField('quote_amount', '¿De cuánto es? (para saber cuánto hay en juego)')}${agreementFields()}`],
-    vendido: ['¡Venta cerrada!', `${moneyField('sale_amount', '¿De cuánto fue?')}${dateField('campaign_end', '¿Cuándo termina la campaña? (para ofrecer la renovación a tiempo)')}`],
+    cotizado: ['Cotización enviada', `${moneyField('quote_amount', '¿De cuánto es la cotización?', true)}${agreementFields()}`],
+    vendido: ['¡Venta cerrada!', `${moneyField('sale_amount', '¿De cuánto fue la venta?', true)}${dateField('campaign_end', '¿Cuándo termina la campaña? (para ofrecer la renovación a tiempo)')}`],
     referidos: ['¿Cómo va su campaña?', '<label>¿Te recomendó a alguien?<input name="note" maxlength="300" placeholder="Nombre y teléfono, si te lo dio"></label>'],
     renovo: ['¡Renovó!', `${moneyField('renewal_amount', '¿Por cuánto?')}${dateField('campaign_end', '¿Hasta cuándo va ahora la campaña?')}`],
   };
@@ -617,15 +618,16 @@ async function changeStatus(lead, status) {
     }
   }
   if (status === 'cotizando') {
-    const amount = await ask('¿De cuánto es la cotización? (opcional)', { input: true, placeholder: 'Ej. 60000', okLabel: 'Mover a Cotizando' });
+    const amount = await ask('¿De cuánto es la cotización?', { input: true, placeholder: 'Ej. 60000', okLabel: 'Mover a Cotizando' });
     if (amount === null) return;
-    if (amount) body.quote_amount = amount;
+    if (!amount) { toast('Escribe el monto de la cotización', 'error'); return; }
+    body.quote_amount = amount;
   }
   if (status === 'vendido') {
-    const amount = await ask('¡Venta cerrada! ¿De cuánto fue? (opcional, sirve para medir el retorno de cada campaña)',
-      { input: true, placeholder: 'Ej. 45000', okLabel: 'Marcar vendido' });
+    const amount = await ask('¡Venta cerrada! ¿De cuánto fue?', { input: true, placeholder: 'Ej. 45000', okLabel: 'Marcar vendido' });
     if (amount === null) return;
-    if (amount) body.sale_amount = amount;
+    if (!amount) { toast('Escribe el monto de la venta', 'error'); return; }
+    body.sale_amount = amount;
   }
   try {
     await api(`/api/leads/${lead.id}`, { method: 'PATCH', body });
@@ -715,11 +717,10 @@ async function renderStats() {
     <div class="card chart-card">${seller ? cardTitle('users', 'var(--f-contactados)', 'Tu eficiencia', 'de lo que te asignan, cuánto avanza')
       : cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card">${cardTitle('money', 'var(--f-cotizados)', seller ? 'Tu pipeline' : 'Pipeline', 'cotizaciones abiertas hoy y venta esperada')}${pipelineTable(s.pipeline)}</div>
-    <div class="card chart-card span-6">${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'primer toque en que el cliente contestó')}
-      ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</div>
     <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
-    ${seller ? `<div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>`
-      : `<div class="card chart-card">${cardTitle('users', 'var(--f-recibidos)', 'Por vendedor', 'etapa de cada lead')}${stageRows(s.sellerStages)}</div>`}`;
+    ${seller ? `<div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada uno de tus leads')}${stageRows(s.productStages)}</div>` : ''}
+    <details class="card chart-card fold-card ${seller ? '' : 'span-6'}"><summary>${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'para afinar la cadencia; ábrelo cuando lo necesites')}</summary>
+      ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</details>`;
   } else {
     const m = marketingMetrics(s); const o = prev ? marketingMetrics(prev) : null; const vs = prevQ?.text || '';
     const d = (k, opts) => (o ? delta(m[k], o[k], vs, opts) : '');
@@ -743,7 +744,8 @@ async function renderStats() {
     <div class="card chart-card span-6">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>
     <div class="card chart-card span-6">${cardTitle('layers', 'var(--whatsapp)', 'Por canal', 'etapa de cada lead')}${stageRows(s.channelStages)}</div>`;
   }
-  $('#view-stats').innerHTML = `<div class="dash">${tabs}${insightBanner(s)}${body}</div>`;
+  $('#view-stats').innerHTML = `<div class="dash">${tabs}${tab === 'ventas' && !seller ? salesInsight(s, prev, prevQ) : insightBanner(s)}${body}</div>`;
+  $('#view-stats').querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
     exportCsv(`${filterQuery()}&audience=${b.dataset.audience}${b.dataset.format ? `&format=${b.dataset.format}` : ''}`);
   }));
@@ -862,31 +864,44 @@ function hours(h) {
   return `${Math.round(h / 24)} días`;
 }
 
+// Tabla de vendedores: solo lo que sirve para decidir. El detalle de cada uno está en su ficha (clic en el nombre).
 function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
-  const pct1 = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+  const canOpen = can('gerente', 'analista');
   return `<div class="table-wrap"><table class="funnel-table sellers-table"><thead><tr>
-    <th>Vendedor</th><th>Recibe</th><th>Contestaron</th><th>Cotiza</th><th>Cierra</th><th>Conversión</th><th>Cierra de lo cotizado</th>
-    <th>Ticket promedio</th><th>Descuento</th><th>Primer toque</th><th>Toques 7 días</th><th>Vencidos</th><th>Pierde por</th>
+    <th>Vendedor</th><th>Recibe</th><th>Conversión</th><th>Cierra de lo cotizado</th><th>Ticket promedio</th><th>Descuento</th><th>Primer toque</th><th>Vencidos</th>
   </tr></thead><tbody>${rows.map((r) => {
     const conv = pctOf(r.cerrados, r.recibidos);
     return `<tr class="${r.id ? '' : 'unassigned'}">
-      <td>${r.id ? `<span class="avatar" aria-hidden="true">${esc(initials(r.key))}</span>` : ''}<strong>${esc(r.key)}</strong></td>
+      <td>${r.id ? `<span class="avatar" aria-hidden="true">${esc(initials(r.key))}</span>` : ''}${r.id && canOpen
+        ? `<button type="button" class="link" data-seller-open="${r.id}">${esc(r.key)}</button>` : `<strong>${esc(r.key)}</strong>`}</td>
       <td class="num"><b>${r.recibidos}</b></td>
-      ${rateCell(r.contactados, r.recibidos, 'contactados')}${rateCell(r.cotizados, r.recibidos, 'cotizados')}${rateCell(r.cerrados, r.recibidos, 'cerrados')}
-      <td><span class="conv ${r.id && conv === best && best > 0 ? 'top' : ''}">${conv}%</span></td>
+      <td><span class="conv ${r.id && conv === best && best > 0 ? 'top' : ''}">${conv}%</span> <span class="muted small">${r.cerrados} de ${r.recibidos}</span></td>
       <td class="num">${r.cotizados ? `${pctOf(r.cerrados, r.cotizados)}%` : '—'}</td>
       <td class="num">${r.ticket ? money(r.ticket) : '—'}</td>
-      <td class="num">${r.descuento == null ? '—' : r.descuento > 0.1 ? `<span class="conv bad" data-tip="Vende en promedio ${pct1(r.descuento)} abajo de lo que cotiza">${pct1(r.descuento)}</span>` : pct1(r.descuento)}</td>
+      <td class="num">${r.descuento == null ? '—' : r.descuento > 0.1 ? `<span class="conv bad" data-tip="Vende en promedio ${Math.round(r.descuento * 100)}% abajo de lo que cotiza">${Math.round(r.descuento * 100)}%</span>` : `${Math.round(r.descuento * 100)}%`}</td>
       <td class="num">${r.horas_primer_toque != null && r.horas_primer_toque > 24 ? `<span class="conv bad">${hours(r.horas_primer_toque)}</span>` : hours(r.horas_primer_toque)}</td>
-      <td class="num">${r.toques_7d ?? '—'}</td>
-      <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td>
-      ${discardCell({ descartes: r.pierde_por })}</tr>`;
+      <td>${r.toques_vencidos ? `<span class="conv bad">${r.toques_vencidos}</span>` : '<span class="muted">0</span>'}</td></tr>`;
   }).join('')}</tbody></table></div>
-  <p class="muted small-note">"Cierra de lo cotizado" dice qué tan bien remata; "Descuento" es cuánto abajo de lo cotizado vende en promedio (más de 10% se marca en rojo);
-    "Toques 7 días" es su actividad de la semana: separa al que no trabaja del que trabaja y no tiene suerte. "Pierde por" es su motivo principal de pérdida.
-    Los tiempos se miden desde que llega el lead.</p>`;
+  <p class="muted small-note">${canOpen ? 'Da clic en un vendedor para ver su ficha completa (embudo contra el equipo, pipeline, por qué pierde y pedidos). ' : ''}"Descuento" es cuánto abajo de lo cotizado vende en promedio (más de 10% en rojo). Los tiempos se miden desde que llega el lead.</p>`;
+}
+
+// Lectura rápida del gerente: lo que pide acción hoy en su equipo, no el resumen general.
+function salesInsight(s, prev, prevQ) {
+  const f = s.funnel; const parts = [];
+  const late = s.sellerFunnel.filter((r) => r.id && r.toques_vencidos).sort((a, b) => b.toques_vencidos - a.toques_vencidos);
+  if (late[0]) parts.push(`<b>${esc(late[0].key)}</b> tiene <b>${late[0].toques_vencidos} ${late[0].toques_vencidos === 1 ? 'pendiente vencido' : 'pendientes vencidos'}</b>${late[1] ? `; ${esc(late[1].key)}, ${late[1].toques_vencidos}` : ''}.`);
+  else parts.push('Nadie tiene pendientes vencidos.');
+  const exp = (s.pipeline || []).reduce((t, r) => t + (r.esperado || 0), 0);
+  const cold = (s.pipeline || []).reduce((t, r) => t + r.frias_monto, 0);
+  if (exp) parts.push(`Venta esperada del pipeline: <b>${money(exp)}</b>.`);
+  if (cold) parts.push(`Hay <b>${money(cold)}</b> en cotizaciones frías por reactivar o cerrar.`);
+  if (prev && f.ingresos != null) {
+    const d = prev.funnel.ingresos ? Math.round(((f.ingresos - prev.funnel.ingresos) / prev.funnel.ingresos) * 100) : null;
+    parts.push(`Ventas: <b>${money(f.ingresos)}</b>${d == null ? '' : ` (${d >= 0 ? '↑' : '↓'} ${Math.abs(d)}% ${esc(prevQ.text)})`}.`);
+  } else parts.push(`Ventas: <b>${money(f.ingresos)}</b> de ${f.cerrados} ${f.cerrados === 1 ? 'cierre' : 'cierres'}.`);
+  return `<div class="hero">${icon('sparkles', 22)}<div><h2>Lectura rápida</h2><p>${parts.join(' ')}</p></div></div>`;
 }
 
 // Pipeline: lo que hay en cotización hoy, vivo o frío, y la venta esperada con la tasa real de cierre de cada vendedor.
@@ -1384,45 +1399,170 @@ async function openNewLead() {
 // ---------- Equipo hoy: lo que el gerente tiene que atender de cada vendedor ----------
 async function renderTeam() {
   const t = await api('/api/team');
-  const light = (r) => (r.vencidos || r.sin_primer_toque || r.acuerdos_vencidos ? 'red' : r.frias || r.hoy > 8 ? 'yellow' : 'green');
+  const light = (r) => (r.vencidos || r.sin_primer_toque || r.acuerdos_vencidos || r.pedidos_tarde ? 'red' : r.frias || r.incompletos.length || r.hoy > 8 ? 'yellow' : 'green');
   const LIGHT_TEXT = { red: 'Atender hoy', yellow: 'Vigilar', green: 'Al día' };
   const num = (n, bad) => `<td class="num">${n ? `<span class="conv ${bad ? 'bad' : ''}">${n}</span>` : '<span class="muted">0</span>'}</td>`;
+  const reqCell = (r) => `<td class="num">${r.pedidos_abiertos.length ? `<span class="conv ${r.pedidos_tarde ? 'bad' : ''}" data-tip="${esc(r.pedidos_tarde ? `${r.pedidos_tarde} con más de 24 h sin atender` : 'abiertos')}">${r.pedidos_abiertos.length}</span>` : '<span class="muted">0</span>'}
+    ${r.pedidos_a_tiempo == null ? '' : `<span class="muted small"> · ${Math.round(r.pedidos_a_tiempo * 100)}% a tiempo</span>`}</td>`;
+  const chips = (r) => [
+    ...r.pedidos_abiertos.filter((p) => p.horas > 24).map((p) => `<button type="button" class="chip-alert" data-open="${p.id}"><b>${esc(p.name)}</b> · tu pedido lleva ${p.horas} h sin atender</button>`),
+    ...r.alertas.map((a) => `<button type="button" class="chip-alert" data-open="${a.id}"><b>${esc(a.name)}</b> · ${esc(a.why)}</button>`),
+    ...r.incompletos.slice(0, 6).map((a) => `<button type="button" class="chip-alert data" data-open="${a.id}"><b>${esc(a.name)}</b> · ${esc(a.why)}</button>`),
+  ].join('');
   const rows = t.sellers.map((r) => `<tr data-seller="${r.id}">
-      <td><span class="light ${light(r)}" title="${LIGHT_TEXT[light(r)]}"></span><span class="avatar" aria-hidden="true">${esc(initials(r.name))}</span><strong>${esc(r.name)}</strong>
-        <span class="muted small">${LIGHT_TEXT[light(r)]}</span></td>
+      <td><span class="light ${light(r)}" title="${LIGHT_TEXT[light(r)]}"></span><span class="avatar" aria-hidden="true">${esc(initials(r.name))}</span>
+        <button type="button" class="link" data-seller-open="${r.id}">${esc(r.name)}</button> <span class="muted small">${LIGHT_TEXT[light(r)]}</span></td>
       <td class="num"><b>${r.en_curso}</b></td>
       ${num(r.vencidos, true)}${num(r.sin_primer_toque, true)}${num(r.acuerdos_vencidos, true)}${num(r.frias, false)}
       <td class="num">${r.hoy}</td>
       <td class="num">${r.en_cotizacion ? money(r.en_cotizacion) : '—'}</td>
       <td class="num">${r.toques_7d}</td>
-      <td class="num">${r.pedidos ? `<span class="conv">${r.pedidos}</span>` : '<span class="muted">0</span>'}</td>
-      <td><button type="button" class="ghost small" data-board="${r.id}">Ver sus leads</button></td>
+      ${reqCell(r)}
+      ${num(r.incompletos.length, false)}
     </tr>
-    ${r.alertas.length ? `<tr class="alerts-row"><td colspan="11"><div class="team-alerts">${r.alertas.map((a) => `<button type="button" class="chip-alert" data-open="${a.id}">
-      <b>${esc(a.name)}</b> · ${esc(a.why)}</button>`).join('')}</div></td></tr>` : ''}`).join('');
+    ${chips(r) ? `<tr class="alerts-row"><td colspan="11"><div class="team-alerts">${chips(r)}</div></td></tr>` : ''}`).join('');
+  const top = t.top_quotes.length ? `<div class="table-wrap"><table class="funnel-table"><thead><tr>
+      <th>Cliente</th><th>Vendedor</th><th>Monto</th><th>Último contacto</th><th>Siguiente paso</th><th></th></tr></thead><tbody>
+      ${t.top_quotes.map((q) => `<tr><td><button type="button" class="link" data-open="${q.id}">${esc(q.name)}</button></td><td>${esc(q.seller)}</td>
+        <td class="num"><b>${money(q.amount)}</b></td>
+        <td class="num">${q.dias_sin_contacto >= t.cold_days ? `<span class="conv bad">hace ${q.dias_sin_contacto} días</span>` : q.dias_sin_contacto === 0 ? 'hoy' : `hace ${q.dias_sin_contacto} ${q.dias_sin_contacto === 1 ? 'día' : 'días'}`}</td>
+        <td>${q.siguiente ? `${esc(q.siguiente)}${q.vence != null && q.vence < 0 ? ` <span class="conv bad">${-q.vence} ${q.vence === -1 ? 'día' : 'días'} tarde</span>` : ''}` : '—'}</td>
+        <td>${q.pedido ? '<span class="request-pill">pedido enviado</span>' : `<button type="button" class="ghost small" data-open="${q.id}">Abrir</button>`}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="muted">No hay cotizaciones abiertas con monto.</p>';
   $('#view-team').innerHTML = `<div class="team">
     <div class="today-summary">
       ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
         : `<span class="alert-pill late">${t.unassigned} sin asignar (el operador los reparte)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
-      <span class="muted">Rojo: algo vencido o un lead sin primer toque después de ${t.first_touch_hours} h. Amarillo: cotizaciones frías (más de ${t.cold_days} días sin contacto).</span>
+      <span class="muted">Rojo: algo vencido, un lead sin primer toque después de ${t.first_touch_hours} h o un pedido tuyo con más de 24 h. Amarillo: cotizaciones frías o datos incompletos.</span>
+      <span class="spacer"></span>
+      <button type="button" class="ghost" id="weekly-report">Reporte semanal</button>
     </div>
     <section class="card">
       ${cardTitle('users', 'var(--f-contactados)', 'Tu equipo hoy', 'a quién hablarle y de qué lead')}
       ${t.sellers.length ? `<div class="table-wrap"><table class="funnel-table team-table"><thead><tr>
         <th>Vendedor</th><th>En curso</th><th>Vencidos</th><th>Sin primer toque</th><th>Acuerdos vencidos</th><th>Cotizaciones frías</th>
-        <th>Para hoy</th><th>En cotización</th><th>Toques 7 días</th><th>Pedidos tuyos</th><th></th>
+        <th>Para hoy</th><th>En cotización</th><th>Toques 7 días</th><th>Tus pedidos</th><th>Datos incompletos</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="muted small-note">Da clic en un lead de la lista para abrir su ficha y, si hace falta, "Pedir seguimiento": le aparece hasta arriba al vendedor.</p>`
+      <p class="muted small-note">Da clic en un vendedor para ver su ficha, o en un lead para abrirlo y "Pedir seguimiento". Los avisos grises son datos incompletos (ventas o cotizaciones sin monto, declinados sin motivo) que hacen que los reportes engañen.</p>`
         : '<p class="muted">No hay vendedores activos.</p>'}
     </section>
+    <section class="card">${cardTitle('money', 'var(--f-cotizados)', 'Las cotizaciones más grandes', 'los tratos que conviene empujar en persona')}${top}</section>
   </div>`;
   const view = $('#view-team');
   $('#team-assign')?.addEventListener('click', () => setView('assign'));
+  $('#weekly-report').addEventListener('click', weeklyReport);
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
-  view.querySelectorAll('[data-board]').forEach((b) => b.addEventListener('click', () => {
-    $('#f-assigned').value = b.dataset.board; updateMoreFiltersLabel(); setView('board');
-  }));
+  view.querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   animateIn(view);
+}
+
+// ---------- Ficha del vendedor: para la junta uno a uno ----------
+function openSeller(id) { state.sellerId = id; setView('seller'); }
+async function renderSeller() {
+  const id = state.sellerId;
+  const period = $('#f-period').value;
+  const base = new URLSearchParams(filterQuery()); ['assigned', 'campaign', 'q', 'stage', 'profile', 'source', 'product', 'channel', 'reason'].forEach((k) => base.delete(k));
+  const mineQ = new URLSearchParams(base); mineQ.set('assigned', id);
+  const [me, team, t] = await Promise.all([api(`/api/stats?${mineQ}`), api(`/api/stats?${base}`), api('/api/team')]);
+  const row = t.sellers.find((r) => r.id === id) || { pedidos_abiertos: [], alertas: [], incompletos: [], pedidos_a_tiempo: null };
+  const mine = me.sellerFunnel.find((r) => r.id === id) || {};
+  const sellers = team.sellerFunnel.filter((r) => r.id);
+  const sum = (k) => sellers.reduce((x, r) => x + (r[k] || 0), 0);
+  const avgBy = (k, w) => { const rs = sellers.filter((r) => r[k] != null && r[w]); const tw = rs.reduce((x, r) => x + r[w], 0); return tw ? rs.reduce((x, r) => x + r[k] * r[w], 0) / tw : null; };
+  const teamV = { conv: sum('recibidos') ? sum('cerrados') / sum('recibidos') : null, quoteWin: sum('cotizados') ? sum('cerrados') / sum('cotizados') : null,
+    ticket: avgBy('ticket', 'cerrados'), desc: avgBy('descuento', 'cerrados'), first: team.touches.speed };
+  const myV = { conv: mine.recibidos ? mine.cerrados / mine.recibidos : null, quoteWin: mine.cotizados ? mine.cerrados / mine.cotizados : null,
+    ticket: mine.ticket ?? null, desc: mine.descuento ?? null, first: mine.horas_primer_toque ?? null };
+  const pctS = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+  const cmp = (mv, tv, fmt, lowerIsBetter = false) => {
+    if (mv == null || tv == null) return `<div class="delta">equipo: ${tv == null ? '—' : fmt(tv)}</div>`;
+    const better = lowerIsBetter ? mv < tv : mv > tv; const same = Math.abs(mv - tv) < 1e-9;
+    return `<div class="delta ${same ? '' : better ? 'good' : 'bad'}">equipo: ${fmt(tv)}</div>`;
+  };
+  const pipe = (me.pipeline || []).find((r) => r.id === id);
+  const teamReason = team.touches.declineReasons[0];
+  const periods = [['', 'Todo el tiempo'], ['mes', 'Este mes'], ['mes_pasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['anio', 'Este año']];
+  $('#view-seller').innerHTML = `<div class="dash">
+    <div class="seller-head">
+      <button type="button" class="ghost small" id="seller-back">← Equipo hoy</button>
+      <h2><span class="avatar big" aria-hidden="true">${esc(initials(row.name || mine.key || ''))}</span>${esc(row.name || mine.key || 'Vendedor')}</h2>
+      <select id="seller-period" aria-label="Periodo">${periods.map(([v, tx]) => `<option value="${v}" ${v === period ? 'selected' : ''}>${tx}</option>`).join('')}</select>
+      <span class="spacer"></span>
+      <button type="button" class="ghost small" id="seller-board">Ver sus leads en el tablero</button>
+    </div>
+    <div class="kpis" style="--cols:5">
+      ${textKpi('trend', 'Conversión', pctS(myV.conv), `${mine.cerrados || 0} de ${mine.recibidos || 0} leads`, 'var(--accent)', cmp(myV.conv, teamV.conv, pctS))}
+      ${textKpi('check', 'Cierra de lo cotizado', pctS(myV.quoteWin), `${mine.cerrados || 0} de ${mine.cotizados || 0} cotizaciones`, 'var(--f-cerrados)', cmp(myV.quoteWin, teamV.quoteWin, pctS))}
+      ${textKpi('money', 'Ticket promedio', myV.ticket ? money(myV.ticket) : '—', 'por venta', 'var(--f-cotizados)', cmp(myV.ticket, teamV.ticket, money))}
+      ${textKpi('file', 'Descuento', pctS(myV.desc), 'abajo de lo cotizado', 'var(--declinado)', cmp(myV.desc, teamV.desc, pctS, true))}
+      ${textKpi('clock', 'Primer toque', myV.first == null ? '—' : hours(myV.first), 'desde que llega el lead', 'var(--f-contactados)', cmp(myV.first, teamV.first, hours, true))}
+    </div>
+    <div class="card chart-card span-6">${cardTitle('funnel', 'var(--accent)', 'Su embudo', 'cuántos llegan a cada paso')}${funnelChart(me.funnel)}</div>
+    <div class="card chart-card span-6">${cardTitle('money', 'var(--f-cotizados)', 'Su pipeline', 'cotizaciones abiertas hoy')}
+      ${pipe ? `<p class="big-line"><b>${pipe.vivas}</b> vivas por <b>${money(pipe.vivas_monto)}</b>${pipe.frias ? ` · <span class="conv bad">${pipe.frias} frías por ${money(pipe.frias_monto)}</span>` : ''}</p>
+        <p class="muted">Venta esperada: <b>${pipe.esperado == null ? 'sin historial suficiente' : money(pipe.esperado)}</b>${pipe.tasa == null ? '' : ` (cierra ${Math.round(pipe.tasa * 100)}% de sus cotizaciones)`}</p>` : '<p class="muted">Sin cotizaciones abiertas.</p>'}
+      ${cardTitle('target', 'var(--declinado)', 'Por qué pierde', teamReason ? `en el equipo, el motivo principal es "${teamReason.key}"` : '')}${reasonBars(me.touches.declineReasons)}</div>
+    <div class="card chart-card span-6">${cardTitle('sparkles', 'var(--accent)', 'Tus pedidos', row.pedidos_a_tiempo == null ? 'sin historial de pedidos' : `atiende a tiempo el ${Math.round(row.pedidos_a_tiempo * 100)}% (menos de 24 h)`)}
+      ${row.pedidos_abiertos.length ? row.pedidos_abiertos.map((p) => `<div class="today-row"><div class="today-main"><button type="button" class="link name" data-open="${p.id}">${esc(p.name)}</button>
+        <span class="${p.horas > 24 ? 'touch-badge late' : 'muted'}">hace ${p.horas} h</span><span class="today-note">“${esc(p.text)}”</span></div></div>`).join('') : '<p class="muted">No tiene pedidos abiertos.</p>'}</div>
+    <div class="card chart-card span-6">${cardTitle('phone', 'var(--declinado)', 'Para hablar hoy', 'vencidos, cotizaciones frías y datos incompletos')}
+      ${[...row.alertas, ...row.incompletos].length ? `<div class="team-alerts no-pad">${row.alertas.map((a) => `<button type="button" class="chip-alert" data-open="${a.id}"><b>${esc(a.name)}</b> · ${esc(a.why)}</button>`).join('')}
+        ${row.incompletos.map((a) => `<button type="button" class="chip-alert data" data-open="${a.id}"><b>${esc(a.name)}</b> · ${esc(a.why)}</button>`).join('')}</div>` : '<p class="muted">Nada pendiente.</p>'}</div>
+  </div>`;
+  const view = $('#view-seller');
+  $('#seller-back').addEventListener('click', () => setView('team'));
+  $('#seller-period').addEventListener('change', (e) => { $('#f-period').value = e.target.value; renderSeller(); });
+  $('#seller-board').addEventListener('click', () => { $('#f-assigned').value = id; updateMoreFiltersLabel(); setView('board'); });
+  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  animateIn(view);
+}
+
+// ---------- Reporte semanal: una página para la junta del lunes (se imprime o se guarda en PDF) ----------
+async function weeklyReport() {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Permite las ventanas emergentes para abrir el reporte', 'error'); return; }
+  w.document.write('<p style="font-family:sans-serif">Preparando el reporte…</p>');
+  const now = Date.now(); const day = 86400e3;
+  const q = (from, to) => `from=${new Date(from).toISOString()}&to=${new Date(to).toISOString()}`;
+  try {
+    const [cur, prev, t] = await Promise.all([api(`/api/stats?${q(now - 7 * day, now)}`), api(`/api/stats?${q(now - 14 * day, now - 7 * day)}`), api('/api/team')]);
+    const f = cur.funnel; const p = prev.funnel;
+    const ch = (a, b) => (!b ? '' : ` <small style="color:${a >= b ? '#037f4c' : '#c21e56'}">${a >= b ? '↑' : '↓'} ${Math.abs(Math.round(((a - b) / b) * 100))}%</small>`);
+    const pipe = cur.pipeline || [];
+    const exp = pipe.reduce((x, r) => x + (r.esperado || 0), 0);
+    const cell = (v) => `<td>${v}</td>`;
+    const range = `${new Date(now - 7 * day).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} al ${new Date(now).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    w.document.open();
+    w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte semanal de ventas</title><style>
+      body{font:14px/1.45 system-ui,sans-serif;color:#1f2433;max-width:900px;margin:24px auto;padding:0 16px}
+      h1{margin:0}h2{margin:24px 0 8px;font-size:16px}.muted{color:#6b7189}
+      .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.k{border:1px solid #e4e8f1;border-radius:10px;padding:10px}
+      .k b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e4e8f1}
+      th{font-size:12px;color:#6b7189}@media print{button{display:none}}</style></head><body>
+      <button onclick="print()" style="float:right;padding:8px 14px">Imprimir o guardar PDF</button>
+      <h1>Reporte semanal de ventas</h1><p class="muted">${esc(range)} · comparado con la semana anterior</p>
+      <div class="kpis">
+        <div class="k">Leads recibidos<b>${f.recibidos}${ch(f.recibidos, p.recibidos)}</b></div>
+        <div class="k">Cotizados<b>${f.cotizados}${ch(f.cotizados, p.cotizados)}</b></div>
+        <div class="k">Cierres<b>${f.cerrados}${ch(f.cerrados, p.cerrados)}</b></div>
+        <div class="k">Ventas<b>${money(f.ingresos)}${ch(f.ingresos, p.ingresos)}</b></div>
+      </div>
+      <h2>Vendedores (esta semana)</h2>
+      <table><tr><th>Vendedor</th><th>Recibe</th><th>Cotiza</th><th>Cierra</th><th>Ventas</th><th>Vencidos hoy</th><th>Toques 7 días</th></tr>
+        ${t.sellers.map((r) => { const s2 = cur.sellerFunnel.find((x) => x.id === r.id) || {};
+          return `<tr>${cell(esc(r.name))}${cell(s2.recibidos || 0)}${cell(s2.cotizados || 0)}${cell(s2.cerrados || 0)}${cell(s2.ingresos ? money(s2.ingresos) : '—')}${cell(r.vencidos)}${cell(r.toques_7d)}</tr>`; }).join('')}</table>
+      <h2>Pipeline hoy</h2>
+      <table><tr><th>Vendedor</th><th>Vivas</th><th>Frías</th><th>Venta esperada</th></tr>
+        ${pipe.map((r) => `<tr>${cell(esc(r.key))}${cell(`${r.vivas} · ${money(r.vivas_monto)}`)}${cell(r.frias ? `${r.frias} · ${money(r.frias_monto)}` : '0')}${cell(r.esperado == null ? 'sin historial' : money(r.esperado))}</tr>`).join('')}
+        <tr><th>Total</th><th></th><th></th><th>${exp ? money(exp) : '—'}</th></tr></table>
+      <h2>Cotizaciones más grandes</h2>
+      <table><tr><th>Cliente</th><th>Vendedor</th><th>Monto</th><th>Último contacto</th><th>Siguiente paso</th></tr>
+        ${t.top_quotes.map((x) => `<tr>${cell(esc(x.name))}${cell(esc(x.seller))}${cell(money(x.amount))}${cell(x.dias_sin_contacto === 0 ? 'hoy' : `hace ${x.dias_sin_contacto} ${x.dias_sin_contacto === 1 ? 'día' : 'días'}`)}${cell(esc(x.siguiente || '—'))}</tr>`).join('')}</table>
+      <h2>Por qué se perdieron (esta semana)</h2>
+      <table>${cur.touches.declineReasons.map((r) => `<tr>${cell(esc(r.key))}${cell(r.n)}</tr>`).join('') || '<tr><td class="muted">Sin declinados</td></tr>'}</table>
+      </body></html>`);
+    w.document.close();
+  } catch (err) { w.close(); toast(err.message, 'error'); }
 }
 
 // ---------- Asignación: carga por vendedor y leads sin dueño ----------
@@ -1885,6 +2025,6 @@ async function reloadCatalog() {
   }
   // Los leads nuevos aparecen solos: se recarga cada 30 s si no hay un detalle abierto.
   setInterval(() => {
-    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign', 'team'].includes(state.view)) refresh();
+    if ($('#drawer').classList.contains('hidden') && !['users', 'settings', 'assign', 'team', 'seller'].includes(state.view)) refresh();
   }, 30000);
 })();

@@ -38,11 +38,11 @@ test('el embudo cuenta avances aunque el lead retroceda o se decline', async () 
   // L0: contesta, cumple, cotiza, cierra
   await patch(ids[0], { contacted: true }, ana);
   await patch(ids[0], { profile: 'cumple' }, ana);
-  await patch(ids[0], { status: 'cotizando' }, ana);
+  await patch(ids[0], { status: 'cotizando', quote_amount: 50000 }, ana);
   await patch(ids[0], { status: 'vendido', sale_amount: '$45,000' }, ana);
   // L1: cotiza (sin marcar contacto) y luego se declina: sigue contando como contactado y cotizado
   await patch(ids[1], { profile: 'cumple' }, ana);
-  await patch(ids[1], { status: 'cotizando' }, ana);
+  await patch(ids[1], { status: 'cotizando', quote_amount: 30000 }, ana);
   await patch(ids[1], { status: 'declinado', decline_reason: 'Precio' }, ana);
   // L2: solo contesta
   await patch(ids[2], { contacted: true }, ana);

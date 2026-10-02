@@ -88,10 +88,13 @@ Al capturar un lead a mano se pregunta **"¿De dónde viene?"** en una sola list
 
 ## Para el gerente de ventas
 
-- Entra a **Equipo hoy**: una fila por vendedor con semáforo (vencidos, leads sin primer toque después de 2 horas, acuerdos vencidos, cotizaciones frías de más de 15 días), lo que tiene para hoy, su dinero en cotización, sus toques de la semana y abajo los leads concretos que requieren atención.
-- **Pedir seguimiento**: desde la ficha deja una instrucción ("llámale hoy, ofrécele 2 caras"); al vendedor le aparece hasta arriba en su Mi día y se quita sola cuando registra el toque.
-- No registra toques en leads de otros (ensuciaría las métricas del vendedor), pero sí puede corregir datos y etapas.
-- En **Resumen → Ventas**: comparación contra el periodo anterior, **pipeline** (cotizaciones vivas y frías por vendedor y **venta esperada** = monto vivo × su tasa real de cierre de cotizaciones, con al menos 3 cerradas de historial) y una tabla de vendedores con cierre de lo cotizado, ticket promedio, **descuento promedio** (lo cotizado contra lo vendido), primer toque, toques de la semana y motivo principal de pérdida.
+- **Equipo hoy:** una fila por vendedor con semáforo. Rojo: vencidos, un lead sin primer toque después de 2 horas, acuerdos vencidos o un pedido del gerente con más de 24 h sin atender. Amarillo: cotizaciones frías (más de 15 días sin contacto) o datos incompletos. Debajo de cada vendedor van los leads concretos que requieren atención, y aparte **las 5 cotizaciones más grandes** con su último contacto y siguiente paso.
+- **Ficha del vendedor** (clic en su nombre): conversión, cierre de lo cotizado, ticket, descuento y primer toque **contra el promedio del equipo**, su embudo, su pipeline, por qué pierde, los pedidos abiertos y qué tan a tiempo los atiende. Es la base para la junta uno a uno.
+- **Pedir seguimiento:** desde la ficha del lead; al vendedor le aparece hasta arriba en su Mi día y se quita sola cuando registra el toque. Queda un historial: se mide el % de pedidos que cada vendedor atiende en menos de 24 h.
+- **Reporte semanal:** una página con la semana contra la anterior, los vendedores, el pipeline, las cotizaciones más grandes y por qué se perdieron, lista para imprimir o guardar en PDF.
+- **Montos obligatorios** al registrar una cotización y una venta: sin ellos el pipeline, la venta esperada, el ticket y el descuento salen mal. Los datos viejos incompletos aparecen como aviso en Equipo hoy.
+- En **Resumen → Ventas**: lectura rápida del equipo (quién tiene vencidos, venta esperada, cotizaciones frías y ventas contra el periodo anterior), embudo, pipeline con venta esperada y una tabla de vendedores con lo que sirve para decidir. "¿En qué toque responden?" queda plegada.
+- No registra toques en leads de otros, pero puede corregir datos y etapas y reasignar en emergencias.
 
 ## Para marketing
 
