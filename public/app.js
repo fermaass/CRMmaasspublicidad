@@ -15,15 +15,22 @@ const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
 // Paleta fija para productos y canales (validada para daltonismo); más de 8 se agrupan en "Otros".
 const CAT = ['#6161ff', '#ff7a00', '#00a39b', '#e2445c', '#caa000', '#9d50dd', '#037f4c', '#ff5ac4'];
 const money = (v) => (v == null ? '—' : Number(v).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }));
-// Empresa de esta instalación: nombre, logo y cómo le llama a lo que vende (campaña, contrato, membresía…).
+// La plataforma se llama Maass Leads; cada instalación es de una empresa con su nombre, logo y cómo le llama a lo que vende.
+const PLATFORM = 'Maass Leads';
 function applyCompany(c) {
   state.company = c;
   F.configure({ term: c.term, renewals: c.renewals });
-  document.querySelectorAll('.brand-name').forEach((el) => { el.textContent = c.name || 'CRM'; });
   document.querySelectorAll('.brand-logo').forEach((img) => { img.classList.toggle('hidden', !c.logo); if (c.logo) img.src = c.logo; else img.removeAttribute('src'); });
-  $('.brand')?.classList.toggle('has-logo', Boolean(c.logo));
-  document.title = c.name ? `CRM · ${c.name}` : 'CRM';
+  // Con logo, arriba se ve el logo; sin logo, el nombre. En la entrada se ven los dos.
+  document.querySelectorAll('.company-name').forEach((el) => {
+    el.textContent = c.name || '';
+    el.classList.toggle('hidden', !c.name || (Boolean(c.logo) && Boolean(el.closest('.topbar'))));
+  });
+  $('.topbar-company')?.classList.toggle('hidden', !c.name && !c.logo);
+  document.title = c.name ? `${PLATFORM} · ${c.name}` : PLATFORM;
 }
+// Portada de acceso (entrar, crear contraseña, primer uso): se ve mientras no haya sesión.
+const showAuth = (on) => $('#auth').classList.toggle('hidden', !on);
 // ¿Sus clientes renuevan? (campañas, contratos, membresías). Si no, no se pregunta cuándo termina ni se avisa la renovación.
 const renewals = () => state.company.renewals !== false;
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
@@ -158,7 +165,9 @@ function askForm(message, fieldsHtml, okLabel = 'Registrar') {
 // ---------- Sesión ----------
 function showLogin() {
   state.me = null;
+  state.view = null; // quien entre después empieza en su propia pantalla, no en la del usuario anterior
   $('#app').classList.add('hidden');
+  showAuth(true);
   $('#login').classList.remove('hidden');
 }
 
@@ -178,6 +187,7 @@ $('#logout').addEventListener('click', async () => { await api('/api/logout', { 
 
 // Link de invitación o de contraseña nueva: quien lo abre elige su contraseña y entra.
 async function showAccess(token) {
+  showAuth(true);
   $('#access').classList.remove('hidden');
   const goLogin = () => { history.replaceState(null, '', location.pathname); $('#access').classList.add('hidden'); showLogin(); };
   try {
@@ -221,6 +231,7 @@ $('#me').addEventListener('click', async () => {
 
 async function start() {
   $('#login').classList.add('hidden');
+  showAuth(false);
   $('#app').classList.remove('hidden');
   $('#me').innerHTML = `<span class="avatar big" aria-hidden="true">${esc(initials(state.me.name))}</span>${esc(state.me.name)}`;
   document.querySelectorAll('[data-role]').forEach((el) => {
@@ -1936,7 +1947,7 @@ function writeReport(w, title, sub, body) {
       <p class="muted" style="margin:2px 0 0">${company ? `${esc(company)} · ` : ''}${esc(sub)}</p></div>
       <div class="actions"><a id="csv" download>Descargar Excel</a><button onclick="print()">Imprimir o guardar PDF</button></div></div>
     ${body}
-    <p class="muted" style="margin-top:28px">Generado el ${esc(new Date().toLocaleString('es-MX', { dateStyle: 'long', timeStyle: 'short' }))}${state.me ? ` por ${esc(state.me.name)}` : ''}.</p>
+    <p class="muted" style="margin-top:28px">Generado con ${PLATFORM} el ${esc(new Date().toLocaleString('es-MX', { dateStyle: 'long', timeStyle: 'short' }))}${state.me ? ` por ${esc(state.me.name)}` : ''}.</p>
     </body></html>`;
   w.document.open(); w.document.write(html); w.document.close();
   // Excel: cada tabla del reporte, con su título; los números de arriba como primera sección.
@@ -2135,14 +2146,14 @@ async function showAccessLink(u, r) {
   const first = String(u.name || '').split(/\s+/)[0];
   const company = state.company.name || 'la empresa';
   const msg = r.kind === 'invite'
-    ? `Hola ${first}, te di de alta en el CRM de ${company}. Entra a este link para crear tu contraseña (vence en 72 horas): ${r.link}`
-    : `Hola ${first}, este es tu link para crear una contraseña nueva en el CRM de ${company} (vence en 72 horas): ${r.link}`;
+    ? `Hola ${first}, te di de alta en ${PLATFORM}, la plataforma de leads de ${company}. Entra a este link para crear tu contraseña (vence en 72 horas): ${r.link}`
+    : `Hola ${first}, este es tu link para crear una contraseña nueva en ${PLATFORM} (${company}). Vence en 72 horas: ${r.link}`;
   const done = askForm(r.kind === 'invite' ? `Invitación para ${u.name}` : `Contraseña nueva para ${u.name}`, `
     <p class="muted" style="margin:0">Mándale este link. Es de un solo uso y vence en 72 horas; si generas otro, este deja de servir.</p>
     <div class="link-box"><input readonly value="${esc(r.link)}" aria-label="Link de acceso"><button type="button" class="ghost small" id="link-copy">Copiar</button></div>
     <div class="link-box">
       <a class="wa-btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}">${WA_ICON}<span>Mandar por WhatsApp</span></a>
-      <a class="button-link ghost small" href="mailto:${encodeURIComponent(u.email || '')}?subject=${encodeURIComponent(`Tu acceso al CRM de ${company}`)}&body=${encodeURIComponent(msg)}">Mandar por correo</a>
+      <a class="button-link ghost small" href="mailto:${encodeURIComponent(u.email || '')}?subject=${encodeURIComponent(`Tu acceso a ${PLATFORM} · ${company}`)}&body=${encodeURIComponent(msg)}">Mandar por correo</a>
     </div>`, 'Listo');
   $('#link-copy').addEventListener('click', async (e) => {
     const input = e.target.previousElementSibling; input.select();
@@ -2550,6 +2561,7 @@ async function reloadCatalog() {
   const accessToken = new URLSearchParams(location.search).get('acceso');
   if (accessToken) return showAccess(accessToken);
   if ((await api('/api/setup')).needed) {
+    showAuth(true);
     $('#setup').classList.remove('hidden');
     return;
   }

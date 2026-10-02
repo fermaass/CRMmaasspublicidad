@@ -3,61 +3,109 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CRM</title>
+  <title>Maass Leads</title>
+  <meta name="theme-color" content="#1a73e8">
+  <meta name="description" content="Maass Leads: CRM de leads para marketing y ventas.">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="apple-mobile-web-app-title" content="Maass Leads">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <section id="login" class="login hidden">
-    <form id="login-form" class="card">
-      <img class="brand-logo login-logo hidden" alt="">
-      <h1 class="brand-name">CRM</h1>
-      <p class="muted">Leads de marketing y ventas</p>
-      <label>Email <input type="email" name="email" required autocomplete="username"></label>
-      <label>Contraseña <input type="password" name="password" required autocomplete="current-password"></label>
-      <p id="login-error" class="error"></p>
-      <button type="submit">Entrar</button>
-      <p class="muted small-note login-help">¿Olvidaste tu contraseña? Pídele a tu gerente un link para crear una nueva.</p>
-    </form>
-  </section>
-
-  <section id="access" class="login hidden">
-    <form id="access-form" class="card">
-      <img class="brand-logo login-logo hidden" alt="">
-      <h1 id="access-title">Crea tu contraseña</h1>
-      <p class="muted" id="access-sub"></p>
-      <label>Contraseña nueva (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
-      <label>Repítela <input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>
-      <p id="access-error" class="error"></p>
-      <button type="submit">Guardar y entrar</button>
-    </form>
-  </section>
-
-  <section id="setup" class="login hidden">
-    <form id="setup-form" class="card">
-      <h1>Bienvenido</h1>
-      <p class="muted">Crea tu usuario de gerente. Con él darás de alta al resto del equipo.</p>
-      <label>Nombre de tu empresa <input name="company" required maxlength="80" placeholder="Así aparece en la app, los mensajes y los reportes"></label>
-      <label>Tu nombre <input name="name" required></label>
-      <label>Email <input type="email" name="email" required autocomplete="username"></label>
-      <label>Contraseña (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
-      <fieldset class="plain operator-question">
-        <legend>¿También capturarás y asignarás los leads a los vendedores?</legend>
-        <div class="seg-group">
-          <label class="seg"><input type="radio" name="can_assign" value="1" required><span>Sí, somos un equipo chico</span></label>
-          <label class="seg"><input type="radio" name="can_assign" value=""><span>No, habrá un coordinador de leads</span></label>
+  <!-- Portada de acceso: la marca de la plataforma a la izquierda (con un celular de muestra) y el formulario a la derecha. -->
+  <div id="auth" class="auth hidden">
+    <aside class="auth-hero">
+      <div class="wordmark"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="mk1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a73e8"/><stop offset=".55" stop-color="#4a8ff2"/><stop offset="1" stop-color="#8a78e2"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#mk1)"/><path d="M9 22.5V11l7 7.2 7-7.2v11.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24.6" cy="7.6" r="3.4" fill="#34d399" stroke="#fff" stroke-width="1.6"/></svg><span>Maass <b>Leads</b></span></div>
+      <div class="hero-copy">
+        <h2>Cada lead, del primer mensaje al cierre.</h2>
+        <p>Marketing y ventas en el mismo lugar: a quién atender hoy, qué toque sigue y cuánto se está vendiendo.</p>
+        <ul class="hero-points">
+          <li><span></span>Los leads de tu página y WhatsApp llegan solos</li>
+          <li><span></span>Cada vendedor sabe qué hacer hoy</li>
+          <li><span></span>Reportes por fecha, en PDF o Excel</li>
+        </ul>
+      </div>
+      <div class="phone-stage" aria-hidden="true">
+        <div class="float-card kpi-float"><small>Ventas del mes</small><b>$332,000</b><em>↑ 18% vs mes pasado</em></div>
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="ph-status"><span>9:41</span><span class="ph-icons"><i></i><i></i><i></i></span></div>
+            <div class="ph-head"><b>Mi día</b><span class="ph-avatar">AL</span></div>
+            <div class="ph-pills"><span class="ph-pill late">2 vencidos</span><span class="ph-pill today">5 para hoy</span></div>
+            <div class="ph-group"><div class="ph-gh" style="--c:#3b4fc4">Contactando <small>1 hoy</small></div>
+              <div class="ph-row"><b>Laura Gómez</b><span class="ph-badge">Toque 2/5 · hoy</span>
+                <div class="ph-actions"><span class="ph-btn call">Llamar</span><span class="ph-btn wa">WhatsApp</span></div></div></div>
+            <div class="ph-group"><div class="ph-gh dark" style="--c:#f59e0b">Cotizando <small>2 hoy</small></div>
+              <div class="ph-row"><b>Hotel Mirador</b><span class="ph-badge late">Seguimiento · 1 día tarde</span><span class="ph-money">$95,000</span></div>
+              <div class="ph-row"><b>Agencia Norte</b><span class="ph-badge">Seguimiento · hoy</span><span class="ph-money">$60,000</span></div></div>
+            <div class="ph-group"><div class="ph-gh" style="--c:#037f4c">Vendido <small>1 hoy</small></div>
+              <div class="ph-row"><b>Clínica Sonríe</b><span class="ph-badge ok">Pedir referidos</span></div></div>
+          </div>
         </div>
-      </fieldset>
-      <p id="setup-error" class="error"></p>
-      <button type="submit">Crear y entrar</button>
-    </form>
-  </section>
+        <div class="float-card lead-float"><span class="dot"></span><div><b>Nuevo lead</b><small>Facebook · hace 1 min</small></div></div>
+      </div>
+    </aside>
+
+    <main class="auth-main">
+      <div class="auth-mobile-brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="mk2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a73e8"/><stop offset=".55" stop-color="#4a8ff2"/><stop offset="1" stop-color="#8a78e2"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#mk2)"/><path d="M9 22.5V11l7 7.2 7-7.2v11.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24.6" cy="7.6" r="3.4" fill="#34d399" stroke="#fff" stroke-width="1.6"/></svg><span>Maass <b>Leads</b></span></div>
+      <section id="login" class="login hidden">
+        <form id="login-form" class="card auth-card">
+          <img class="brand-logo login-logo hidden" alt="">
+          <p class="company-name auth-kicker hidden"></p>
+          <h1>Entrar</h1>
+          <p class="muted">Usa el email y la contraseña con los que te dieron de alta.</p>
+          <label>Email <input type="email" name="email" required autocomplete="username"></label>
+          <label>Contraseña <input type="password" name="password" required autocomplete="current-password"></label>
+          <p id="login-error" class="error"></p>
+          <button type="submit">Entrar</button>
+          <p class="muted small-note login-help">¿Olvidaste tu contraseña? Pídele a tu gerente un link para crear una nueva.</p>
+        </form>
+      </section>
+
+      <section id="access" class="login hidden">
+        <form id="access-form" class="card auth-card">
+          <img class="brand-logo login-logo hidden" alt="">
+          <p class="company-name auth-kicker hidden"></p>
+          <h1 id="access-title">Crea tu contraseña</h1>
+          <p class="muted" id="access-sub"></p>
+          <label>Contraseña nueva (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+          <label>Repítela <input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>
+          <p id="access-error" class="error"></p>
+          <button type="submit">Guardar y entrar</button>
+        </form>
+      </section>
+
+      <section id="setup" class="login hidden">
+        <form id="setup-form" class="card auth-card">
+          <h1>Bienvenido a Maass Leads</h1>
+          <p class="muted">Crea tu usuario de gerente. Con él darás de alta al resto del equipo.</p>
+          <label>Nombre de tu empresa <input name="company" required maxlength="80" placeholder="Así aparece en la app, los mensajes y los reportes"></label>
+          <label>Tu nombre <input name="name" required></label>
+          <label>Email <input type="email" name="email" required autocomplete="username"></label>
+          <label>Contraseña (mínimo 8 caracteres) <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+          <fieldset class="plain operator-question">
+            <legend>¿También capturarás y asignarás los leads a los vendedores?</legend>
+            <div class="seg-group">
+              <label class="seg"><input type="radio" name="can_assign" value="1" required><span>Sí, somos un equipo chico</span></label>
+              <label class="seg"><input type="radio" name="can_assign" value=""><span>No, habrá un coordinador de leads</span></label>
+            </div>
+          </fieldset>
+          <p id="setup-error" class="error"></p>
+          <button type="submit">Crear y entrar</button>
+        </form>
+      </section>
+      <p class="auth-foot">Maass Leads · CRM de leads para marketing y ventas</p>
+    </main>
+  </div>
 
   <section id="app" class="hidden">
     <header class="topbar">
-      <span class="brand"><img class="brand-logo hidden" alt=""><strong class="brand-name">CRM</strong></span>
+      <span class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="mk3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a73e8"/><stop offset=".55" stop-color="#4a8ff2"/><stop offset="1" stop-color="#8a78e2"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#mk3)"/><path d="M9 22.5V11l7 7.2 7-7.2v11.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24.6" cy="7.6" r="3.4" fill="#34d399" stroke="#fff" stroke-width="1.6"/></svg><strong>Maass Leads</strong><span class="topbar-company"><img class="brand-logo hidden" alt=""><span class="company-name hidden"></span></span></span>
       <nav id="nav">
         <button data-view="today" data-role="vendedor">Mi día</button>
         <button data-view="team" data-role="gerente,analista">Equipo hoy</button>

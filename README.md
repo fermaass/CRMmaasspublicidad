@@ -1,4 +1,6 @@
-# CRM de leads (hecho para Maass Publicidad, sirve para cualquier giro)
+# Maass Leads
+
+Plataforma de leads hecha por Maass Publicidad; sirve para cualquier giro.
 
 CRM sencillo para que marketing y ventas trabajen los mismos leads. Cada empresa tiene **su propia instalación** (su link y su base de datos, separada de las demás); el nombre, el logo, los productos con sus precios y cómo le llama a lo que vende se configuran en la app. Los leads del formulario web entran solos; los de WhatsApp o llamada se capturan con el botón **+ Lead**. Cada lead avanza por etapas que mueven los toques (Nuevo, Contactando, Contestó, Cumple perfil, Cotizando, Vendido y Declinado con o sin perfil) y lleva aparte su **perfil** (sin perfilar, cumple, no cumple). El perfil se queda aunque el lead se decline, así que los declinados con perfil quedan como base para otras campañas.
 
@@ -134,6 +136,10 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 | Vendedor | Trabaja solo los leads que le asignan (toques, notas, etapas) y ve su propio Resumen de ventas |
 | Gerente de marketing | Resumen de marketing, campañas a revisar, ficha de cada campaña, links, audiencias y reporte de marketing; corrige el origen de los leads (no toques ni etapas) |
 | Analista | Solo lectura: Equipo hoy, Resumen y exportar CSV |
+
+## En el celular
+
+Maass Leads se puede **instalar como app**: en el celular abre la dirección del CRM y elige "Agregar a pantalla de inicio" (en iPhone, desde el botón Compartir de Safari). Queda con su ícono y se abre a pantalla completa, sin la barra del navegador.
 
 ## Usuarios y acceso
 
