@@ -10,6 +10,11 @@ const { webhooksRouter } = require('./webhooks');
 const xlsx = require('./xlsx');
 const { offsiteConfig, uploadBackup } = require('./offsite');
 const STARTED_AT = new Date().toISOString();
+// Tablero: los vendidos y declinados de hace más de 30 días se archivan (siguen en reportes, cartera y búsqueda).
+const ARCHIVE_DAYS = 30;
+// Cada cuánto se le recuerda al gerente descargar su cartera.
+const CARTERA_EVERY_DAYS = 30;
+const DAY_MS = 86400e3;
 // Guarda una falla para el panel (se quedan las últimas 300). Solo datos técnicos: dónde y qué mensaje.
 function logOpsError(db, source, place, message) {
   try {
@@ -284,13 +289,21 @@ function createApp({ db, config }) {
 
   // ---------- Configuración (solo gerente) ----------
   // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
+  // Recordatorio mensual al gerente: descargar su cartera en Excel. Cuenta desde la última descarga (o desde que se instaló).
+  function carteraStatus() {
+    const last = getSetting(db, 'cartera_downloaded_at');
+    const since = last || db.prepare('SELECT MIN(created_at) AS t FROM users').get().t;
+    const hasLeads = Boolean(db.prepare('SELECT 1 FROM leads LIMIT 1').get());
+    return { last, due: hasLeads && Boolean(since) && Date.now() - new Date(since).getTime() >= CARTERA_EVERY_DAYS * DAY_MS };
+  }
   app.get('/api/system', auth.requireRole('gerente'), (req, res) => {
     const file = config.dbPath;
     const size = file && file !== ':memory:' && fs.existsSync(file) ? fs.statSync(file).size : null;
     const backups = file && file !== ':memory:' ? listBackups(file) : [];
     res.json({ storage_warning: Boolean(config.storageWarning), size, backups: backups.length, last_backup: backups.at(-1)?.file.slice(4, 14) || null,
       leads: db.prepare('SELECT COUNT(*) AS n FROM leads').get().n,
-      offsite: { configured: Boolean(offsiteConfig()), last: getSetting(db, 'offsite_last'), error: getSetting(db, 'offsite_error') } });
+      offsite: { configured: Boolean(offsiteConfig()), last: getSetting(db, 'offsite_last'), error: getSetting(db, 'offsite_error') },
+      cartera: carteraStatus() });
   });
   // Descarga de un respaldo completo al momento, para guardarlo fuera del servidor.
   app.get('/api/backup', auth.requireRole('gerente'), (req, res) => {
@@ -547,10 +560,27 @@ function createApp({ db, config }) {
   const ORIGIN_FIELDS = ['campaign', 'channel_id', 'product_id', 'name', 'phone', 'email'];
 
   app.get('/api/leads', auth.requireUser, (req, res) => {
-    const { sql, params } = leadFilters(req);
+    let { sql, params } = leadFilters(req);
+    // Tablero (board=1): los vendidos y declinados de hace más de ARCHIVE_DAYS se archivan para que no hagan ruido,
+    // salvo que tengan algo agendado pronto. Si se busca algo o se elige un periodo, se muestran todos.
+    let archived = null;
+    if (req.query.board === '1' && !req.query.q && !req.query.from && !req.query.to) {
+      const now = Date.now();
+      const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+      const keep = `(l.status NOT IN ('vendido', 'declinado')
+        OR COALESCE(CASE l.status WHEN 'vendido' THEN l.won_at ELSE l.declined_at END, l.updated_at) >= ?
+        OR (l.status = 'declinado' AND COALESCE(l.recontact_at >= ?, 0))
+        OR (l.status = 'vendido' AND COALESCE(l.campaign_end BETWEEN ? AND ?, 0) AND COALESCE(l.renewal_for != l.campaign_end, 1)))`;
+      const keepParams = [new Date(now - ARCHIVE_DAYS * DAY_MS).toISOString(), ymd(now - ARCHIVE_DAYS * DAY_MS),
+        ymd(now - ARCHIVE_DAYS * DAY_MS), ymd(now + 45 * DAY_MS)];
+      const and = sql ? `${sql} AND` : 'WHERE';
+      archived = db.prepare(`SELECT COUNT(*) AS n FROM leads l ${and} NOT ${keep}`).get(...params, ...keepParams).n;
+      sql = `${and} ${keep}`; params = [...params, ...keepParams];
+    }
     // Lo que está en curso (o tiene algo pendiente) va primero, para que nunca quede fuera del límite por leads viejos cerrados.
-    res.json(db.prepare(`${leadSelect} ${sql} ORDER BY (l.status IN ('nuevo', 'nuevo_perfil', 'cotizando', 'vendido')
-      OR l.recontact_at IS NOT NULL) DESC, l.updated_at DESC LIMIT 5000`).all(...params));
+    const leads = db.prepare(`${leadSelect} ${sql} ORDER BY (l.status IN ('nuevo', 'nuevo_perfil', 'cotizando', 'vendido')
+      OR l.recontact_at IS NOT NULL) DESC, l.updated_at DESC LIMIT 5000`).all(...params);
+    res.json(archived === null ? leads : { leads, archived, archive_days: ARCHIVE_DAYS });
   });
 
   app.get('/api/leads.csv', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
@@ -782,7 +812,7 @@ function createApp({ db, config }) {
     // Pedidos del gerente de los últimos 30 días: cuántos se atendieron en menos de 24 h y cuáles siguen abiertos.
     const reqs = db.prepare(`SELECT r.*, l.name, l.phone, l.email FROM manager_requests r JOIN leads l ON l.id = r.lead_id
       WHERE r.cancelled = 0 AND (r.created_at >= ? OR r.done_at IS NULL)`).all(new Date(nowMs - 30 * 86400e3).toISOString());
-    const DAY_MS = 86400e3;
+
     const rows = sellers.map((u) => {
       const mine = leads.filter((l) => l.assigned_to === u.id);
       const active = mine.filter((l) => ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status));
@@ -1424,6 +1454,7 @@ function createApp({ db, config }) {
       { name: 'Equipo', rows: [['Nombre', 'Email', 'Rol', 'Activo'], ...users.map((u) => [u.name, u.email, ROLE[u.role] || u.role, yes(u.active)])] },
     ]);
     const slugName = company.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'empresa';
+    setSetting(db, 'cartera_downloaded_at', new Date().toISOString());
     res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="cartera-${slugName}-${new Date().toISOString().slice(0, 10)}.xlsx"` });
     res.send(file);

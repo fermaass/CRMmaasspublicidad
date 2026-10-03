@@ -619,6 +619,10 @@ button.chip-alert:hover { border-color: #e2445c; filter: none; box-shadow: none;
 .inline-check input { width: auto; margin: 0; }
 a.button-link { display: inline-block; background: var(--grad); color: #fff; border-radius: 10px; padding: 9px 16px; font-weight: 600; text-decoration: none; }
 .storage-warning { margin: 10px 16px 0; }
+.cartera-reminder { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 16px 0; padding: 10px 14px; border-radius: 10px;
+  background: var(--accent-soft); border: 1px solid var(--line); font-size: 13px; }
+.cartera-reminder span { flex: 1 1 260px; }
+.board-archived { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
 
 /* Ficha del vendedor, cotizaciones grandes y avisos de datos */
 .seller-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

@@ -21,6 +21,8 @@ El tablero, Mi día, el filtro de etapa y el Resumen usan las mismas columnas, y
 
 Nuevo, Contactando y Contestó se calculan de los toques, así que no se arrastran a mano; solo se puede corregir arrastrando hacia Cumple perfil, Cotizando, Vendido o Declinado.
 
+**El tablero solo muestra lo vivo.** Los leads vendidos o declinados hace más de 30 días se archivan solos: dejan de aparecer en las columnas para que el equipo no trabaje entre ruido. No se borra nada: siguen contando en el Resumen y los reportes, salen en la cartera de Excel, aparecen al buscarlos o al elegir un periodo, y se siguen reconociendo si la persona vuelve a escribir. Se quedan en el tablero los que tienen algo agendado pronto (una renovación en los próximos 45 días o un "volver a contactar"). Arriba del tablero se dice cuántos están archivados, con un botón para verlos todos.
+
 ## Mi día
 
 Es la primera pantalla del vendedor. Junta lo que toca hoy o ya está vencido, agrupado con las **mismas etapas y colores del Tablero**, así que un lead en Nuevo del tablero aparece bajo Nuevo. Solo salen las etapas con algo que hacer hoy. Cada etapa dice cuántos tocan hoy de los que hay en el tablero. Cada fila tiene los botones de resultado, así que un toque se registra con un clic sin abrir la ficha.
@@ -152,7 +154,7 @@ Maass Leads se puede **instalar como app**: en el celular abre la dirección del
 
 ## Tu cartera: tus datos son tuyos
 
-En **Configuración → Tus datos**, el gerente descarga **su cartera completa en Excel**: una hoja con todos los contactos y una por clasificación (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen, perfil y fechas; además cada toque, el historial de cada contacto, productos con precios, campañas con su inversión por mes, canales y el equipo. Si la empresa deja la plataforma, se lleva todo en un archivo que abre cualquier hoja de cálculo. Solo el gerente la descarga porque trae los datos de contacto de todos los clientes.
+En **Configuración → Tus datos**, el gerente descarga **su cartera completa en Excel**: una hoja con todos los contactos y una por clasificación (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen, perfil y fechas; además cada toque, el historial de cada contacto, productos con precios, campañas con su inversión por mes, canales y el equipo. Si la empresa deja la plataforma, se lleva todo en un archivo que abre cualquier hoja de cálculo. Solo el gerente la descarga porque trae los datos de contacto de todos los clientes. **Cada mes la app se lo recuerda** al gerente con un aviso arriba ("Descargar" o "Más tarde", que lo pospone una semana); el aviso se quita solo al descargarla.
 
 ## Seguridad
 

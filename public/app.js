@@ -199,6 +199,7 @@ function askForm(message, fieldsHtml, okLabel = 'Registrar') {
 function showLogin() {
   state.me = null;
   state.view = null; // quien entre después empieza en su propia pantalla, no en la del usuario anterior
+  state.showArchived = false;
   $('#app').classList.add('hidden');
   showAuth(true);
   $('#login').classList.remove('hidden');
@@ -282,11 +283,33 @@ async function start() {
       if (sys.storage_warning) {
         $('.topbar').insertAdjacentHTML('afterend', '<div id="storage-warning" class="decline-note storage-warning">Atención: la base de datos no está en un disco persistente y se borrará en la próxima actualización. Conecta un volumen en Railway (ver Configuración).</div>');
       }
+      showCarteraReminder(sys.cartera);
     }).catch(() => {});
   }
   // Cada rol arranca en lo suyo: vendedor en Mi día, gerente en Equipo hoy, coordinador en Asignación, marketing y analista en el Resumen.
   const home = { vendedor: 'today', gerente: 'team', operador: 'assign', marketing: 'stats', analista: 'stats' };
   setView(state.view || home[state.me.role] || 'board');
+}
+
+// Recordatorio mensual: descargar la cartera en Excel. "Más tarde" lo pospone una semana en este navegador.
+function showCarteraReminder(c) {
+  $('#cartera-reminder')?.remove();
+  let snoozed = 0;
+  try { snoozed = Number(localStorage.getItem('cartera-snooze')) || 0; } catch { /* sin almacenamiento: se muestra */ }
+  if (!c?.due || snoozed > Date.now()) return;
+  $('.topbar').insertAdjacentHTML('afterend', `<div id="cartera-reminder" class="cartera-reminder" role="status">
+    <span>${c.last ? `Ya pasó un mes desde que descargaste tu cartera (${shortDate(c.last)}).` : 'Es buen momento para descargar tu cartera por primera vez.'}
+      Guárdala en tu computadora o en Drive: es tu copia en Excel de todos tus contactos.</span>
+    <a class="button-link small" href="/api/export/cartera.xlsx" download id="cartera-now">Descargar</a>
+    <button type="button" class="ghost small" id="cartera-later">Más tarde</button></div>`);
+  $('#cartera-now').addEventListener('click', (e) => {
+    if (window.crmCartera) { e.preventDefault(); window.crmCartera(); }
+    $('#cartera-reminder').remove();
+  });
+  $('#cartera-later').addEventListener('click', () => {
+    try { localStorage.setItem('cartera-snooze', String(Date.now() + 7 * 86400e3)); } catch { /* sin almacenamiento */ }
+    $('#cartera-reminder').remove();
+  });
 }
 
 function fillFilters() {
@@ -396,7 +419,7 @@ function setView(view) {
   $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller', 'campaign'].includes(view));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
-  if (view !== 'board') $('#board-alert').classList.add('hidden');
+  if (view !== 'board') { $('#board-alert').classList.add('hidden'); $('#board-archived')?.classList.add('hidden'); }
   refresh();
 }
 
@@ -439,7 +462,9 @@ async function refresh() {
   if (state.view === 'campaign') return renderCampaign();
   // Mi día no usa los filtros: un pendiente viejo no debe esconderse por el periodo elegido.
   if (state.view === 'today') { state.leads = await api('/api/leads'); updateTodayBadge(state.leads); return renderToday(); }
-  state.leads = await api(`/api/leads?${filterQuery()}`);
+  const r = await api(`/api/leads?${filterQuery()}${state.showArchived ? '' : '&board=1'}`);
+  state.leads = Array.isArray(r) ? r : r.leads;
+  state.archived = Array.isArray(r) ? null : r;
   renderBoard();
   renderBoardAlert();
 }
@@ -753,7 +778,23 @@ async function reactivate(l) {
   } catch (err) { toast(err.message, 'error'); }
 }
 
+// Aviso arriba del tablero: cuántos cerrados antiguos están archivados, y el botón para verlos u ocultarlos.
+function renderArchivedNote() {
+  const el = $('#board-archived');
+  const a = state.archived;
+  if (!el) return;
+  const show = state.view === 'board' && (state.showArchived || a?.archived > 0);
+  el.classList.toggle('hidden', !show);
+  if (!show) return;
+  el.innerHTML = state.showArchived
+    ? `<span>Estás viendo también los vendidos y declinados antiguos.</span> <button type="button" class="ghost small" id="archived-toggle">Ocultarlos</button>`
+    : `<span>${a.archived} ${a.archived === 1 ? 'lead vendido o declinado hace más de' : 'leads vendidos o declinados hace más de'} ${a.archive_days} días no se muestran aquí. Siguen en el Resumen, los reportes, la cartera y la búsqueda.</span>
+      <button type="button" class="ghost small" id="archived-toggle">Ver todos</button>`;
+  $('#archived-toggle').addEventListener('click', () => { state.showArchived = !state.showArchived; refresh(); });
+}
+
 function renderBoard() {
+  renderArchivedNote();
   const board = $('#view-board');
   board.innerHTML = state.meta.stages.map((s) => {
     let items = state.leads.filter((l) => stageOf(l) === s);
@@ -2307,6 +2348,7 @@ async function renderSettings() {
         (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen y fechas. Trae también cada toque, el historial
         de cada contacto, tus productos con precios, campañas con su inversión y tu equipo. Se abre en Excel, Google Sheets o Numbers.</p>
       <a class="button-link" id="cartera-download" href="/api/export/cartera.xlsx" download>Descargar mi cartera (Excel)</a>
+      ${sys?.cartera ? `<p class="muted small-note">${sys.cartera.last ? `Última descarga: ${shortDate(sys.cartera.last)}.` : 'Aún no la has descargado.'} Te la recordamos cada mes.</p>` : ''}
       <p class="muted small-note">Solo el gerente puede descargarla: trae los datos de contacto de todos tus clientes. Guárdala en un lugar seguro.</p>
     </div>` : ''}
     ${sys ? `<div class="card">
