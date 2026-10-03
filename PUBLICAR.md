@@ -37,7 +37,7 @@ Sigue "Dar de alta un cliente nuevo" del README. Las variables de cada servicio 
 | `RESTORE_FROM` (solo para restaurar) | el respaldo a recuperar; ver "Restaurar" en el README. Se quita después |
 
 - [ ] Volumen en `/data`.
-- [ ] Subdominio en Railway y su CNAME en Cloudflare (nube naranja).
+- [ ] Subdominio en Railway; en Cloudflare su CNAME y su TXT de verificación. Nube gris hasta que Railway lo marque en verde, luego naranja. SSL en modo **Full**.
 - [ ] Instalación con el código y "Lo instalo para un cliente"; mandar la invitación al gerente.
 - [ ] Agregar el cliente a `PANEL_INSTANCES` del panel y verlo en verde.
 - [ ] Monitor en UptimeRobot.
