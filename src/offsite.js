@@ -29,12 +29,26 @@ function signV4({ method, url, headers = {}, payloadHash, accessKey, secretKey, 
   return { ...all, authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` };
 }
 
+// fetch solo dice "fetch failed" cuando no logra conectar; el motivo real (dirección que no existe, certificado, etc.) viene en err.cause.
+async function send(fetchImpl, url, opts) {
+  try { return await fetchImpl(url, opts); } catch (err) {
+    const c = err.cause;
+    const why = c?.code === 'ENOTFOUND' ? `no existe la dirección ${c.hostname || new URL(url).host}: revisa BACKUP_S3_ENDPOINT`
+      : c ? `${c.code || ''} ${c.message || ''}`.trim() : '';
+    throw new Error(why ? `No se pudo conectar al almacenamiento (${why})` : err.message);
+  }
+}
+
 // Configuración desde variables de entorno. null si no está completa.
 function offsiteConfig(env = process.env) {
   const { BACKUP_S3_ENDPOINT: endpoint, BACKUP_S3_BUCKET: bucket, BACKUP_S3_KEY_ID: accessKey, BACKUP_S3_SECRET: secretKey } = env;
   if (!endpoint || !bucket || !accessKey || !secretKey) return null;
   const prefix = (env.BACKUP_S3_PREFIX || env.RAILWAY_SERVICE_NAME || 'crm').replace(/[^\w.-]+/g, '-');
-  return { endpoint: endpoint.replace(/\/+$/, ''), bucket, accessKey, secretKey, region: env.BACKUP_S3_REGION || 'auto', prefix };
+  // Se perdonan errores comunes al copiar: espacios, comillas, sin https:// o con el nombre del bucket al final.
+  let ep = String(endpoint).trim().replace(/^["']|["']$/g, '').trim();
+  if (!/^https?:\/\//i.test(ep)) ep = `https://${ep}`;
+  try { ep = new URL(ep).origin; } catch { /* se queda como está y el error lo dirá */ }
+  return { endpoint: ep, bucket: String(bucket).trim(), accessKey: String(accessKey).trim(), secretKey: String(secretKey).trim(), region: env.BACKUP_S3_REGION || 'auto', prefix };
 }
 
 // Sube un respaldo comprimido. Devuelve la ruta en el almacenamiento.
@@ -47,7 +61,7 @@ async function uploadBackup(file, cfg, fetchImpl = fetch) {
   const headers = signV4({ method: 'PUT', url, payloadHash, accessKey: cfg.accessKey, secretKey: cfg.secretKey, region: cfg.region, service: 's3', amzDate,
     headers: { 'content-type': 'application/gzip', 'x-amz-content-sha256': payloadHash } });
   delete headers.host; // lo pone fetch
-  const r = await fetchImpl(url, { method: 'PUT', headers, body, signal: AbortSignal.timeout(120000) });
+  const r = await send(fetchImpl, url, { method: 'PUT', headers, body, signal: AbortSignal.timeout(120000) });
   if (!r.ok) throw new Error(`El almacenamiento respondió ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return key;
 }
@@ -60,7 +74,7 @@ async function downloadBackup(key, cfg, fetchImpl = fetch) {
   const headers = signV4({ method: 'GET', url, payloadHash, accessKey: cfg.accessKey, secretKey: cfg.secretKey, region: cfg.region, service: 's3', amzDate,
     headers: { 'x-amz-content-sha256': payloadHash } });
   delete headers.host;
-  const r = await fetchImpl(url, { headers, signal: AbortSignal.timeout(120000) });
+  const r = await send(fetchImpl, url, { headers, signal: AbortSignal.timeout(120000) });
   if (!r.ok) throw new Error(`El almacenamiento respondió ${r.status} al bajar ${key}`);
   return Buffer.from(await r.arrayBuffer());
 }
