@@ -34,6 +34,7 @@ async function send(fetchImpl, url, opts) {
   try { return await fetchImpl(url, opts); } catch (err) {
     const c = err.cause;
     const why = c?.code === 'ENOTFOUND' ? `no existe la dirección ${c.hostname || new URL(url).host}: revisa BACKUP_S3_ENDPOINT`
+      : /handshake|ssl|tls/i.test(`${c?.code} ${c?.message}`) ? `el certificado no coincide con ${new URL(url).host}: BACKUP_S3_ENDPOINT debe ser https://<ID de cuenta>.r2.cloudflarestorage.com, con el ID de 32 caracteres de tu cuenta de Cloudflare`
       : c ? `${c.code || ''} ${c.message || ''}`.trim() : '';
     throw new Error(why ? `No se pudo conectar al almacenamiento (${why})` : err.message);
   }
@@ -47,7 +48,12 @@ function offsiteConfig(env = process.env) {
   // Se perdonan errores comunes al copiar: espacios, comillas, sin https:// o con el nombre del bucket al final.
   let ep = String(endpoint).trim().replace(/^["']|["']$/g, '').trim();
   if (!/^https?:\/\//i.test(ep)) ep = `https://${ep}`;
-  try { ep = new URL(ep).origin; } catch { /* se queda como está y el error lo dirá */ }
+  try {
+    const u = new URL(ep);
+    // Si se copió con el bucket como subdominio (bucket.ID.r2.cloudflarestorage.com), se quita: el certificado solo cubre ID.r2…
+    const m = u.hostname.match(/(?:^|\.)([0-9a-f]{32}(?:\.(?:eu|fedramp))?\.r2\.cloudflarestorage\.com)$/i);
+    ep = m ? `https://${m[1].toLowerCase()}` : u.origin;
+  } catch { /* se queda como está y el error lo dirá */ }
   return { endpoint: ep, bucket: String(bucket).trim(), accessKey: String(accessKey).trim(), secretKey: String(secretKey).trim(), region: env.BACKUP_S3_REGION || 'auto', prefix };
 }
 
