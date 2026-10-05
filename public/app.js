@@ -601,7 +601,8 @@ function renderToday() {
   };
   const canTouch = (l) => sells() && l.assigned_to === state.me.id; // igual que el servidor
   const row = ({ l, a, req }) => {
-    const outcomes = outcomesFor(l);
+    // "Volver a contactar": los botones son los del lead ya reactivado; al registrar el toque se reactiva solo.
+    const outcomes = l.status === 'declinado' ? state.meta.touches.byStatus[l.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo'] : outcomesFor(l);
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
@@ -612,9 +613,7 @@ function renderToday() {
         ${l.phone ? `<span class="muted">${esc(l.phone)}</span>` : ''}
         ${l.last_note && l.last_note !== l.next_step ? `<span class="today-note" title="${esc(l.last_note)}">“${esc(l.last_note)}”</span>` : ''}
       </div>
-      ${!canTouch(l) ? '' : a.kind === 'recontacto' && !req
-        ? `<div class="today-actions">${callButton(l, true)}${waButton(l, true)}<button type="button" class="small" data-reactivate>Reactivar lead</button></div>`
-        : `<div class="today-actions">
+      ${!canTouch(l) ? '' : `<div class="today-actions">
           ${callButton(l, true)}${waButton(l, true)}
           <select class="small-select" data-channel aria-label="Medio">${state.meta.touches.channels.map((c) => `<option value="${c}">${esc(label(c))}</option>`).join('')}</select>
           ${outcomes.slice(0, 4).map((o) => `<button type="button" class="outcome small ${o}" data-outcome="${o}">${esc(state.meta.touches.outcomes[o])}</button>`).join('')}
@@ -673,8 +672,12 @@ function renderToday() {
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('.today-row[data-id]').forEach((r) => {
     const l = state.leads.find((x) => String(x.id) === r.dataset.id);
-    r.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', () => registerTouch(l, $('[data-channel]', r).value, b.dataset.outcome)));
-    $('[data-reactivate]', r)?.addEventListener('click', () => reactivate(l));
+    r.querySelectorAll('[data-outcome]').forEach((b) => b.addEventListener('click', async () => {
+      if (l.status !== 'declinado') return registerTouch(l, $('[data-channel]', r).value, b.dataset.outcome);
+      const status = l.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo';
+      try { await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { status, recontact_at: null } }); } catch (err) { toast(err.message, 'error'); return; }
+      if (!await registerTouch({ ...l, status }, $('[data-channel]', r).value, b.dataset.outcome)) refresh();
+    }));
     // Al abrir WhatsApp, el toque que se registre después queda como WhatsApp.
     $('[data-wa]', r)?.addEventListener('click', () => { const sel = $('[data-channel]', r); if (sel) sel.value = 'whatsapp'; });
     $('[data-call]', r)?.addEventListener('click', () => { const sel = $('[data-channel]', r); if (sel) sel.value = 'llamada'; });
@@ -691,7 +694,17 @@ function quickProfileStrip(l) {
 
 // Campos de captura: todos opcionales y lo más cortos posible.
 const agreementFields = () => `<label>¿Qué se habló o acordó?<input name="note" maxlength="300" placeholder="Ej. Le mando la propuesta por correo hoy"></label>
-  <label>¿Cuándo es el siguiente paso?<input type="datetime-local" name="next_step_at"></label>`;
+  <label>¿Cuándo es el siguiente paso?<input type="datetime-local" name="next_step_at"></label>
+  <div class="quick-dates">${[['1', 'Mañana'], ['3', 'En 3 días'], ['7', 'En una semana']].map(([d, t]) => `<button type="button" class="ghost small" data-in-days="${d}">${t}</button>`).join('')}</div>`;
+// Los botones rápidos ponen la fecha a las 10:00 de ese día (se puede cambiar).
+function wireQuickDates(root) {
+  root.querySelectorAll('[data-in-days]').forEach((b) => b.addEventListener('click', () => {
+    const d = new Date(); d.setDate(d.getDate() + Number(b.dataset.inDays)); d.setHours(10, 0, 0, 0);
+    const pad = (n) => String(n).padStart(2, '0');
+    $('[name=next_step_at]', root).value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T10:00`;
+    root.querySelectorAll('[data-in-days]').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+}
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
 const moneyField = (name, text, required = false) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000" ${required ? 'required pattern="[$0-9., ]*[1-9][$0-9., ]*"' : ''}></label>`;
@@ -706,6 +719,19 @@ function priceFields(l, amountName, text) {
     </select></label>
     <label>Cantidad <input name="quantity" inputmode="decimal" value="${l.quantity ?? 1}" data-qty required pattern="[0-9]+([.,][0-9]+)?"></label></div>
     ${moneyField(amountName, text, true)}<p class="muted small-note" data-price-note></p>`;
+}
+// Al vender, si el producto dura X meses, la fecha de término se pone sola (se puede cambiar).
+function wireEndFromProduct(root) {
+  const sel = $('[data-prod]', root); const end = $('[name=campaign_end]', root);
+  if (!sel || !end) return;
+  const sync = () => {
+    const p = state.catalog.producto.find((x) => String(x.id) === sel.value);
+    if (!p?.duration_months || (end.value && end.dataset.auto !== '1')) return;
+    const d = new Date(); d.setMonth(d.getMonth() + p.duration_months);
+    end.value = d.toISOString().slice(0, 10); end.dataset.auto = '1';
+  };
+  end.addEventListener('input', () => { end.dataset.auto = '0'; });
+  sel.addEventListener('change', sync); sync();
 }
 function wirePriceFields(root, amountName) {
   const sel = $('[data-prod]', root); const qty = $('[data-qty]', root); const amt = $(`[name=${amountName}]`, root); const note = $('[data-price-note]', root);
@@ -754,8 +780,14 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
       const input = $(`#modal-extra [name="${k}"]:not([type=radio])`); if (input) input.value = val;
       const radio = $(`#modal-extra input[type=radio][name="${k}"][value="${val}"]`); if (radio) radio.checked = true;
     }
+    wireQuickDates($('#modal-extra'));
     if (outcome === 'cotizado') wirePriceFields($('#modal-extra'), 'quote_amount');
-    if (outcome === 'vendido') wirePriceFields($('#modal-extra'), 'sale_amount');
+    if (outcome === 'vendido') {
+      // Lo normal es cerrar por lo que se cotizó: el monto viene puesto (se puede cambiar).
+      if (l.quote_amount && !$('#modal-extra [name=sale_amount]').value) $('#modal-extra [name=sale_amount]').value = String(l.quote_amount);
+      wirePriceFields($('#modal-extra'), 'sale_amount');
+      wireEndFromProduct($('#modal-extra'));
+    }
     const v = await pending;
     if (v === null) return false;
     for (const [k, val] of Object.entries(v)) if (val) body[k] = val;
@@ -859,6 +891,7 @@ async function changeStatus(lead, status) {
     const key = status === 'cotizando' ? 'quote_amount' : 'sale_amount';
     const pending = askForm(status === 'cotizando' ? 'Mover a Cotizando' : '¡Venta cerrada!',
       priceFields(lead, key, status === 'cotizando' ? '¿De cuánto es la cotización?' : '¿De cuánto fue la venta?'), status === 'cotizando' ? 'Mover a Cotizando' : 'Marcar vendido');
+    if (status === 'vendido' && lead.quote_amount) $('#modal-extra [name=sale_amount]').value = String(lead.quote_amount);
     wirePriceFields($('#modal-extra'), key);
     const v = await pending;
     if (!v) return;
@@ -1653,12 +1686,14 @@ async function openLead(id) {
       openLead(l.id);
     } catch (err) { toast(err.message, 'error'); }
   }));
-  $('#drawer-body [data-wa]')?.addEventListener('click', () => {
-    const r = $('#drawer-body input[name=touch-channel][value=whatsapp]'); if (r) r.checked = true;
-  });
-  $('#drawer-body [data-call]')?.addEventListener('click', () => {
-    const r = $('#drawer-body input[name=touch-channel][value=llamada]'); if (r) r.checked = true;
-  });
+  // Al llamar o escribir, el medio queda elegido y la ficha lleva al recuadro del toque para anotar cómo te fue.
+  const toTouch = (ch) => {
+    const r = $(`#drawer-body input[name=touch-channel][value=${ch}]`); if (r) r.checked = true;
+    const tf = $('#drawer-body .touch-form');
+    if (tf) { tf.scrollIntoView({ behavior: 'smooth', block: 'center' }); tf.classList.add('flash'); setTimeout(() => tf.classList.remove('flash'), 1600); }
+  };
+  $('#drawer-body [data-wa]')?.addEventListener('click', () => toTouch('whatsapp'));
+  $('#drawer-body [data-call]')?.addEventListener('click', () => toTouch('llamada'));
   const form = $('#lead-form');
   // El vendedor se cambia al momento, aparte de "Guardar": quien asigna no siempre edita el lead.
   form.assigned_to.addEventListener('change', async () => {
@@ -1749,10 +1784,20 @@ async function openNewLead() {
       <p class="error" id="new-error"></p>
       <button type="submit">Crear lead</button>
     </form>`);
-  $('#new-form').addEventListener('submit', async (e) => {
+  // Lo que casi siempre es igual se pone solo: el último origen y medio que usaste, o la única opción si solo hay una.
+  const nf = $('#new-form');
+  const remember = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const pickIf = (sel, v) => { if (v && [...sel.options].some((o) => o.value === v)) sel.value = v; };
+  const real = (sel) => [...sel.options].filter((o) => o.value && o.value !== 'none');
+  if (real(nf.origin).length === 1) nf.origin.value = real(nf.origin)[0].value; else pickIf(nf.origin, remember('nl-origin'));
+  if (real(nf.product_id).length === 1) nf.product_id.value = real(nf.product_id)[0].value;
+  const lastSource = remember('nl-source');
+  if (lastSource) { const r = $(`#new-form input[name=source][value="${lastSource}"]`); if (r) r.checked = true; }
+  nf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const { origin, ...rest } = Object.fromEntries(new FormData(e.target));
     const body = { ...rest, ...originToFields(origin) };
+    try { localStorage.setItem('nl-origin', origin); localStorage.setItem('nl-source', rest.source); } catch { /* sin almacenamiento */ }
     try {
       const { id, existing, repeat_of: repeatOf } = await api('/api/leads', { method: 'POST', body });
       refresh();
@@ -1809,7 +1854,14 @@ async function renderTeam() {
         <td>${q.siguiente ? `${esc(q.siguiente)}${q.vence != null && q.vence < 0 ? ` <span class="conv bad">${-q.vence} ${q.vence === -1 ? 'día' : 'días'} tarde</span>` : ''}` : '—'}</td>
         <td>${q.pedido ? '<span class="request-pill">pedido enviado</span>' : `<button type="button" class="ghost small" data-open="${q.id}">Abrir</button>`}</td></tr>`).join('')}
       </tbody></table></div>` : '<p class="muted">No hay cotizaciones abiertas con monto.</p>';
-  $('#view-team').innerHTML = `<div class="team">
+  // Primeros pasos: se marcan solos y la tarjeta desaparece al terminar (o si se oculta).
+  let hidden = false; try { hidden = localStorage.getItem('onboarding-hidden') === '1'; } catch { /* sin almacenamiento */ }
+  const ob = hidden ? null : await api('/api/onboarding').catch(() => null);
+  const obCard = ob && !ob.done ? `<section class="card onboarding">${cardTitle('check', 'var(--accent)', `Primeros pasos · ${ob.steps.filter((st) => st.done).length} de ${ob.steps.length}`, 'se marcan solos conforme los haces')}
+    <ul class="ob-list">${ob.steps.map((st) => `<li class="${st.done ? 'done' : ''}"><span class="ob-dot">${st.done ? '✓' : ''}</span>
+      ${st.done ? `<span>${esc(st.label)}</span>` : `<button type="button" class="link" data-ob-view="${st.view}" data-ob-tab="${st.tab || ''}">${esc(st.label)}</button>`}</li>`).join('')}</ul>
+    <button type="button" class="ghost small" id="ob-hide">Ocultar</button></section>` : '';
+  $('#view-team').innerHTML = `${obCard}<div class="team">
     <div class="today-summary">
       ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
         : `<span class="alert-pill late">${t.unassigned} sin asignar (los reparte quien asigna leads)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
@@ -1830,6 +1882,11 @@ async function renderTeam() {
   </div>`;
   const view = $('#view-team');
   $('#team-assign')?.addEventListener('click', () => setView('assign'));
+  view.querySelectorAll('[data-ob-view]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.obTab) state.settingsTab = b.dataset.obTab;
+    setView(b.dataset.obView);
+  }));
+  $('#ob-hide')?.addEventListener('click', () => { try { localStorage.setItem('onboarding-hidden', '1'); } catch { /* sin almacenamiento */ } renderTeam(); });
   $('#weekly-report').addEventListener('click', () => openReport('ventas', '7'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   view.querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
@@ -2460,7 +2517,8 @@ async function renderSettings() {
     const name = f.elements.name.value.trim();
     if (!name) return;
     try {
-      const extra = f.dataset.kind === 'producto' ? { price: f.elements.price.value || null, fixed_price: f.elements.fixed_price.checked } : {};
+      const extra = f.dataset.kind === 'producto' ? { price: f.elements.price.value || null, fixed_price: f.elements.fixed_price.checked,
+        ...(f.elements.duration_months ? { duration_months: f.elements.duration_months.value || null } : {}) } : {};
       await api('/api/catalog', { method: 'POST', body: { kind: f.dataset.kind, name, ...extra } });
       await reloadCatalog();
       toast(`"${name}" agregado`, 'ok');
@@ -2475,13 +2533,16 @@ async function renderSettings() {
     });
     const savePrice = async () => {
       try {
-        await api(`/api/catalog/${id}`, { method: 'PATCH', body: { price: $('[data-price]', row).value || null, fixed_price: $('[data-fixed]', row).checked } });
-        toast('Precio guardado', 'ok');
+        const dur = $('[data-duration]', row);
+        await api(`/api/catalog/${id}`, { method: 'PATCH', body: { price: $('[data-price]', row).value || null, fixed_price: $('[data-fixed]', row).checked,
+          ...(dur ? { duration_months: dur.value || null } : {}) } });
+        toast('Guardado', 'ok');
       } catch (err) { toast(err.message, 'error'); }
       await reloadCatalog();
     };
     $('[data-price]', row)?.addEventListener('change', savePrice);
     $('[data-fixed]', row)?.addEventListener('change', savePrice);
+    $('[data-duration]', row)?.addEventListener('change', savePrice);
     $('[data-toggle]', row).addEventListener('click', async () => {
       const active = row.dataset.active !== '1';
       await api(`/api/catalog/${id}`, { method: 'PATCH', body: { active } });
@@ -2676,15 +2737,17 @@ function listEditor(kind, title, help, placeholder) {
     <form class="list-form" data-kind="${kind}">
       <input name="name" placeholder="${esc(placeholder)}" aria-label="Agregar a ${esc(title)}" maxlength="120">
       ${kind === 'producto' ? `<input name="price" inputmode="decimal" placeholder="Precio (opcional)" aria-label="Precio de lista" style="max-width:150px">
-        <label class="inline-check"><input type="checkbox" name="fixed_price"> Precio fijo</label>` : ''}
+        <label class="inline-check"><input type="checkbox" name="fixed_price"> Precio fijo</label>
+        ${renewals() ? '<input name="duration_months" inputmode="numeric" placeholder="Dura (meses)" aria-label="Duración en meses" style="max-width:120px">' : ''}` : ''}
       <button type="submit">Agregar</button>
     </form>
-    ${kind === 'producto' ? '<p class="muted small-note">Con <b>precio fijo</b>, al cotizar o vender el monto se calcula solo (precio × cantidad) y el vendedor no lo puede cambiar; solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el real.</p>' : ''}
+    ${kind === 'producto' ? `<p class="muted small-note">Con <b>precio fijo</b>, al cotizar o vender el monto se calcula solo (precio × cantidad) y el vendedor no lo puede cambiar; solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el real.${renewals() ? ` Si pones cuántos <b>meses dura</b>, al vender se calcula sola la fecha en que termina ${esc(F.theTerm())} y se avisa la renovación a tiempo.` : ''}</p>` : ''}
     <ul class="items">
       ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
         <span>${esc(i.name)}${i.active ? '' : ' <small>(quitado)</small>'}</span>
         ${kind === 'producto' ? `<span class="price-row"><input data-price inputmode="decimal" value="${i.price ?? ''}" placeholder="Precio" aria-label="Precio de ${esc(i.name)}">
-          <label class="inline-check"><input type="checkbox" data-fixed ${i.fixed_price ? 'checked' : ''}> fijo</label></span>` : ''}
+          <label class="inline-check"><input type="checkbox" data-fixed ${i.fixed_price ? 'checked' : ''}> fijo</label>
+          ${renewals() ? `<input data-duration inputmode="numeric" value="${i.duration_months ?? ''}" placeholder="Meses" aria-label="Meses que dura ${esc(i.name)}" style="max-width:80px">` : ''}</span>` : ''}
         <button type="button" class="ghost small" data-rename>Renombrar</button>
         <button type="button" class="ghost small" data-toggle>${i.active ? 'Quitar' : 'Volver a usar'}</button>
       </li>`).join('') || '<li class="muted">Todavía no hay nada. Agrega el primero arriba.</li>'}

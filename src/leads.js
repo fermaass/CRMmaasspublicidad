@@ -36,10 +36,19 @@ function campaignName(db, value, { create = false } = {}) {
  * se registra el nuevo mensaje en su historial y, si estaba declinado o vendido, se reabre como nuevo
  * (conservando su perfil) para que ventas lo vea.
  */
+// Nombres escritos todo en minúsculas o todo en mayúsculas ("laura GÓMEZ" no; "laura gomez" sí) quedan como "Laura Gomez".
+const LOWER_WORDS = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'e', 'da', 'van', 'von']);
+function niceName(name) {
+  if (!name) return name;
+  const s = name.replace(/\s+/g, ' ').trim();
+  if (s !== s.toLowerCase() && s !== s.toUpperCase()) return s;
+  return s.toLowerCase().split(' ').map((w, i) => (i > 0 && LOWER_WORDS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+}
+
 function ingestLead(db, data) {
   const clean = (v) => (v == null || String(v).trim() === '' ? null : String(v).trim().slice(0, 2000));
   const lead = {
-    name: clean(data.name), phone: clean(data.phone), email: clean(data.email),
+    name: niceName(clean(data.name)), phone: clean(data.phone), email: clean(data.email)?.toLowerCase() ?? null,
     campaign: clean(data.campaign), message: clean(data.message), source: data.source,
     channel_id: data.channel_id || null, product_id: data.product_id || null,
     utm_source: clean(data.utm_source), utm_medium: clean(data.utm_medium), utm_content: clean(data.utm_content),
@@ -178,4 +187,4 @@ function releaseLeads(db, userId, byUserId, name) {
   return ids.length;
 }
 
-module.exports = { releaseLeads, ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };
+module.exports = { niceName, releaseLeads, ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };

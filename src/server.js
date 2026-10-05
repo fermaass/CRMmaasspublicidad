@@ -291,6 +291,19 @@ function createApp({ db, config }) {
 
   // ---------- Configuración (solo gerente) ----------
   // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
+  // Primeros pasos del gerente: cada uno se marca solo cuando ya está hecho.
+  app.get('/api/onboarding', auth.requireRole('gerente'), (req, res) => {
+    const n = (sql, ...p) => db.prepare(sql).get(...p).n;
+    const steps = [
+      { key: 'empresa', label: 'Pon tu logo y cómo le llamas a lo que vendes', done: Boolean(getSetting(db, 'company_logo')), view: 'settings', tab: 'empresa' },
+      { key: 'productos', label: 'Da de alta tus productos o servicios con su precio', done: n("SELECT COUNT(*) AS n FROM catalog_items WHERE kind = 'producto' AND active = 1") > 0, view: 'settings', tab: 'listas' },
+      { key: 'campana', label: 'Crea tu primera campaña (con su inversión del mes)', done: n("SELECT COUNT(*) AS n FROM catalog_items WHERE kind = 'campana' AND active = 1") > 0, view: 'settings', tab: 'campanas' },
+      { key: 'formulario', label: 'Pega el formulario en tu página: llega solo el primer lead', done: n("SELECT COUNT(*) AS n FROM leads WHERE source = 'formulario'") > 0, view: 'settings', tab: 'canales' },
+      { key: 'equipo', label: 'Invita a tu equipo, o marca que tú también atiendes leads', done: n('SELECT COUNT(*) AS n FROM users WHERE active = 1') > 1 || Boolean(req.user.sells), view: 'users' },
+    ];
+    res.json({ steps, done: steps.every((st) => st.done) });
+  });
+
   // Recordatorio mensual al gerente: descargar su cartera en Excel. Cuenta desde la última descarga (o desde que se instaló).
   function carteraStatus() {
     const last = getSetting(db, 'cartera_downloaded_at');
@@ -355,7 +368,7 @@ function createApp({ db, config }) {
   };
 
   app.get('/api/catalog', auth.requireUser, (req, res) => {
-    const items = db.prepare('SELECT id, kind, name, active, budget, channel_id, price, fixed_price FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
+    const items = db.prepare('SELECT id, kind, name, active, budget, channel_id, price, fixed_price, duration_months FROM catalog_items ORDER BY active DESC, name COLLATE NOCASE').all();
     const budgets = db.prepare('SELECT campaign_id, month, amount FROM campaign_budgets ORDER BY month').all();
     items.filter((i) => i.kind === 'campana').forEach((c) => {
       c.budgets = budgets.filter((b) => b.campaign_id === c.id).map(({ month, amount }) => ({ month, amount }));
@@ -363,6 +376,12 @@ function createApp({ db, config }) {
     res.json(Object.fromEntries(CATALOG_KINDS.map((k) => [k, items.filter((i) => i.kind === k)])));
   });
 
+  // Duración en meses: vacío = sin duración; false = inválida.
+  const months = (v) => {
+    if (v === undefined || v === null || String(v).trim() === '') return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 1 && n <= 120 ? n : false;
+  };
   app.post('/api/catalog', auth.requireRole(...EDITORS), (req, res) => {
     const kind = req.body?.kind;
     const name = String(req.body?.name || '').trim();
@@ -382,8 +401,10 @@ function createApp({ db, config }) {
     } catch (err) { return res.status(400).json({ error: err.message }); }
     const fixed = kind === 'producto' && req.body?.fixed_price && price > 0 ? 1 : 0;
     if (kind === 'producto' && req.body?.fixed_price && !(price > 0)) return res.status(400).json({ error: 'Para precio fijo escribe el precio' });
-    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name, budget, channel_id, price, fixed_price) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(kind, name.slice(0, 120), budget, channelId, price, fixed);
+    const duration = kind === 'producto' ? months(req.body?.duration_months) : null;
+    if (duration === false) return res.status(400).json({ error: 'La duración va en meses, de 1 a 120' });
+    const { lastInsertRowid } = db.prepare('INSERT INTO catalog_items (kind, name, budget, channel_id, price, fixed_price, duration_months) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(kind, name.slice(0, 120), budget, channelId, price, fixed, duration);
     res.status(201).json({ id: Number(lastInsertRowid) });
   });
 
@@ -407,9 +428,11 @@ function createApp({ db, config }) {
       if (req.body?.fixed_price) return res.status(400).json({ error: 'Para precio fijo escribe el precio' });
       fixed = 0;
     }
+    const duration = item.kind === 'producto' && req.body?.duration_months !== undefined ? months(req.body.duration_months) : item.duration_months;
+    if (duration === false) return res.status(400).json({ error: 'La duración va en meses, de 1 a 120' });
     try {
-      db.prepare('UPDATE catalog_items SET name = ?, active = ?, budget = ?, channel_id = ?, price = ?, fixed_price = ? WHERE id = ?')
-        .run(name, active, budget === undefined ? item.budget : budget, channelId === undefined ? item.channel_id : channelId, newPrice, fixed, item.id);
+      db.prepare('UPDATE catalog_items SET name = ?, active = ?, budget = ?, channel_id = ?, price = ?, fixed_price = ?, duration_months = ? WHERE id = ?')
+        .run(name, active, budget === undefined ? item.budget : budget, channelId === undefined ? item.channel_id : channelId, newPrice, fixed, duration, item.id);
     } catch {
       return res.status(409).json({ error: 'Ya hay otro elemento con ese nombre' });
     }
@@ -1030,6 +1053,15 @@ function createApp({ db, config }) {
       addEvent(db, lead.id, user.id, 'estado', `Monto cotizado: $${quoteAmount.toLocaleString('es-MX')}`);
     }
     if (recontactAt && recontactAt !== lead.recontact_at) addEvent(db, lead.id, user.id, 'estado', `Volver a contactar el ${recontactAt}`);
+    // Al vender un producto con duración (y si la empresa maneja renovaciones), la fecha de término se calcula sola.
+    if (next.status === 'vendido' && lead.status !== 'vendido' && !b.campaign_end && !lead.campaign_end && productId
+      && getSetting(db, 'renewals') !== '0') {
+      const dur = db.prepare('SELECT duration_months FROM catalog_items WHERE id = ?').get(productId)?.duration_months;
+      if (dur) {
+        const d = new Date(); d.setMonth(d.getMonth() + dur);
+        b = { ...b, campaign_end: d.toISOString().slice(0, 10) };
+      }
+    }
     saveExtras(user, lead, b, next.status);
 
     if (campaign !== lead.campaign) addEvent(db, lead.id, user.id, 'perfil', `Campaña: ${campaign || 'ninguna'}`);

@@ -82,6 +82,15 @@ Desde el primer contacto se puede cotizar o cerrar: el lead salta directo a esa 
 
 **Automático para ir rápido:** si solo una persona atiende leads, todo lead nuevo se le asigna solo (aunque el reparto automático esté apagado). Si quien atiende captura a alguien que le escribió por WhatsApp o le llamó, el toque 1 "Contestó" queda registrado solo con ese medio. En la ficha, el medio del toque viene elegido: el último que se usó con ese cliente o por donde llegó.
 
+**Más cosas que se ponen solas:**
+- Nuevo lead: el origen y el medio vienen con los últimos que usaste; si solo hay una campaña o un producto, ya vienen elegidos. Los nombres escritos todo en minúsculas o mayúsculas se corrigen ("laura gómez" → "Laura Gómez") y los correos quedan en minúsculas.
+- Cotizar: con el producto elegido, el monto sale del precio × cantidad. Vender: el monto viene con lo cotizado.
+- Productos con **duración en meses** (membresías, pólizas, contratos): al vender, la fecha de término se calcula sola y la renovación se avisa a tiempo.
+- Próximo paso: botones **Mañana / En 3 días / En una semana** (a las 10:00).
+- Al dar clic en Llamar o WhatsApp en la ficha, el medio queda elegido y la ficha baja al recuadro del toque.
+- En Mi día, los clientes que tocaba "volver a contactar" se reactivan solos al registrar el toque (un clic en vez de dos).
+- El gerente ve **Primeros pasos** (logo, productos, campaña, formulario, equipo) en Equipo hoy; se marcan solos y la tarjeta desaparece al terminar.
+
 **Lo que se captura en la ficha también cuenta.** Si el lead aún no contestaba y se responde el perfil rápido (¿habla con quien decide?, ¿tiene presupuesto?, ¿cuándo arranca?), eso se registra como toque "Contestó" en ese momento. Al guardar una nota, la app pregunta si fue un contacto con el cliente (contestó / no contestó / solo nota) y la registra como toque. Cuando el cliente **habla con quien decide y tiene presupuesto**, pasa solo a Cumple perfil (se puede corregir a mano).
 
 Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". La misma lógica sigue en el resto del embudo: si el cliente ya había contestado (en Nuevo, Cumple perfil o Cotizando) y luego acumula **3 seguimientos seguidos sin respuesta**, pasa solo a Declinado con motivo "Dejó de contestar". Cualquier respuesta reinicia la cuenta, y el seguimiento que declinaría al lead aparece marcado como "último intento". Estos leads conservan su perfil y sus hitos, así que entran en las audiencias de remarketing.

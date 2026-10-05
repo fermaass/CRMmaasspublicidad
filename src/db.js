@@ -259,6 +259,8 @@ function openDb(dbPath) {
   const catCols2 = db.prepare('PRAGMA table_info(catalog_items)').all().map((c) => c.name);
   if (!catCols2.includes('price')) db.exec('ALTER TABLE catalog_items ADD COLUMN price REAL');
   if (!catCols2.includes('fixed_price')) db.exec('ALTER TABLE catalog_items ADD COLUMN fixed_price INTEGER NOT NULL DEFAULT 0');
+  // Cuántos meses dura lo que se vende (membresía, póliza, campaña): al vender, la fecha de renovación se calcula sola.
+  if (!catCols2.includes('duration_months')) db.exec('ALTER TABLE catalog_items ADD COLUMN duration_months INTEGER');
   if (!db.prepare('PRAGMA table_info(leads)').all().some((c) => c.name === 'quantity')) db.exec('ALTER TABLE leads ADD COLUMN quantity REAL');
   if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'amount')) db.exec('ALTER TABLE lead_touches ADD COLUMN amount REAL');
 

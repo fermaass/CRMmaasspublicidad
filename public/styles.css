@@ -662,3 +662,13 @@ a.button-link.ghost { background: transparent; color: var(--accent); border: 1px
 a.button-link.small { padding: 5px 10px; font-size: 12px; }
 .stats-actions { display: flex; justify-content: flex-end; grid-column: 1 / -1; }
 .stats-actions .ico { margin-right: 4px; vertical-align: -3px; }
+
+.quick-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: -4px 0 10px; }
+.quick-dates button.on { background: var(--accent-soft); border-color: var(--accent); }
+.touch-form.flash { box-shadow: 0 0 0 3px var(--accent-soft); transition: box-shadow .3s; }
+.onboarding { margin-bottom: 14px; }
+.ob-list { list-style: none; padding: 0; margin: 8px 0 10px; display: grid; gap: 6px; }
+.ob-list li { display: flex; align-items: center; gap: 10px; }
+.ob-list li.done span:last-child { color: var(--muted); text-decoration: line-through; }
+.ob-dot { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line); display: inline-grid; place-items: center; font-size: 12px; flex: none; }
+.ob-list li.done .ob-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
