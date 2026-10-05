@@ -65,3 +65,27 @@ test('nombres limpios, producto con duración calcula la renovación y primeros 
   assert.equal(l.campaign_end, expected.toISOString().slice(0, 10));
   s.close();
 });
+
+test('lead sin asignar: quien atiende leads lo toma al registrar el toque; al gerente que no atiende se le ofrece tomarlo', async () => {
+  const db = openDb(':memory:');
+  const { s, url } = await listen(createApp({ db, config: { setupCode: 'TAKE-1234', formApiKey: 'k' } }));
+  const call = (method, path, body, cookie) => fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const g = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'TAKE-1234' })).headers.get('set-cookie').split(';')[0];
+  for (const [n, e] of [['Ana', 'a@x.mx'], ['Beto', 'b@x.mx']]) await call('POST', '/api/users', { name: n, email: e, password: 'password123', role: 'vendedor' }, g);
+  const id = (await (await call('POST', '/webhooks/form?key=k', { nombre: 'Lead', telefono: '5519191919' })).json()).id;
+
+  let l = await (await call('GET', `/api/leads/${id}`, null, g)).json();
+  assert.equal(l.assigned_to, null, 'con dos vendedores y reparto apagado queda sin asignar');
+  assert.equal(l.can_touch, false); assert.equal(l.can_take, true, 'al gerente que no atiende se le ofrece tomarlo');
+
+  // El gerente activa "También atiende leads": ya puede registrar el toque y el lead queda suyo.
+  const me = (await (await call('GET', '/api/me', null, g)).json());
+  await call('PATCH', `/api/users/${me.id}`, { can_sell: true }, g);
+  l = await (await call('GET', `/api/leads/${id}`, null, g)).json();
+  assert.equal(l.can_touch, true); assert.equal(l.can_take, false);
+  const r = await call('POST', `/api/leads/${id}/touches`, { channel: 'llamada', outcome: 'sin_respuesta' }, g);
+  assert.equal(r.status, 201);
+  l = await (await call('GET', `/api/leads/${id}`, null, g)).json();
+  assert.equal(l.assigned_name, 'Fer'); assert.equal(l.touch_count, 1); assert.equal(F.stageOf(l), 'contactando');
+  s.close();
+});

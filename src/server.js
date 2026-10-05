@@ -648,7 +648,10 @@ function createApp({ db, config }) {
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const events = db.prepare(`SELECT e.*, u.name AS user_name FROM lead_events e
       LEFT JOIN users u ON u.id = e.user_id WHERE e.lead_id = ? ORDER BY e.id DESC`).all(lead.id);
-    res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_touch: canTouch(req.user, lead),
+    const free = !lead.assigned_to && ['nuevo', 'nuevo_perfil', 'cotizando'].includes(lead.status);
+    res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_touch: canTouch(req.user, lead) || (free && Boolean(req.user.sells)),
+      // El gerente que aún no atiende leads: se le ofrece atender este (un clic).
+      can_take: free && req.user.role === 'gerente' && !req.user.sells,
       can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) });
   });
 
@@ -1100,8 +1103,13 @@ function createApp({ db, config }) {
   });
 
   app.post('/api/leads/:id/touches', auth.requireUser, (req, res) => {
-    const lead = getLead(req, Number(req.params.id));
+    let lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
+    // Lead sin dueño: quien atiende leads y registra el toque se queda con él.
+    if (!lead.assigned_to && req.user.sells && OUTCOMES_BY_STATUS[lead.status]) {
+      assignLead(lead.id, req.user, req.user.id);
+      lead = getLead(req, lead.id);
+    }
     if (!canTouch(req.user, lead)) return res.status(403).json({ error: 'Los toques los registra el vendedor que atiende el lead' });
     const { channel, outcome } = req.body || {};
     // Doble clic o reintento por mala conexión: el mismo request_id no registra el toque dos veces.

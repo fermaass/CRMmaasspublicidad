@@ -275,7 +275,7 @@ async function start() {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
   document.querySelectorAll('[data-assigner]').forEach((el) => el.classList.toggle('hidden', !canAssign()));
-  document.querySelectorAll('[data-seller]').forEach((el) => el.classList.toggle('hidden', !sells()));
+  document.querySelectorAll('[data-sells-nav]').forEach((el) => el.classList.toggle('hidden', !sells()));
   if (canAssign()) $('#new-lead').classList.remove('hidden'); // quien asigna también captura leads
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
@@ -1567,7 +1567,10 @@ ${tt.user_name}` : ''}`)}">
       <div class="outcome-grid">${outcomes.map((o) => `<button type="button" class="outcome ${o}" data-outcome="${o}">${esc(t.outcomes[o])}</button>`).join('')}</div>
       ${!l.contacted_at && n === t.max ? '<p class="muted small-note">Es el último toque de la cadencia: si no contesta, el lead pasa a Declinado.</p>' : ''}
     </div>` : '';
-  return `<div class="touches"><div class="touch-row">${dots}</div>${form}</div>`;
+  const take = l.can_take ? `<div class="touch-form take-lead"><strong>¿Tú atiendes este lead?</strong>
+      <p class="muted small-note">Para anotar llamadas y mensajes ("no contestó", "contestó"…), alguien tiene que atenderlo. Si eres tú, da clic: queda asignado a ti y activa "También atiende leads" en tu usuario.</p>
+      <button type="button" id="take-lead">Sí, yo lo atiendo</button></div>` : '';
+  return `<div class="touches"><div class="touch-row">${dots}</div>${form}${take}</div>`;
 }
 
 async function openLead(id) {
@@ -1666,6 +1669,16 @@ async function openLead(id) {
     if (ok) openLead(l.id);
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
+  $('#take-lead')?.addEventListener('click', async () => {
+    try {
+      await api(`/api/users/${state.me.id}`, { method: 'PATCH', body: { can_sell: true } });
+      await api(`/api/leads/${l.id}/assign`, { method: 'POST', body: { assigned_to: state.me.id } });
+      state.me = await api('/api/me'); state.users = await api('/api/users');
+      document.querySelectorAll('[data-sells-nav]').forEach((el) => el.classList.toggle('hidden', !sells()));
+      toast('Listo: el lead es tuyo. Ya puedes registrar el toque.', 'ok');
+      refresh(); openLead(l.id);
+    } catch (err) { toast(err.message, 'error'); }
+  });
   const sendRequest = async (text) => {
     try { await api(`/api/leads/${l.id}/request`, { method: 'POST', body: { text } }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
   };
@@ -1683,7 +1696,7 @@ async function openLead(id) {
     }
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { [b.dataset.qp]: l[b.dataset.qp] === b.dataset.v ? null : b.dataset.v } });
-      openLead(l.id);
+      openLead(l.id); refresh();
     } catch (err) { toast(err.message, 'error'); }
   }));
   // Al llamar o escribir, el medio queda elegido y la ficha lleva al recuadro del toque para anotar cómo te fue.
