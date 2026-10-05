@@ -1524,11 +1524,13 @@ ${tt.user_name}` : ''}`)}">
   }).join('');
   const outcomes = outcomesFor(l).length ? outcomesFor(l) : null;
   const n = touches.length + 1;
+  // Medio sugerido: el del último toque con este cliente, o por donde llegó (WhatsApp o llamada).
+  const defChannel = touches.at(-1)?.channel || (t.channels.includes(l.source) ? l.source : t.channels[0]);
   const d = nextAction(l);
   const form = l.can_touch && outcomes ? `<div class="touch-form">
       <div class="touch-head"><strong>Registrar toque ${n}</strong>${d ? `<span class="touch-badge ${whenClass(d.days)}">
         ${esc(d.label)} · ${d.agreed ? whenLabel(d) : d.days < 0 ? whenText(d.days) : d.days === 0 ? 'toca hoy' : `el ${shortDate(d.due)}`}</span>` : ''}</div>
-      <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c, i) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${i === 0 ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
+      <div class="seg-group" role="radiogroup" aria-label="Medio">${t.channels.map((c) => `<label class="seg"><input type="radio" name="touch-channel" value="${c}" ${c === defChannel ? 'checked' : ''}><span>${esc(label(c))}</span></label>`).join('')}</div>
       <div class="outcome-grid">${outcomes.map((o) => `<button type="button" class="outcome ${o}" data-outcome="${o}">${esc(t.outcomes[o])}</button>`).join('')}</div>
       ${!l.contacted_at && n === t.max ? '<p class="muted small-note">Es el último toque de la cadencia: si no contesta, el lead pasa a Declinado.</p>' : ''}
     </div>` : '';

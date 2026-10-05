@@ -71,7 +71,8 @@ test('lead con producto y canal; filtros, resumen y CSV', async () => {
   const stats = (await req('/api/stats', { cookie: gerente })).json;
   assert.equal(stats.byProduct.find((x) => x.key === 'Pantalla LED').n, 2);
   assert.equal(stats.byChannel.find((x) => x.key === 'Facebook').n, 1);
-  assert.deepEqual(stats.productStages.find((x) => x.key === 'Pantalla LED'), { key: 'Pantalla LED', stage: 'nuevo', n: 2 });
+  // Laura la capturó su vendedor porque le escribió por WhatsApp: ya contestó (toque 1 automático). Pepe llegó del formulario.
+  assert.deepEqual(stats.productStages.filter((x) => x.key === 'Pantalla LED').map((x) => `${x.stage}:${x.n}`).sort(), ['contesto:1', 'nuevo:1']);
   assert.equal(stats.byDay.reduce((t, d) => t + d.n, 0), 2);
 
   const csv = await req('/api/leads.csv', { cookie: gerente });

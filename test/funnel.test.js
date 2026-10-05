@@ -26,6 +26,8 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
   gerente = (await req('/api/login', { method: 'POST', body: { email: 'g@t.com', password: 'clave-gerente' } })).cookie;
   anaId = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Ana', email: 'a@t.com', password: 'password123', role: 'vendedor' } })).json.id;
+  // Un segundo vendedor: con uno solo, los leads se le asignan solos (aquí se prueba el caso de leads sin asignar).
+  await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Beto', email: 'b@t.com', password: 'password123', role: 'vendedor' } });
   ana = (await req('/api/login', { method: 'POST', body: { email: 'a@t.com', password: 'password123' } })).cookie;
 });
 after(() => server.close());

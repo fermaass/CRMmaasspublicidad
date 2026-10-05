@@ -80,6 +80,8 @@ Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una c
 
 Desde el primer contacto se puede cotizar o cerrar: el lead salta directo a esa etapa. En Mi día se ven los cuatro resultados más comunes; "Otro…" abre la ficha con todos.
 
+**Automático para ir rápido:** si solo una persona atiende leads, todo lead nuevo se le asigna solo (aunque el reparto automático esté apagado). Si quien atiende captura a alguien que le escribió por WhatsApp o le llamó, el toque 1 "Contestó" queda registrado solo con ese medio. En la ficha, el medio del toque viene elegido: el último que se usó con ese cliente o por donde llegó.
+
 **Lo que se captura en la ficha también cuenta.** Si el lead aún no contestaba y se responde el perfil rápido (¿habla con quien decide?, ¿tiene presupuesto?, ¿cuándo arranca?), eso se registra como toque "Contestó" en ese momento. Al guardar una nota, la app pregunta si fue un contacto con el cliente (contestó / no contestó / solo nota) y la registra como toque. Cuando el cliente **habla con quien decide y tiene presupuesto**, pasa solo a Cumple perfil (se puede corregir a mano).
 
 Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". La misma lógica sigue en el resto del embudo: si el cliente ya había contestado (en Nuevo, Cumple perfil o Cotizando) y luego acumula **3 seguimientos seguidos sin respuesta**, pasa solo a Declinado con motivo "Dejó de contestar". Cualquier respuesta reinicia la cuenta, y el seguimiento que declinaría al lead aparece marcado como "último intento". Estos leads conservan su perfil y sus hitos, así que entran en las audiencias de remarketing.

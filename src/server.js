@@ -664,6 +664,17 @@ function createApp({ db, config }) {
       else if (req.user.sells) {
         db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
       } else autoAssign(db, result.id);
+      // Quien atiende captura a alguien que le escribió o le llamó: ya está en conversación, el toque 1 queda registrado solo.
+      const created = getLead(req, result.id);
+      if (created && canTouch(req.user, created) && ['whatsapp', 'llamada'].includes(b.source)) {
+        const ts = now();
+        db.prepare("INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at) VALUES (?, 1, ?, ?, 'conversacion', ?)")
+          .run(result.id, req.user.id, b.source, ts);
+        db.prepare('UPDATE leads SET touch_count = 1, silent_streak = 0, last_touch_at = ?, first_touch_at = ? WHERE id = ?').run(ts, ts, result.id);
+        addEvent(db, result.id, req.user.id, 'toque', `Toque 1 por ${LABELS[b.source]}: ${TOUCH_OUTCOMES.conversacion} (al capturarlo)`);
+        const err = updateLead(req.user, getLead(req, result.id), { contacted: true });
+        if (err) return res.status(err.status).json({ error: err.error });
+      }
       res.status(201).json({ id: result.id, repeat_of: result.repeat_of });
     } catch (err) {
       res.status(400).json({ error: err.message });
