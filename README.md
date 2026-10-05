@@ -41,6 +41,7 @@ Los vendedores no toman leads: los asigna el **Coordinador de leads**, un rol pa
 - En **Asignación** ve la **carga de cada vendedor** (leads en curso: por cotizar y cotizando), sus pendientes vencidos y cuántos recibió esta semana, y abajo los leads sin dueño, del más viejo al más nuevo. "Repartir todos parejo" asigna todos de una vez, cada uno al de menor carga. Ahí mismo se enciende o apaga la asignación automática (de fábrica, apagada).
 - La sugerencia es el vendedor con menos leads en curso; si hay empate, el que recibió menos esta semana. Un lead vendido o declinado deja de contar como carga.
 - El gerente no asigna en su día a día; solo puede **reasignar desde la ficha** en una emergencia.
+- **El gerente (u otro rol) también puede atender leads:** con la casilla **"También atiende leads"** en Usuarios se le pueden asignar leads, tiene Mi día y registra sus toques como un vendedor. En el primer uso la app lo pregunta. Los toques de un lead los registra solo quien lo atiende, para que los números de cada vendedor sean suyos.
 - **Cualquier usuario puede asignar además de su trabajo:** en Usuarios, la casilla **"También asigna leads"** (gerente, gerente de marketing, vendedor o analista) le da la pestaña Asignación y le deja elegir vendedor al capturar. En el primer uso la app le pregunta al gerente si él asignará. Si un vendedor captura un lead que le escribió directo, se queda con él.
 - **Vendedor que también asigna:** en Asignación ve los leads sin dueño, pero en su tablero y su Resumen solo los suyos. Para que se note si se queda con los mejores, en **Equipo hoy** sale cuántos de los leads que repartió esa semana se asignó a sí mismo (en rojo si fueron más que su parte pareja).
 
@@ -73,9 +74,13 @@ Cada lead lleva hasta **5 toques** (intentos de contacto del vendedor) con una c
 
 | Etapa | Resultados posibles |
 |---|---|
-| Nuevo | No contestó · Contestó y cumple perfil (→ Cumple perfil) · Contestó pero no cumple (→ Declinado) · Contestó, falta perfilar |
-| Cumple perfil | No contestó · Sigue en conversación · Se envió cotización (→ Cotizando) · No le interesó (→ Declinado, con motivo) |
+| Nuevo | No contestó · Contestó, falta perfilar · Contestó y cumple perfil (→ Cumple perfil) · Se envió cotización (→ Cotizando) · Contestó pero no cumple (→ Declinado) · No le interesó · Cerró venta (→ Vendido) |
+| Cumple perfil | No contestó · Sigue en conversación · Se envió cotización (→ Cotizando) · No le interesó (→ Declinado, con motivo) · Cerró venta |
 | Cotizando | No contestó · Sigue en conversación · Cerró venta (→ Vendido, con monto) · Rechazó (→ Declinado, con motivo) |
+
+Desde el primer contacto se puede cotizar o cerrar: el lead salta directo a esa etapa. En Mi día se ven los cuatro resultados más comunes; "Otro…" abre la ficha con todos.
+
+**Lo que se captura en la ficha también cuenta.** Si el lead aún no contestaba y se responde el perfil rápido (¿habla con quien decide?, ¿tiene presupuesto?, ¿cuándo arranca?), eso se registra como toque "Contestó" en ese momento. Al guardar una nota, la app pregunta si fue un contacto con el cliente (contestó / no contestó / solo nota) y la registra como toque. Cuando el cliente **habla con quien decide y tiene presupuesto**, pasa solo a Cumple perfil (se puede corregir a mano).
 
 Si el cliente nunca contesta, el **quinto toque** lo pasa solo a Declinado con motivo "No contestó (5 toques)". La misma lógica sigue en el resto del embudo: si el cliente ya había contestado (en Nuevo, Cumple perfil o Cotizando) y luego acumula **3 seguimientos seguidos sin respuesta**, pasa solo a Declinado con motivo "Dejó de contestar". Cualquier respuesta reinicia la cuenta, y el seguimiento que declinaría al lead aparece marcado como "último intento". Estos leads conservan su perfil y sus hitos, así que entran en las audiencias de remarketing.
 

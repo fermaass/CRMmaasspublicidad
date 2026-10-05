@@ -7,6 +7,8 @@ const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'sho
 const can = (...roles) => state.me && roles.includes(state.me.role);
 // Asignar es el trabajo del Coordinador de leads; a cualquier otro usuario se le puede dar con "También asigna leads".
 const canAssign = () => Boolean(state.me && (state.me.role === 'operador' || state.me.can_assign));
+// Atiende leads: el vendedor, o cualquier otro con "También atiende leads" (por ejemplo, el gerente de un equipo chico).
+const sells = () => Boolean(state.me && (state.me.role === 'vendedor' || state.me.sells));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
 const DARK_TEXT = new Set(['cotizando', 'declinado_sin']);
 const stageOf = (l) => F.stageOf(l);
@@ -273,6 +275,7 @@ async function start() {
     el.classList.toggle('hidden', !el.dataset.role.split(',').includes(state.me.role));
   });
   document.querySelectorAll('[data-assigner]').forEach((el) => el.classList.toggle('hidden', !canAssign()));
+  document.querySelectorAll('[data-seller]').forEach((el) => el.classList.toggle('hidden', !sells()));
   if (canAssign()) $('#new-lead').classList.remove('hidden'); // quien asigna también captura leads
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
@@ -439,7 +442,7 @@ async function updateAssignBadge() {
 // Contador en la pestaña Mi día (vendedor): lo vencido y lo de hoy, para verlo desde cualquier vista. En rojo si hay vencidos.
 async function updateTodayBadge(leads) {
   const btn = $('#nav [data-view=today]');
-  if (state.me.role !== 'vendedor') return;
+  if (!sells()) return;
   try {
     const list = (leads || await api('/api/leads')).filter((l) => l.assigned_to === state.me.id);
     const dues = list.map((l) => ({ l, a: nextAction(l) })).filter(({ l, a }) => l.manager_request || (a && a.days <= 0));
@@ -504,7 +507,7 @@ function timeAgo(iso) {
 
 function canEditLead(l) {
   // Avance de ventas: gerente y el vendedor dueño. Marketing solo corrige el origen desde la ficha.
-  return can('gerente') || (state.me.role === 'vendedor' && l.assigned_to === state.me.id);
+  return can('gerente') || (sells() && l.assigned_to === state.me.id);
 }
 
 // ---------- Toques, cadencia y pendientes ----------
@@ -573,7 +576,8 @@ function renderBoardAlert() {
 
 // ---------- Mi día: pendientes ordenados por urgencia, con el toque a un clic ----------
 function renderToday() {
-  const mine = (l) => (state.me.role === 'vendedor' ? l.assigned_to === state.me.id : true);
+  // Mi día es de quien atiende leads: solo los suyos (el panorama del equipo está en Equipo hoy).
+  const mine = (l) => (sells() ? l.assigned_to === state.me.id : true);
   // Lo que pidió el gerente va primero y no se repite abajo.
   const requested = state.leads.filter(mine).filter((l) => l.manager_request)
     .map((l) => ({ l, a: nextAction(l) || { kind: 'seguimiento', label: 'Seguimiento', days: 0, due: new Date() }, req: true }));
@@ -595,7 +599,7 @@ function renderToday() {
     declinado_perfil: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
     declinado_sin: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
   };
-  const canTouch = (l) => canEditLead(l);
+  const canTouch = (l) => sells() && l.assigned_to === state.me.id; // igual que el servidor
   const row = ({ l, a, req }) => {
     const outcomes = outcomesFor(l);
     return `<div class="today-row" data-id="${l.id}">
@@ -613,7 +617,8 @@ function renderToday() {
         : `<div class="today-actions">
           ${callButton(l, true)}${waButton(l, true)}
           <select class="small-select" data-channel aria-label="Medio">${state.meta.touches.channels.map((c) => `<option value="${c}">${esc(label(c))}</option>`).join('')}</select>
-          ${outcomes.map((o) => `<button type="button" class="outcome small ${o}" data-outcome="${o}">${esc(state.meta.touches.outcomes[o])}</button>`).join('')}
+          ${outcomes.slice(0, 4).map((o) => `<button type="button" class="outcome small ${o}" data-outcome="${o}">${esc(state.meta.touches.outcomes[o])}</button>`).join('')}
+          ${outcomes.length > 4 ? `<button type="button" class="ghost small" data-open="${l.id}">Otro…</button>` : ''}
         </div>`}
     </div>`;
   };
@@ -637,7 +642,7 @@ function renderToday() {
       ${free.length && canAssign() ? `<button type="button" class="ghost small" id="today-assign">${free.length} sin asignar · Asignar</button>` : ''}
       <span class="spacer"></span>
       <input type="search" id="today-q" class="today-search" placeholder="Buscar cliente por nombre o teléfono" aria-label="Buscar cliente" autocomplete="off">
-      ${can('vendedor') ? '<button type="button" id="today-new">+ Lead</button>' : ''}
+      ${sells() ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
     <div id="today-results" class="today-results hidden" role="region" aria-live="polite" aria-label="Resultados de la búsqueda"></div>
     ${requested.length ? `<section class="card today-group requests">${cardTitle('sparkles', 'var(--accent)', `Pedidos del gerente (${requested.length})`,
@@ -724,14 +729,15 @@ function wirePriceFields(root, amountName) {
 // Registra un toque (desde Mi día o la ficha) pidiendo en un solo paso lo que haga falta según el resultado.
 // Freno al doble clic: mientras un toque de un lead se está guardando, no se manda otro.
 const touchBusy = new Set();
-async function registerTouch(l, channel, outcome) {
+// extra: lo que ya se capturó antes de elegir el resultado (una respuesta del perfil, una nota): va en el mismo toque.
+async function registerTouch(l, channel, outcome, extra = {}) {
   if (touchBusy.has(l.id)) return false;
   touchBusy.add(l.id);
-  try { return await registerTouchOnce(l, channel, outcome); } finally { touchBusy.delete(l.id); }
+  try { return await registerTouchOnce(l, channel, outcome, extra); } finally { touchBusy.delete(l.id); }
 }
-async function registerTouchOnce(l, channel, outcome) {
+async function registerTouchOnce(l, channel, outcome, extra = {}) {
   // Mismo identificador si se reintenta: el servidor no lo registra dos veces.
-  const body = { channel, outcome, request_id: newRequestId() };
+  const body = { channel, outcome, request_id: newRequestId(), ...extra };
   const forms = {
     cumple: ['Cumple perfil. Si puedes, responde (un toque cada una):', `${quickProfileFields(l)}${agreementFields()}`],
     conversacion: ['Contestó. ¿Qué quedaron?', agreementFields()],
@@ -743,6 +749,11 @@ async function registerTouchOnce(l, channel, outcome) {
   };
   if (forms[outcome]) {
     const pending = askForm(forms[outcome][0], forms[outcome][1]);
+    // Lo ya capturado aparece en el recuadro para no escribirlo dos veces.
+    for (const [k, val] of Object.entries(extra)) {
+      const input = $(`#modal-extra [name="${k}"]:not([type=radio])`); if (input) input.value = val;
+      const radio = $(`#modal-extra input[type=radio][name="${k}"][value="${val}"]`); if (radio) radio.checked = true;
+    }
     if (outcome === 'cotizado') wirePriceFields($('#modal-extra'), 'quote_amount');
     if (outcome === 'vendido') wirePriceFields($('#modal-extra'), 'sale_amount');
     const v = await pending;
@@ -1528,7 +1539,7 @@ async function openLead(id) {
   const [l, touches] = await Promise.all([api(`/api/leads/${id}`), api(`/api/leads/${id}/touches`)]);
   const ro = l.can_edit ? '' : 'disabled';
   const roOrigin = l.can_edit_origin ? '' : 'disabled';
-  const sellers = state.users.filter((u) => (u.active && u.role === 'vendedor') || u.id === l.assigned_to);
+  const sellers = state.users.filter((u) => (u.active && (u.role === 'vendedor' || u.can_sell)) || u.id === l.assigned_to);
 
   const adLine = [l.utm_content && `Anuncio: ${l.utm_content}`, l.utm_source && [l.utm_source, l.utm_medium].filter(Boolean).join(' / ')].filter(Boolean).join(' · ');
   openDrawer(`
@@ -1628,7 +1639,13 @@ async function openLead(id) {
     if (text) { await sendRequest(text); toast('Pedido enviado al vendedor', 'ok'); }
   });
   $('#req-clear')?.addEventListener('click', () => sendRequest(''));
+  const touchChannel = () => $('#drawer-body input[name=touch-channel]:checked')?.value || state.meta.touches.channels[0];
   document.querySelectorAll('#drawer-body [data-qp]').forEach((b) => b.addEventListener('click', async () => {
+    // Responder el perfil de un lead que aún no contestaba = se habló con él: se registra como toque en ese momento.
+    if (l.can_touch && !l.contacted_at && l.status === 'nuevo' && l[b.dataset.qp] !== b.dataset.v) {
+      if (await registerTouch(l, touchChannel(), 'conversacion', { [b.dataset.qp]: b.dataset.v })) openLead(l.id);
+      return;
+    }
     try {
       await api(`/api/leads/${l.id}`, { method: 'PATCH', body: { [b.dataset.qp]: l[b.dataset.qp] === b.dataset.v ? null : b.dataset.v } });
       openLead(l.id);
@@ -1683,6 +1700,18 @@ async function openLead(id) {
     const content = e.target.content.value.trim();
     if (!content) return;
     const btn = e.target.querySelector('button[type=submit]');
+    // Si la nota es de una llamada o mensaje con el cliente, se registra como toque (y mueve la etapa).
+    if (l.can_touch && ['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status)) {
+      const n = (l.touch_count || 0) + 1;
+      const opts = [`Sí, contestó (registrar toque ${n})`, `No contestó (registrar toque ${n})`, 'Solo guardar la nota'];
+      const pick = await ask('¿Esta nota es de un contacto con el cliente?', { options: opts, okLabel: 'Continuar' });
+      if (pick === null) return;
+      if (pick !== opts[2]) {
+        const outcome = pick === opts[1] ? 'sin_respuesta' : l.status === 'nuevo' ? 'conversacion' : 'seguimiento';
+        if (await registerTouch(l, touchChannel(), outcome, { note: content })) openLead(l.id);
+        return;
+      }
+    }
     btn.disabled = true;
     try {
       await api(`/api/leads/${l.id}/notes`, { method: 'POST', body: { content } });
@@ -2141,6 +2170,7 @@ async function renderUsers() {
         <label>Email <input name="email" type="email" required></label>
         <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
         <label class="inline-check" id="op-question"><input type="checkbox" name="can_assign" value="1"> También asigna leads</label>
+        <label class="inline-check" id="sell-question"><input type="checkbox" name="can_sell" value="1"> También atiende leads</label>
         <button type="submit" style="flex:0 0 auto">Crear e invitar</button>
       </form>
       <p class="error" id="user-error"></p>
@@ -2153,11 +2183,12 @@ async function renderUsers() {
       <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el gerente en un equipo chico).
         Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo.</p>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Asigna leads</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones extra</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
-      <td>${esc(u.name)}${u.role === 'vendedor' && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
+      <td>${esc(u.name)}${(u.role === 'vendedor' || u.can_sell) && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
       <td><select data-f="role" aria-label="Rol">${roleOpts(u.role)}</select></td>
-      <td>${u.role === 'operador' ? '<span class="muted">Es su trabajo</span>' : `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>`}</td>
+      <td>${u.role === 'operador' ? '<span class="muted">Asignar es su trabajo</span>' : `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>`}
+        ${['vendedor', 'analista'].includes(u.role) ? '' : `<br><label class="inline-check"><input type="checkbox" data-f="can_sell" ${u.can_sell ? 'checked' : ''}> También atiende leads</label>`}</td>
       <td>${status(u)}</td>
       <td><input type="checkbox" data-f="active" aria-label="Activo" ${u.active ? 'checked' : ''}></td>
       <td>${u.active && u.id !== state.me.id ? `<button class="ghost small" data-f="link">${u.pendiente ? 'Reenviar invitación' : 'Link para contraseña nueva'}</button>` : ''}</td>
@@ -2170,6 +2201,9 @@ async function renderUsers() {
     const isCoord = roleSel.value === 'operador';
     $('#op-question').classList.toggle('hidden', isCoord);
     const box = $('#op-question input'); box.disabled = isCoord; if (isCoord) box.checked = false;
+    const noSell = ['vendedor', 'analista'].includes(roleSel.value);
+    $('#sell-question').classList.toggle('hidden', noSell);
+    const sellBox = $('#sell-question input'); sellBox.disabled = noSell; if (noSell) sellBox.checked = false;
   };
   roleSel.addEventListener('change', syncQuestion); syncQuestion();
   $('#user-form').addEventListener('submit', async (e) => {
@@ -2191,7 +2225,7 @@ async function renderUsers() {
     const u = state.users.find((x) => String(x.id) === tr.dataset.id);
     // Si deja de ser vendedor activo y tiene leads en curso, se avisa que quedarán sin asignar.
     const confirmRelease = async (el, restore) => {
-      if (u.role !== 'vendedor' || !u.active || !u.en_curso) return true;
+      if (!(u.role === 'vendedor' || u.can_sell) || !u.active || !u.en_curso) return true;
       const ok = await ask(`${u.name} tiene ${u.en_curso} ${u.en_curso === 1 ? 'lead en curso' : 'leads en curso'}. Quedarán sin asignar para repartirlos en Asignación. ¿Continuar?`, { okLabel: 'Continuar' });
       if (!ok) restore(el);
       return ok;
@@ -2200,6 +2234,11 @@ async function renderUsers() {
     $('[data-f=role]', tr).addEventListener('change', async (e) => {
       if (e.target.value !== 'vendedor' && !await confirmRelease(e.target, (el) => { el.value = u.role; })) return;
       released(await patch({ role: e.target.value }));
+    });
+    $('[data-f=can_sell]', tr)?.addEventListener('change', async (e) => {
+      if (!e.target.checked && !await confirmRelease(e.target, (el) => { el.checked = true; })) return;
+      released(await patch({ can_sell: e.target.checked }));
+      if (String(u.id) === String(state.me.id)) { state.me = await api('/api/me'); start(); }
     });
     $('[data-f=can_assign]', tr)?.addEventListener('change', async (e) => {
       await patch({ can_assign: e.target.checked });

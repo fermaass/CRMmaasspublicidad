@@ -46,6 +46,8 @@ const AUDIENCES = {
 const canAssign = (user) => Boolean(user && (user.role === 'operador' || user.can_assign));
 // Al coordinador no le hace falta la casilla: asignar es su rol.
 const assignFlag = (role, value) => (role !== 'operador' && value ? 1 : 0);
+// "También atiende leads": el vendedor ya lo hace por su rol y el analista es solo lectura.
+const sellFlag = (role, value) => (!['vendedor', 'analista'].includes(role) && value ? 1 : 0);
 const canReassign = (user) => Boolean(user && (user.role === 'gerente' || canAssign(user)));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
@@ -166,7 +168,7 @@ function createApp({ db, config }) {
     if (userCount() > 0) return res.status(409).json({ error: 'La app ya está configurada' });
     const ip = clientIp(req);
     if (setupTries.blocked(ip)) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos.' });
-    const { name, email, password, can_assign: operates, company, setup_code: code } = req.body || {};
+    const { name, email, password, can_assign: operates, can_sell: sellsToo, company, setup_code: code } = req.body || {};
     const expected = normCode(setupCode(db, config));
     const given = normCode(code);
     const ok = given.length === expected.length && require('node:crypto').timingSafeEqual(Buffer.from(given), Buffer.from(expected));
@@ -175,12 +177,12 @@ function createApp({ db, config }) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email inválido' });
     if (password !== undefined && password !== '' && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     setSetting(db, 'company_name', String(company).trim().slice(0, 80));
-    const id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
-      .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', 'gerente', assignFlag('gerente', operates)).lastInsertRowid);
+    const id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign, can_sell) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', 'gerente', assignFlag('gerente', operates), sellFlag('gerente', sellsToo)).lastInsertRowid);
     db.prepare("DELETE FROM settings WHERE key = 'setup_code'").run();
     if (!password) return res.status(201).json({ invited: true, name, email, ...accessLink(req, id, 'invite') });
     startSession(req, res, id);
-    res.status(201).json({ id, name, email, role: 'gerente', can_assign: assignFlag('gerente', operates) });
+    res.status(201).json({ id, name, email, role: 'gerente', can_assign: assignFlag('gerente', operates), sells: sellFlag('gerente', sellsToo) });
   });
 
   // ---------- Sesión ----------
@@ -207,7 +209,7 @@ function createApp({ db, config }) {
     loginFails.delete(key);
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
     startSession(req, res, user.id);
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: canAssign(user) ? 1 : 0 });
+    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, can_assign: canAssign(user) ? 1 : 0, sells: user.role === 'vendedor' || user.can_sell ? 1 : 0 });
   });
 
   app.post('/api/logout', (req, res) => {
@@ -256,7 +258,7 @@ function createApp({ db, config }) {
     loginFails.delete(String(t.email).toLowerCase());
     startSession(req, res, t.user_id);
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(t.user_id);
-    res.json({ id: u.id, name: u.name, email: u.email, role: u.role, can_assign: canAssign(u) ? 1 : 0 });
+    res.json({ id: u.id, name: u.name, email: u.email, role: u.role, can_assign: canAssign(u) ? 1 : 0, sells: u.role === 'vendedor' || u.can_sell ? 1 : 0 });
   });
 
   // ---------- Empresa: nombre, logo y cómo se llama lo que vende (cada instalación es de una empresa) ----------
@@ -444,9 +446,9 @@ function createApp({ db, config }) {
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
     // Los demás solo necesitan nombres y roles (listas de vendedores); correos y accesos son del gerente.
-    if (req.user.role !== 'gerente') return res.json(db.prepare('SELECT id, name, role, active FROM users ORDER BY active DESC, name').all());
+    if (req.user.role !== 'gerente') return res.json(db.prepare('SELECT id, name, role, active, can_sell FROM users ORDER BY active DESC, name').all());
     // pendiente = todavía no abre su invitación (no tiene contraseña).
-    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, created_at, last_login_at, password_hash = '' AS pendiente,
+    res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, can_sell, created_at, last_login_at, password_hash = '' AS pendiente,
       (SELECT MAX(expires_at) FROM user_tokens t WHERE t.user_id = users.id AND t.used_at IS NULL) AS link_vence,
       (SELECT COUNT(*) FROM leads l WHERE l.assigned_to = users.id AND l.status IN ('nuevo', 'nuevo_perfil', 'cotizando')) AS en_curso
       FROM users ORDER BY active DESC, name`).all());
@@ -454,14 +456,14 @@ function createApp({ db, config }) {
 
   app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
     // Desde la pantalla se da de alta sin contraseña y se manda el link de invitación; con password (scripts de carga) queda activo.
-    const { name, email, password, role, can_assign: operates } = req.body || {};
+    const { name, email, password, role, can_assign: operates, can_sell: sellsToo } = req.body || {};
     if (!name || !email || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email inválido' });
     if (password !== undefined && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     let id;
     try {
-      id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign) VALUES (?, ?, ?, ?, ?)')
-        .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', role, assignFlag(role, operates)).lastInsertRowid);
+      id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign, can_sell) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', role, assignFlag(role, operates), sellFlag(role, sellsToo)).lastInsertRowid);
     } catch {
       return res.status(409).json({ error: 'Ya existe un usuario con ese email' });
     }
@@ -480,7 +482,7 @@ function createApp({ db, config }) {
     const id = Number(req.params.id);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     if (!user) return res.status(404).json({ error: 'No existe' });
-    const { name, role, active, password, can_assign: operates } = req.body || {};
+    const { name, role, active, password, can_assign: operates, can_sell: sellsToo } = req.body || {};
     if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: 'Rol inválido' });
     if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
       return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de gerente' });
@@ -493,10 +495,14 @@ function createApp({ db, config }) {
     // "También asigna leads": se conserva al cambiar de rol (salvo al pasar a Coordinador de leads, donde es su trabajo).
     const newRole = role || user.role;
     const flag = operates !== undefined ? assignFlag(newRole, operates) : assignFlag(newRole, user.can_assign);
-    db.prepare('UPDATE users SET can_assign = ? WHERE id = ?').run(flag, id);
+    db.prepare('UPDATE users SET can_assign = ?, can_sell = ? WHERE id = ?')
+      .run(flag, sellFlag(newRole, sellsToo !== undefined ? sellsToo : user.can_sell), id);
     if (active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     // Si deja de ser vendedor activo, sus leads en curso vuelven a "Sin asignar" para no perderse.
-    const leftSales = user.role === 'vendedor' && user.active && (active === false || (role && role !== 'vendedor'));
+    // Si deja de atender leads (desactivado, otro rol o se le quita "También atiende leads"), sus leads en curso se liberan.
+    const sold = user.role === 'vendedor' || user.can_sell;
+    const sellsNow = db.prepare("SELECT (role = 'vendedor' OR can_sell = 1) AS s FROM users WHERE id = ?").get(id).s;
+    const leftSales = sold && user.active && (active === false || !sellsNow);
     const released = leftSales ? releaseLeads(db, id, req.user.id, user.name) : 0;
     res.json({ ok: true, released });
   });
@@ -551,11 +557,12 @@ function createApp({ db, config }) {
   // Avance de ventas (etapa, toques, montos): el gerente y el vendedor dueño del lead.
   // Marketing no registra toques ni mueve etapas, para no ensuciar los números de ventas; solo corrige el origen y los datos de contacto.
   // El gerente puede corregir (etapa, montos), pero los toques solo los registra el vendedor dueño del lead.
+  // Con "También atiende leads" (sells), el gerente u otro rol trabaja como vendedor los leads que tiene asignados.
   function canEdit(user, lead) {
     if (user.role === 'gerente') return true;
-    return user.role === 'vendedor' && lead.assigned_to === user.id;
+    return Boolean(user.sells) && lead.assigned_to === user.id;
   }
-  const canTouch = (user, lead) => user.role === 'vendedor' && lead.assigned_to === user.id;
+  const canTouch = (user, lead) => Boolean(user.sells) && lead.assigned_to === user.id;
   const canEditOrigin = (user) => EDITORS.includes(user.role) || canAssign(user);
   const ORIGIN_FIELDS = ['campaign', 'channel_id', 'product_id', 'name', 'phone', 'email'];
 
@@ -634,7 +641,7 @@ function createApp({ db, config }) {
       // Quien administra los leads elige al capturarlo quién le da seguimiento.
       let seller = null;
       if (b.assigned_to && canReassign(req.user)) {
-        seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(Number(b.assigned_to));
+        seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND (role = 'vendedor' OR can_sell = 1)").get(Number(b.assigned_to));
         if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
       }
       // Si el contacto ya existía, ingestLead lo registra en su historial en vez de duplicarlo.
@@ -649,12 +656,12 @@ function createApp({ db, config }) {
           return res.status(409).json({ error: `Este contacto ya lo atiende ${owner.name}. Se dejó registrado en su historial.` });
         }
         if (seller && !owner.assigned_to) assignLead(result.id, seller, req.user.id);
-        else if (req.user.role === 'vendedor' && !owner.assigned_to) assignLead(result.id, req.user, req.user.id);
+        else if (req.user.sells && !owner.assigned_to) assignLead(result.id, req.user, req.user.id);
         else autoAssign(db, result.id);
         return res.json({ id: result.id, existing: true });
       }
       if (seller) assignLead(result.id, seller, req.user.id);
-      else if (req.user.role === 'vendedor') {
+      else if (req.user.sells) {
         db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
       } else autoAssign(db, result.id);
       res.status(201).json({ id: result.id, repeat_of: result.repeat_of });
@@ -697,7 +704,7 @@ function createApp({ db, config }) {
       }
       return res.json({ ok: true });
     }
-    const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(Number(to));
+    const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND (role = 'vendedor' OR can_sell = 1)").get(Number(to));
     if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
     if (seller.id !== lead.assigned_to) assignLead(lead.id, seller, req.user.id);
     res.json({ ok: true });
@@ -795,7 +802,7 @@ function createApp({ db, config }) {
   const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
   app.get('/api/team', auth.requireRole('gerente', 'analista'), (req, res) => {
     const nowMs = Date.now();
-    const sellers = db.prepare("SELECT id, name, can_assign FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY name").all();
+    const sellers = db.prepare("SELECT id, name, can_assign FROM users WHERE (role = 'vendedor' OR can_sell = 1) AND active = 1 ORDER BY name").all();
     // Vendedores que también asignan: cuántos leads repartieron en 7 días y cuántos se quedaron ellos (para que se note si se quedan de más).
     const assignEvents = db.prepare(`SELECT user_id, content FROM lead_events WHERE type = 'asignacion' AND content LIKE 'Asignado%' AND created_at >= ?`)
       .all(new Date(nowMs - 7 * 86400e3).toISOString());
@@ -907,7 +914,7 @@ function createApp({ db, config }) {
   // Aplica cambios a un lead (desde la ficha, el tablero o un toque) y registra los hitos del embudo.
   // Devuelve { status, error } si algo no es válido.
   function updateLead(user, lead, b) {
-    let next; let channelId; let productId; let campaign; let saleAmount; let quoteAmount;
+    let next; let channelId; let productId; let campaign; let saleAmount; let quoteAmount; let autoProfiled = false;
     try {
       quoteAmount = b.quote_amount !== undefined ? money(b.quote_amount) : lead.quote_amount;
       if (b.recontact_at && !isDate(b.recontact_at)) throw new Error('Fecha inválida');
@@ -919,6 +926,16 @@ function createApp({ db, config }) {
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
       saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
       next = resolveStatusProfile(lead, { status: b.status, profile: b.profile });
+      // Si se capturan respuestas del perfil rápido es porque se habló con el cliente: cuenta como que contestó.
+      const answering = Object.keys(QUICK_PROFILE).some((k) => b[k]);
+      if (answering && !lead.contacted_at && b.contacted === undefined) b = { ...b, contacted: true };
+      // Habla con quien decide y tiene presupuesto: cumple perfil y pasa a esa etapa sola (se puede corregir a mano).
+      const ans = (k) => (b[k] !== undefined ? b[k] : lead[k]);
+      if (answering && next.status === 'nuevo' && next.profile === 'sin_perfilar' && b.profile === undefined
+        && ans('decision_maker') === 'si' && ans('budget_status') === 'si') {
+        next = resolveStatusProfile(lead, { profile: 'cumple' });
+        autoProfiled = true;
+      }
       channelId = catalogId('canal', b.channel_id) ?? (b.channel_id === undefined ? lead.channel_id : null);
       productId = catalogId('producto', b.product_id) ?? (b.product_id === undefined ? lead.product_id : null);
     } catch (err) {
@@ -1020,7 +1037,9 @@ function createApp({ db, config }) {
       addEvent(db, lead.id, user.id, 'estado',
         `${LABELS[lead.status]} → ${LABELS[next.status]}${declineReason ? ` (motivo: ${declineReason})` : ''}`);
     }
-    if (next.profile !== lead.profile) addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${LABELS[next.profile]}`);
+    if (next.profile !== lead.profile) {
+      addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${LABELS[next.profile]}${autoProfiled ? ' (habla con quien decide y tiene presupuesto)' : ''}`);
+    }
     if (assigned !== lead.assigned_to) {
       const name = assigned ? db.prepare('SELECT name FROM users WHERE id = ?').get(assigned).name : 'nadie';
       addEvent(db, lead.id, user.id, 'asignacion', `Asignado a ${name}`);
@@ -1078,7 +1097,10 @@ function createApp({ db, config }) {
       if (req.body.quote_amount != null && req.body.quote_amount !== '') changes.quote_amount = req.body.quote_amount;
       if (lead.profile === 'sin_perfilar') changes.profile = 'cumple';
     }
-    if (outcome === 'vendido') Object.assign(changes, { status: 'vendido', sale_amount: req.body.sale_amount ?? undefined });
+    if (outcome === 'vendido') {
+      Object.assign(changes, { status: 'vendido', sale_amount: req.body.sale_amount ?? undefined });
+      if (lead.profile === 'sin_perfilar') changes.profile = 'cumple';
+    }
     // Al cotizar o vender se puede elegir el producto y la cantidad (con precio fijo, el monto sale de ahí).
     if (['cotizado', 'vendido'].includes(outcome)) {
       if (req.body.product_id !== undefined && req.body.product_id !== '') changes.product_id = req.body.product_id;
@@ -1349,7 +1371,7 @@ function createApp({ db, config }) {
     const F = from.toISOString(); const T = to.toISOString();
     const seller = req.user.role === 'vendedor';
     const coord = req.user.role === 'operador';
-    const sellers = db.prepare(`SELECT id, name, active FROM users WHERE role = 'vendedor' ${seller ? 'AND id = ?' : ''}
+    const sellers = db.prepare(`SELECT id, name, active FROM users WHERE (role = 'vendedor' OR can_sell = 1) ${seller ? 'AND id = ?' : ''}
       AND (active = 1 OR id IN (SELECT assigned_to FROM leads WHERE assigned_at >= ? AND assigned_at < ?)) ORDER BY name`)
       .all(...(seller ? [req.user.id] : []), F, T);
     const ids = sellers.map((u) => u.id);

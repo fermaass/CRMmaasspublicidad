@@ -46,7 +46,8 @@ function clearCookie() {
 
 function authMiddleware(db) {
   const find = db.prepare(`
-    SELECT u.id, u.name, u.email, u.role, (u.role = 'operador' OR u.can_assign = 1) AS can_assign FROM sessions s
+    SELECT u.id, u.name, u.email, u.role, (u.role = 'operador' OR u.can_assign = 1) AS can_assign,
+      (u.role = 'vendedor' OR u.can_sell = 1) AS sells FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token = ? AND s.expires_at > ? AND u.active = 1`);
   return (req, res, next) => {

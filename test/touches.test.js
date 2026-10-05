@@ -37,7 +37,7 @@ test('los toques mueven la etapa: responde en el 2, cumple perfil, se cotiza en 
   assert.equal((await touch(id, 'sin_respuesta')).status, 404, 'sin asignar el vendedor ni lo ve');
   await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
 
-  assert.equal((await touch(id, 'cotizado')).status, 400, 'en Nuevo no se puede cotizar directo');
+  assert.equal((await touch(id, 'cotizado')).status, 400, 'cotizar sin monto no se registra');
   assert.equal((await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: ana, body: { outcome: 'sin_respuesta' } })).status, 400);
 
   await touch(id, 'sin_respuesta');
@@ -140,4 +140,68 @@ test('si ya contestó y deja de responder 3 seguimientos seguidos, se declina co
   // Al reactivarlo la cuenta vuelve a cero
   await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { status: 'nuevo_perfil' } });
   assert.equal((await lead(id)).silent_streak, 0);
+});
+
+test('caso real: el vendedor responde el perfil y escribe una nota sin registrar toque; luego cotiza desde el primer contacto', async () => {
+  const id = await newLead('5510000090');
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  // Responder el perfil rápido desde la ficha (como toque, que es lo que hace ahora la ficha).
+  let r = await touch(id, 'conversacion', { decision_maker: 'si', note: 'Le interesa para noviembre' });
+  assert.equal(r.status, 201); assert.equal(r.json.n, 1, 'cuenta como toque 1');
+  let l = await lead(id);
+  assert.equal(F.stageOf(l), 'contesto'); assert.ok(l.contacted_at);
+  // Segunda respuesta guardada directo (ya contestó): con decide + presupuesto pasa sola a Cumple perfil.
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: ana, body: { budget_status: 'si' } });
+  l = await lead(id);
+  assert.equal(l.status, 'nuevo_perfil'); assert.equal(l.profile, 'cumple'); assert.ok(l.profiled_at);
+  assert.ok(l.events.some((e) => /habla con quien decide y tiene presupuesto/.test(e.content)));
+  // Cotizar en el siguiente toque.
+  r = await touch(id, 'cotizado', { quote_amount: '25000' });
+  assert.equal(r.status, 201); assert.equal(r.json.n, 2);
+  l = await lead(id);
+  assert.equal(l.status, 'cotizando'); assert.equal(l.quote_amount, 25000); assert.equal(l.quote_touch, 2);
+});
+
+test('perfil capturado sin toque en un lead nuevo: cuenta como que contestó', async () => {
+  const id = await newLead('5510000098');
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: ana, body: { start_window: 'mes' } });
+  const l = await lead(id);
+  assert.ok(l.contacted_at); assert.equal(F.stageOf(l), 'contesto');
+});
+
+test('desde el primer toque se puede cotizar o cerrar', async () => {
+  const id = await newLead('5510000097');
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  let r = await touch(id, 'cotizado', { quote_amount: '18000' });
+  assert.equal(r.status, 201); assert.equal(r.json.n, 1);
+  let l = await lead(id);
+  assert.equal(l.status, 'cotizando'); assert.equal(l.profile, 'cumple'); assert.ok(l.contacted_at); assert.equal(l.response_touch, 1);
+  const id2 = await newLead('5510000096');
+  await req(`/api/leads/${id2}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  r = await touch(id2, 'vendido', { sale_amount: '9000' });
+  assert.equal(r.status, 201);
+  l = await lead(id2);
+  assert.equal(l.status, 'vendido'); assert.equal(l.profile, 'cumple'); assert.ok(l.quoted_at && l.won_at);
+});
+
+test('gerente con "También atiende leads": se le asignan leads y registra sus toques; sin la casilla, no', async () => {
+  const id = await newLead('5510000080');
+  // Sin la casilla: no se le puede asignar y no registra toques.
+  const me = (await req('/api/me', { cookie: gerente })).json;
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: me.id } })).status, 400);
+  // Con la casilla.
+  assert.equal((await req(`/api/users/${me.id}`, { method: 'PATCH', cookie: gerente, body: { can_sell: true, can_assign: true } })).status, 200);
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: me.id } })).status, 200);
+  const r = await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: gerente, body: { channel: 'whatsapp', outcome: 'conversacion', decision_maker: 'si', budget_status: 'si' } });
+  assert.equal(r.status, 201); assert.equal(r.json.n, 1);
+  const l = await lead(id);
+  assert.equal(l.status, 'nuevo_perfil', 'decide y tiene presupuesto: Cumple perfil'); assert.ok(l.contacted_at);
+  // En la carga de trabajo aparece como vendedor.
+  const w = (await req('/api/workload', { cookie: gerente })).json;
+  assert.ok(w.sellers.some((s) => s.id === me.id));
+  // Un lead de Ana no lo toca el gerente.
+  const other = await newLead('5510000081');
+  await req(`/api/leads/${other}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: anaId } });
+  assert.equal((await req(`/api/leads/${other}/touches`, { method: 'POST', cookie: gerente, body: { channel: 'llamada', outcome: 'sin_respuesta' } })).status, 403);
 });

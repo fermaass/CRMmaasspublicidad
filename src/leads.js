@@ -79,7 +79,7 @@ function ingestLead(db, data) {
   addEvent(db, id, data.userId, 'creado', `Lead recibido por ${LABELS[lead.source] || lead.source}`);
   if (repeatOf) {
     // Se queda con el vendedor que ya lo atendió (si sigue activo): conoce al cliente.
-    const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND role = 'vendedor'").get(repeatOf.assigned_to);
+    const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND (role = 'vendedor' OR can_sell = 1)").get(repeatOf.assigned_to);
     db.prepare('UPDATE leads SET name = COALESCE(name, ?), email = COALESCE(email, ?), product_id = COALESCE(product_id, ?) WHERE id = ?')
       .run(repeatOf.name, repeatOf.email, repeatOf.product_id, id);
     addEvent(db, id, data.userId, 'contacto', `Ya es cliente: compró antes (lead #${repeatOf.id}). Esta es una oportunidad nueva.`);
@@ -102,7 +102,7 @@ function workload(db) {
       COUNT(CASE WHEN l.status = 'cotizando' THEN 1 END) AS cotizando,
       COUNT(CASE WHEN l.assigned_at >= ? THEN 1 END) AS asignados_semana
     FROM users u LEFT JOIN leads l ON l.assigned_to = u.id
-    WHERE u.role = 'vendedor' AND u.active = 1 GROUP BY u.id ORDER BY u.name`).all(new Date(Date.now() - 7 * FOLLOWUP.DAY).toISOString());
+    WHERE (u.role = 'vendedor' OR u.can_sell = 1) AND u.active = 1 GROUP BY u.id ORDER BY u.name`).all(new Date(Date.now() - 7 * FOLLOWUP.DAY).toISOString());
   const vencidos = {};
   for (const l of db.prepare(`SELECT * FROM leads WHERE assigned_to IS NOT NULL AND status IN ${ACTIVE}`).all()) {
     const a = FOLLOWUP.nextAction(l);

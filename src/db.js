@@ -39,8 +39,9 @@ const TOUCH_OUTCOMES = {
 };
 // Qué resultados tienen sentido según la etapa en que va el lead.
 const OUTCOMES_BY_STATUS = {
-  nuevo: ['sin_respuesta', 'cumple', 'no_cumple', 'conversacion'],
-  nuevo_perfil: ['sin_respuesta', 'seguimiento', 'cotizado', 'rechazo'],
+  // Desde el primer toque se puede cotizar o cerrar: el lead salta a esa etapa (los primeros cuatro son los que se ven en Mi día).
+  nuevo: ['sin_respuesta', 'conversacion', 'cumple', 'cotizado', 'no_cumple', 'rechazo', 'vendido'],
+  nuevo_perfil: ['sin_respuesta', 'seguimiento', 'cotizado', 'rechazo', 'vendido'],
   cotizando: ['sin_respuesta', 'seguimiento', 'vendido', 'rechazo'],
   vendido: ['referidos', 'renovo', 'no_renueva'], // postventa: cuál aplica depende de lo que toque (ver FOLLOWUP.nextAction)
 };
@@ -245,6 +246,8 @@ function openDb(dbPath) {
 
   // Acceso por invitación: último acceso de cada usuario y links de un solo uso (invitación o nueva contraseña).
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+  // "También atiende leads": un gerente (u otro rol) que además trabaja sus propios leads como vendedor.
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'can_sell')) db.exec('ALTER TABLE users ADD COLUMN can_sell INTEGER NOT NULL DEFAULT 0');
   db.exec(`CREATE TABLE IF NOT EXISTS user_tokens (
       token_hash TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
