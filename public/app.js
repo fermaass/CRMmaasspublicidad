@@ -39,7 +39,8 @@ const captchaWidgets = {};
 function setupCaptcha() {
   const key = state.company.captcha_site_key;
   if (!key) return;
-  const render = () => document.querySelectorAll('.captcha-box').forEach((el) => {
+  // Solo se dibujan las casillas que el servidor pidió (después de intentos fallidos).
+  const render = () => document.querySelectorAll('.captcha-box.needed').forEach((el) => {
     if (el.dataset.ready || !el.offsetParent) return;
     el.dataset.ready = '1';
     captchaWidgets[el.id] = window.turnstile.render(el, {
@@ -72,6 +73,12 @@ function captchaHelp(code) {
   return `${base} Recarga la página. Si sigue: en iPhone desactiva los bloqueadores de contenido y "Ocultar dirección IP" para este sitio (botón aA de Safari), o prueba en Chrome. Código ${c}.`;
 }
 const captchaToken = (id) => (window.turnstile && captchaWidgets[id] !== undefined ? window.turnstile.getResponse(captchaWidgets[id]) || undefined : undefined);
+// El servidor pide la verificación (respuesta con captcha: true): se muestra la casilla de ese formulario.
+function askCaptcha(id, err) {
+  if (!err?.data?.captcha) return;
+  const el = document.getElementById(id);
+  if (el && !el.classList.contains('needed')) { el.classList.add('needed'); setupCaptcha(); }
+}
 const captchaReset = (id) => { if (window.turnstile && captchaWidgets[id] !== undefined) window.turnstile.reset(captchaWidgets[id]); };
 // ¿Sus clientes renuevan? (campañas, contratos, membresías). Si no, no se pregunta cuándo termina ni se avisa la renovación.
 const renewals = () => state.company.renewals !== false;
@@ -236,6 +243,7 @@ $('#login-form').addEventListener('submit', async (e) => {
     start();
   } catch (err) {
     $('#login-error').textContent = err.message;
+    askCaptcha('cap-login', err);
     captchaReset('cap-login'); // cada verificación sirve una sola vez
   }
 });
@@ -269,7 +277,7 @@ async function showAccess(token) {
       $('#access').classList.add('hidden');
       toast('Listo: ya tienes acceso', 'ok');
       start();
-    } catch (err) { $('#access-error').textContent = err.message; captchaReset('cap-access'); }
+    } catch (err) { $('#access-error').textContent = err.message; askCaptcha('cap-access', err); captchaReset('cap-access'); }
   };
 }
 
@@ -2398,7 +2406,7 @@ $('#setup-form').addEventListener('submit', async (e) => {
     state.me = r;
     state.view = 'settings';
     start();
-  } catch (err) { $('#setup-error').textContent = err.message; captchaReset('cap-setup'); }
+  } catch (err) { $('#setup-error').textContent = err.message; askCaptcha('cap-setup', err); captchaReset('cap-setup'); }
 });
 
 // ---------- Configuración ----------

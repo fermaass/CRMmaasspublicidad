@@ -65,7 +65,7 @@ test('instalar para un cliente: se deja creado su gerente y sale el link para qu
   srv.close();
 });
 
-test('captcha: con claves de Turnstile, entrar pide la verificación y se valida en el servidor', async () => {
+test('captcha: solo se pide después de intentos fallidos y se valida en el servidor', async () => {
   // Verificador falso de Cloudflare: acepta solo el token "bueno".
   const fake = http.createServer((req, res) => {
     let body = ''; req.on('data', (c) => { body += c; });
@@ -73,17 +73,34 @@ test('captcha: con claves de Turnstile, entrar pide la verificación y se valida
       res.end(JSON.stringify({ success: p.get('secret') === 'secreto' && p.get('response') === 'bueno' })); });
   }).listen(0);
   await new Promise((r) => fake.once('listening', r));
-  const srv = createApp({ db: openDb(':memory:'), config: { setupCode: 'C0DE-C0DE', turnstileSiteKey: 'sitio', turnstileSecret: 'secreto',
-    turnstileVerifyUrl: `http://127.0.0.1:${fake.address().port}/` } }).listen(0);
-  await new Promise((r) => srv.once('listening', r));
-  const b = `http://127.0.0.1:${srv.address().port}`;
-  assert.equal((await (await fetch(`${b}/api/company`)).json()).captcha_site_key, 'sitio', 'la pantalla sabe que debe mostrarlo');
+  const mk = async () => {
+    const srv = createApp({ db: openDb(':memory:'), config: { setupCode: 'C0DE-C0DE', turnstileSiteKey: 'sitio', turnstileSecret: 'secreto',
+      turnstileVerifyUrl: `http://127.0.0.1:${fake.address().port}/` } }).listen(0);
+    await new Promise((r) => srv.once('listening', r));
+    return { srv, b: `http://127.0.0.1:${srv.address().port}` };
+  };
   const setup = { name: 'G', email: 'g@c.mx', password: 'clave12345', company: 'C', setup_code: 'C0DE-C0DE' };
-  assert.equal((await post('/api/setup', setup, null, 'POST', b)).status, 400, 'sin captcha no');
-  assert.equal((await post('/api/setup', { ...setup, captcha: 'malo' }, null, 'POST', b)).status, 400);
-  assert.equal((await post('/api/setup', { ...setup, captcha: 'bueno' }, null, 'POST', b)).status, 201);
+
+  // Uso normal: sin intentos fallidos no se pide la casilla.
+  let { srv, b } = await mk();
+  assert.equal((await (await fetch(`${b}/api/company`)).json()).captcha_site_key, 'sitio', 'la pantalla sabe que existe');
+  assert.equal((await post('/api/setup', setup, null, 'POST', b)).status, 201);
+  assert.equal((await post('/api/login', { email: 'g@c.mx', password: 'clave12345' }, null, 'POST', b)).status, 200);
+  // Dos contraseñas equivocadas: desde ahí se pide la verificación, incluso con la contraseña correcta.
+  await post('/api/login', { email: 'g@c.mx', password: 'mala-1' }, null, 'POST', b);
+  const second = await post('/api/login', { email: 'g@c.mx', password: 'mala-2' }, null, 'POST', b);
+  assert.equal((await second.json()).captcha, true, 'avisa a la pantalla que muestre la casilla');
   assert.equal((await post('/api/login', { email: 'g@c.mx', password: 'clave12345' }, null, 'POST', b)).status, 400);
+  assert.equal((await post('/api/login', { email: 'g@c.mx', password: 'clave12345', captcha: 'malo' }, null, 'POST', b)).status, 400);
   assert.equal((await post('/api/login', { email: 'g@c.mx', password: 'clave12345', captcha: 'bueno' }, null, 'POST', b)).status, 200);
+  srv.close();
+
+  // Probar códigos de instalación también activa la verificación.
+  ({ srv, b } = await mk());
+  await post('/api/setup', { ...setup, setup_code: 'MALO-0001' }, null, 'POST', b);
+  await post('/api/setup', { ...setup, setup_code: 'MALO-0002' }, null, 'POST', b);
+  assert.equal((await post('/api/setup', setup, null, 'POST', b)).status, 400, 'tras dos códigos malos pide la casilla');
+  assert.equal((await post('/api/setup', { ...setup, captcha: 'bueno' }, null, 'POST', b)).status, 201);
   srv.close(); fake.close();
 });
 

@@ -66,6 +66,8 @@ const isDateTime = (v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v)) && !N
 
 // Bloqueo por intentos fallidos: 5 seguidos con el mismo email bloquean 15 minutos (en memoria; se reinicia con el servidor).
 const LOGIN_MAX_FAILS = 5; const LOGIN_LOCK_MS = 15 * 60e3;
+// A partir de cuántos intentos fallidos se pide la verificación contra robots.
+const CAPTCHA_AFTER_FAILS = 2;
 const ACCESS_LINK_HOURS = 72;
 const sha256 = (v) => require('node:crypto').createHash('sha256').update(String(v)).digest('hex');
 // IP real del visitante: detrás de Cloudflare viene en CF-Connecting-IP; si no, la que da el proxy de Railway.
@@ -103,10 +105,16 @@ function createApp({ db, config }) {
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3); // 30 intentos fallidos por IP en 15 min
   const setupTries = rateLimiter(10, 15 * 60e3);
-  // Captcha (Cloudflare Turnstile): si hay claves, entrar, crear contraseña y el primer uso piden comprobar que no es un robot.
+  // Captcha (Cloudflare Turnstile), solo cuando hay intentos fallidos: la gente normal entra directo y quien prueba
+  // contraseñas o códigos tiene que comprobar que no es un robot. Así un celular donde la verificación no carga no deja fuera a nadie.
+  const suspicious = rateLimiter(CAPTCHA_AFTER_FAILS - 1, 15 * 60e3); // fallos por conexión
+  const needCaptcha = (req) => Boolean(config.turnstileSecret) && (suspicious.blocked(clientIp(req))
+    || (loginFails.get(String(req.body?.email || '').trim().toLowerCase())?.n || 0) >= CAPTCHA_AFTER_FAILS);
+  const failed = (req) => { suspicious.hit(clientIp(req)); return needCaptcha(req); };
   const captcha = async (req, res, next) => {
     if (!config.turnstileSecret) return next();
     const token = req.body?.captcha;
+    if (!token && !needCaptcha(req)) return next();
     if (!token) return res.status(400).json({ error: 'Confirma que no eres un robot (la casilla de verificación).', captcha: true });
     try {
       const r = await fetch(config.turnstileVerifyUrl || 'https://challenges.cloudflare.com/turnstile/v0/siteverify', {
@@ -172,7 +180,7 @@ function createApp({ db, config }) {
     const expected = normCode(setupCode(db, config));
     const given = normCode(code);
     const ok = given.length === expected.length && require('node:crypto').timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-    if (!ok) { setupTries.hit(ip); return res.status(403).json({ error: 'Código de instalación incorrecto. Está en el registro del servidor (Railway → Deploy Logs) o en la variable SETUP_CODE.' }); }
+    if (!ok) { setupTries.hit(ip); suspicious.hit(ip); return res.status(403).json({ captcha: needCaptcha(req) || undefined, error: 'Código de instalación incorrecto. Está en el registro del servidor (Railway → Deploy Logs) o en la variable SETUP_CODE.' }); }
     if (!name || !email || !String(company || '').trim()) return res.status(400).json({ error: 'Faltan datos' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) return res.status(400).json({ error: 'Email inválido' });
     if (password !== undefined && password !== '' && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
@@ -204,7 +212,8 @@ function createApp({ db, config }) {
       loginByIp.hit(ip);
       const n = (fails?.until && fails.until <= Date.now() ? 0 : fails?.n || 0) + 1; // si ya pasó el bloqueo, cuenta de nuevo
       loginFails.set(key, { n, until: n >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0 });
-      return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele a tu gerente un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos' });
+      return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele a tu gerente un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos',
+        captcha: failed(req) || undefined });
     }
     loginFails.delete(key);
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
@@ -248,7 +257,10 @@ function createApp({ db, config }) {
   });
   app.post('/api/access/:token', captcha, (req, res) => {
     const t = findToken(req.params.token);
-    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) {
+      suspicious.hit(clientIp(req));
+      return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+    }
     const password = String(req.body?.password || '');
     if (password.length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     const ts = new Date().toISOString();

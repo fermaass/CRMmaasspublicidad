@@ -226,7 +226,7 @@ Con las variables `BACKUP_S3_*` (Cloudflare R2 u otro almacenamiento compatible 
 
 ## Seguridad de acceso
 
-- **Captcha** (Cloudflare Turnstile) en entrar, crear contraseña y primer uso, si el servicio tiene sus claves. Para la mayoría es invisible o una casilla.
+- **Captcha** (Cloudflare Turnstile) en entrar, crear contraseña y primer uso, si el servicio tiene sus claves, pero **solo después de 2 intentos fallidos** (contraseña o código equivocados) desde esa conexión o con ese email. Así quien entra normal no lo ve, y un celular donde la verificación no carga no deja fuera a nadie; quien prueba contraseñas sí tiene que pasarla.
 - **Límites:** 5 intentos fallidos bloquean ese email 15 minutos; 30 fallidos desde una misma conexión, 15 minutos. El formulario público acepta hasta 20 envíos por conexión cada 10 minutos.
 - **Código de instalación** para la primera cuenta.
 
