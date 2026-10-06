@@ -42,14 +42,34 @@ function setupCaptcha() {
   const render = () => document.querySelectorAll('.captcha-box').forEach((el) => {
     if (el.dataset.ready || !el.offsetParent) return;
     el.dataset.ready = '1';
-    captchaWidgets[el.id] = window.turnstile.render(el, { sitekey: key, language: 'es', theme: 'light' });
+    captchaWidgets[el.id] = window.turnstile.render(el, {
+      sitekey: key, language: 'es', theme: 'light', retry: 'auto', 'refresh-expired': 'auto',
+      callback: () => captchaNote(el, ''),
+      // Si la verificación no puede correr en este navegador, se dice por qué en vez de dejar solo "Troubleshoot".
+      'error-callback': (code) => { captchaNote(el, captchaHelp(code)); return true; },
+    });
   });
   if (window.turnstile) { render(); return; }
   if (document.getElementById('turnstile-js')) return;
   window.onTurnstileLoad = render;
   const sc = document.createElement('script');
   sc.id = 'turnstile-js'; sc.async = true; sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad';
+  sc.onerror = () => document.querySelectorAll('.captcha-box').forEach((el) => captchaNote(el, captchaHelp('carga')));
   document.head.append(sc);
+}
+// Mensaje debajo de la casilla de verificación (vacío = se quita).
+function captchaNote(el, text) {
+  let n = el.nextElementSibling?.classList.contains('captcha-note') ? el.nextElementSibling : null;
+  if (!text) { n?.remove(); return; }
+  if (!n) { n = document.createElement('p'); n.className = 'captcha-note'; el.after(n); }
+  n.textContent = text;
+}
+function captchaHelp(code) {
+  const c = String(code || '');
+  const base = 'No se pudo completar la verificación de seguridad en este navegador.';
+  if (c === 'carga') return `${base} Revisa tu internet o desactiva el bloqueador de contenido para este sitio y recarga la página.`;
+  if (c.startsWith('110')) return `${base} El sitio no está dado de alta en la verificación (código ${c}): avisa a quien administra la plataforma.`;
+  return `${base} Recarga la página. Si sigue: en iPhone desactiva los bloqueadores de contenido y "Ocultar dirección IP" para este sitio (botón aA de Safari), o prueba en Chrome. Código ${c}.`;
 }
 const captchaToken = (id) => (window.turnstile && captchaWidgets[id] !== undefined ? window.turnstile.getResponse(captchaWidgets[id]) || undefined : undefined);
 const captchaReset = (id) => { if (window.turnstile && captchaWidgets[id] !== undefined) window.turnstile.reset(captchaWidgets[id]); };
