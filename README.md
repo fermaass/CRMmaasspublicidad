@@ -157,6 +157,14 @@ Los declinados no se borran: son la base del embudo y de lo que cuesta cada camp
 
 ## En el celular
 
+**Versión de celular por rol.** En pantalla de celular la app muestra solo lo que cada quien hace en ese momento, con una barra abajo; lo detallado se queda en la computadora:
+- **Vendedor:** Mi día (llamar, WhatsApp y el resultado del toque con botones grandes), + Lead y Mi mes (leads, cotizaciones y ventas del mes).
+- **Coordinador de leads (o quien asigna):** Asignar: cada lead con el vendedor que le toca ya puesto (en orden, como quedaría el reparto) y un toque para asignar; se puede elegir a otro. Botón para repartir todos parejo. + Lead.
+- **Gerente:** Equipo (semáforo por vendedor; al tocarlo, sus pendientes para abrir el lead y pedir seguimiento; cotizaciones más grandes), + Lead y Números del mes (ventas y campañas). Si también atiende leads, además Mi día.
+- **Gerente de marketing y analista:** Números del mes y campañas a revisar.
+
+"Ver versión completa", al pie de cada pantalla, muestra la versión de computadora en ese celular; un botón arriba permite volver.
+
 Maass Leads se puede **instalar como app**: en el celular abre la dirección del CRM y elige "Agregar a pantalla de inicio" (en iPhone, desde el botón Compartir de Safari). Queda con su ícono y se abre a pantalla completa, sin la barra del navegador.
 
 ## Usuarios y acceso

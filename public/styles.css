@@ -674,3 +674,57 @@ a.button-link.small { padding: 5px 10px; font-size: 12px; }
 .ob-list li.done .ob-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
 .captcha-note { color: var(--danger); font-size: 13px; margin: 6px 0 0; }
 .captcha-box:not(.needed) { display: none; }
+
+/* ---------- Versión de celular (body.m): solo lo que se hace en ese momento. La versión de escritorio no usa nada de esto. ---------- */
+.m-back { margin: 8px 16px 0; }
+body.m .topbar { margin: 8px 10px 0; padding: 8px 10px; gap: 8px; flex-wrap: nowrap; }
+body.m .topbar nav, body.m .topbar-company { display: none; }
+body.m #me { font-size: 0; padding: 4px; } body.m #me .avatar { font-size: 12px; }
+body.m #logout { padding: 6px 10px; font-size: 13px; }
+body.m .page-head { padding: 12px 14px 4px; }
+body.m .page-head h1 { font-size: 24px; }
+body.m #page-sub { font-size: 12px; }
+body.m main { padding: 0 10px calc(96px + env(safe-area-inset-bottom, 0px)); }
+body.m .toast { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
+.mbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9; display: flex; justify-content: space-around; gap: 4px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background: var(--card); border-top: 1px solid var(--line);
+  box-shadow: 0 -6px 20px rgba(41, 47, 76, .08); }
+.mbar button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; background: transparent; color: var(--muted);
+  box-shadow: none; padding: 6px 4px; font-size: 12px; font-weight: 600; border-radius: 12px; min-height: 52px; }
+.mbar button.active { color: var(--accent); background: var(--accent-soft); }
+.mbar [data-maction] { color: #fff; background: var(--grad); }
+/* Mi día en el celular: botones grandes para el dedo. */
+body.m .today-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+body.m .today-actions .small-select { grid-column: 1 / -1; }
+body.m .today-actions button { min-height: 44px; font-size: 14px; }
+body.m .today-row { padding-block: 12px; }
+body.m .today-summary { gap: 8px; }
+body.m #today-new { display: none; } /* está en la barra de abajo */
+body.m .drawer-panel { width: 100%; border-radius: 0; padding: 16px 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
+body.m .outcome-grid button { min-height: 48px; }
+/* Pantallas propias del celular */
+.m-view { display: grid; gap: 10px; align-content: start; }
+.m-head { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.m-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 6px; text-align: left; box-shadow: none; color: var(--text); font-weight: 400; width: 100%; }
+.m-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.m-row .name { font-size: 16px; font-weight: 700; text-align: left; }
+.m-assign-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 4px; }
+.m-big { min-height: 48px; font-size: 15px; }
+.m-assign-actions select { max-width: 120px; min-height: 48px; }
+.m-assign-card.going { opacity: .4; pointer-events: none; }
+.m-seller summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; cursor: pointer; list-style: none; }
+.m-seller summary::-webkit-details-marker { display: none; }
+.m-badges { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.m-list { display: grid; gap: 6px; margin-top: 6px; }
+.m-item { display: grid; gap: 2px; text-align: left; background: var(--bg); color: var(--text); box-shadow: none; padding: 10px 12px; border-radius: 10px; font-weight: 400; }
+.m-sub { margin: 10px 2px 0; font-size: 16px; }
+.m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.m-tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; gap: 2px; }
+.m-tile b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.m-tile span { font-size: 13px; color: var(--muted); }
+.m-why { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.m-period { margin: 0 2px; }
+.m-foot { text-align: center; font-size: 13px; margin-top: 12px; }
+.m-foot .link { color: var(--accent); font-weight: 600; }
+.m-head { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.m-head .m-big { min-height: 40px; font-size: 14px; }

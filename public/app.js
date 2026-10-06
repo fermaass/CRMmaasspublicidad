@@ -91,6 +91,7 @@ function campaignOptions(current, emptyLabel) {
 }
 // Íconos de línea (estilo Lucide), en el color del texto que los rodea.
 const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/>',
@@ -117,7 +118,7 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
 const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Gerente de marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Coordinador de leads' };
-const VIEW_TITLES = { today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { 'm-assign': 'Asignar', 'm-team': 'Equipo', 'm-numbers': 'Números del mes', today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -319,6 +320,12 @@ async function start() {
   }
   // Cada rol arranca en lo suyo: vendedor en Mi día, gerente en Equipo hoy, coordinador en Asignación, marketing y analista en el Resumen.
   const home = { vendedor: 'today', gerente: 'team', operador: 'assign', marketing: 'stats', analista: 'stats' };
+  // En el celular: solo las pantallas de la barra de abajo; en la computadora, las pantallas m- no existen.
+  if (setupMobile()) {
+    const ok = mobileTabs().some((t) => t.view === state.view);
+    return setView(ok ? state.view : mobileHome());
+  }
+  if (String(state.view || '').startsWith('m-')) state.view = null;
   setView(state.view || home[state.me.role] || 'board');
 }
 
@@ -446,8 +453,9 @@ function setView(view) {
   const today = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
   $('#page-sub').innerHTML = `${esc(today)} · viendo como <strong>${esc(state.me.name)}</strong> (${esc(ROLE_NAMES[state.me.role] || state.me.role)})`;
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  if (typeof markMobileTab === 'function') markMobileTab(view);
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
-  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller', 'campaign'].includes(view));
+  $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller', 'campaign'].includes(view) || view.startsWith('m-'));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
   if (view !== 'board') { $('#board-alert').classList.add('hidden'); $('#board-archived')?.classList.add('hidden'); }
@@ -484,6 +492,9 @@ async function refresh() {
   if (!state.me) return;
   updateAssignBadge();
   if (state.view !== 'today') updateTodayBadge();
+  if (state.view === 'm-assign') return renderMAssign();
+  if (state.view === 'm-team') return renderMTeam();
+  if (state.view === 'm-numbers') return renderMNumbers();
   if (state.view === 'users') return renderUsers();
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
