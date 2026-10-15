@@ -1,0 +1,189 @@
+// Sitio público (rentaypunto.com): páginas, mapa del sitio y formularios. Sin login ni enlaces al panel.
+const path = require('node:path');
+const express = require('express');
+const V = require('./views');
+const { siteSettings, phone10, VISIBLE, EXTRAS } = require('./db');
+const { visibleProps, publicProp, similar, slotsFor, localNow, isDate, originOf, PROP_SQL, shapeProp } = require('./data');
+const { transactionalRoutes } = require('./tx');
+
+const BOT = /bot|crawl|spider|slurp|facebookexternalhit|preview|lighthouse/i;
+const clientIp = (req) => String(req.get('cf-connecting-ip') || req.ip || '');
+const clip = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+
+function rateLimiter(max, ms) {
+  const hits = new Map();
+  return {
+    hit(key) {
+      const now = Date.now(); const h = hits.get(key);
+      if (!h || h.reset < now) { hits.set(key, { n: 1, reset: now + ms }); if (hits.size > 5000) hits.clear(); return false; }
+      h.n += 1; return h.n > max;
+    },
+  };
+}
+
+function siteRouter({ db, config, notify, onLead }) {
+  const app = transactionalRoutes(express.Router(), db);
+  const forms = rateLimiter(20, 10 * 60e3); // 20 envíos por conexión cada 10 minutos
+  const zones = () => db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY name').all();
+  const ctxOf = (req) => ({
+    siteUrl: config.siteUrl || `${req.protocol}://${req.get('host')}`,
+    settings: siteSettings(db), today: localNow().date, version: config.version,
+  });
+  const visible = () => visibleProps(db).map((p) => ({ ...publicProp(p), zone_id: p.zone_id }));
+  const html = (res, body, status = 200) => res.status(status).type('html').set('Cache-Control', 'no-cache').send(body);
+
+  app.use('/sitio', express.static(path.join(__dirname, '..', 'public', 'sitio'), { maxAge: '7d' }));
+  app.use('/api', express.json({ limit: '100kb' }));
+
+  // ---------- Páginas ----------
+  app.get('/', (req, res) => {
+    const q = req.query;
+    const f = { zona: clip(q.zona, 60), min: Number(q.min) || '', max: Number(q.max) || '', rec: Number(q.rec) || '', ban: Number(q.ban) || '', m2: Number(q.m2) || '', extra: EXTRAS.includes(q.extra) ? q.extra : '', orden: ['precio', '-precio'].includes(q.orden) ? q.orden : '' };
+    const all = visible();
+    let list = all.filter((p) => (!f.zona || p.zone_slug === f.zona) && (!f.min || p.rent >= f.min) && (!f.max || p.rent <= f.max)
+      && (!f.rec || p.bedrooms >= f.rec) && (!f.ban || p.bathrooms >= f.ban) && (!f.m2 || p.m2 >= f.m2) && (!f.extra || p.extras.includes(f.extra)));
+    if (f.orden) list = list.slice().sort((a, b) => (f.orden === 'precio' ? a.rent - b.rent : b.rent - a.rent));
+    html(res, V.home(ctxOf(req), { list, all, zones: zones(), f }));
+  });
+
+  app.get('/renta-tu-propiedad', (req, res) => {
+    // Referencia para el estimador: rentas de nuestras propiedades (sin datos de nadie).
+    const ref = db.prepare(`SELECT z.name AS zone, p.bedrooms, p.rent FROM properties p JOIN zones z ON z.id = p.zone_id WHERE p.status != 'borrador' AND p.rent > 0`).all();
+    html(res, V.owners(ctxOf(req), { zones: zones(), ref }));
+  });
+  app.get('/ayuda', (req, res) => html(res, V.help(ctxOf(req))));
+  app.get('/quejas', (req, res) => html(res, V.complaints(ctxOf(req))));
+  app.get('/certeza-juridica', (req, res) => html(res, V.legal(ctxOf(req))));
+  app.get('/aviso-de-privacidad', (req, res) => html(res, V.privacy(ctxOf(req))));
+
+  app.get('/renta/:zona', (req, res) => {
+    const zone = db.prepare('SELECT * FROM zones WHERE slug = ? AND active = 1').get(req.params.zona);
+    if (!zone) return html(res, V.notFound(ctxOf(req)), 404);
+    const list = visible().filter((p) => p.zone_slug === zone.slug);
+    html(res, V.zonePage(ctxOf(req), { zone, list, zones: zones() }));
+  });
+
+  // Ficha: /renta/<zona>/<titulo>-<codigo>. Si la URL cambió (título o zona editados), redirige a la nueva.
+  app.get('/renta/:zona/:slug', (req, res) => {
+    const want = `renta/${req.params.zona}/${req.params.slug}`;
+    let row = db.prepare(`${PROP_SQL} WHERE p.seo_slug = ?`).get(want);
+    if (!row) {
+      const m = req.params.slug.match(/(rp-\d+)$/i);
+      const byCode = m && db.prepare(`${PROP_SQL} WHERE p.code = ? COLLATE NOCASE`).get(m[1]);
+      if (byCode && byCode.status !== 'borrador') return res.redirect(301, `/${byCode.seo_slug}`);
+      return html(res, V.notFound(ctxOf(req)), 404);
+    }
+    if (row.status === 'borrador') return html(res, V.notFound(ctxOf(req)), 404);
+    const full = shapeProp(db, row);
+    const gone = !VISIBLE.includes(full.status);
+    if (!gone && !BOT.test(req.get('user-agent') || '')) db.prepare('UPDATE properties SET views = views + 1 WHERE id = ?').run(full.id);
+    const p = { ...publicProp(full), photos: full.photos, seo_title: full.seo_title, seo_desc: full.seo_desc, published_at: full.published_at, created_at: full.created_at, h1: `${full.title} en renta en ${full.zone}` };
+    const ctx = ctxOf(req);
+    const s = ctx.settings;
+    const sim = similar(visible(), { ...p, zone_id: full.zone_id });
+    // Rentada o pausada: la página sigue (con similares) pero avisa a Google que ya no está (410) y no se indexa.
+    html(res, V.ficha(ctx, { p, sim, slots: gone ? [] : slotsFor(db, full.id, s.visit_hours, s.visit_days) }), gone ? 410 : 200);
+  });
+
+  app.get('/robots.txt', (req, res) => {
+    const base = config.siteUrl || `${req.protocol}://${req.get('host')}`;
+    res.type('text').send(`User-agent: *\nDisallow: /api/\nAllow: /\n\nSitemap: ${base}/sitemap.xml\n`);
+  });
+  // El mapa del sitio solo lleva lo publicado: sin rentadas, pausadas ni borradores.
+  app.get('/sitemap.xml', (req, res) => {
+    const props = db.prepare(`SELECT seo_slug, updated_at, zone_id FROM properties WHERE status IN (${VISIBLE.map(() => '?').join(',')})`).all(...VISIBLE);
+    const withProps = new Set(props.map((p) => p.zone_id));
+    res.type('application/xml').send(V.sitemap(ctxOf(req), { props, zones: zones().filter((z) => withProps.has(z.id)) }));
+  });
+
+  // ---------- Formularios (JSON) ----------
+  const guard = (req, res, next) => {
+    if (!req.is('application/json')) return res.status(415).json({ error: 'Se espera JSON' });
+    if (forms.hit(clientIp(req))) return res.status(429).json({ error: 'Demasiados envíos. Espera unos minutos e intenta de nuevo.' });
+    const b = req.body || {};
+    if (b.website) return res.status(201).json({ ok: true, folio: '—' }); // trampa para robots: se finge éxito y no se guarda
+    if (!b.privacy) return res.status(400).json({ error: 'Acepta el aviso de privacidad para continuar.' });
+    next();
+  };
+
+  // Agendar visita: crea el lead con la propiedad elegida y se lo asigna al asesor de esa propiedad.
+  app.post('/api/visita', guard, (req, res) => {
+    const b = req.body;
+    const p = db.prepare(`SELECT id, code, title, status, advisor_id FROM properties WHERE id = ?`).get(Number(b.property_id));
+    if (!p || !VISIBLE.includes(p.status)) return res.status(404).json({ error: 'Esta propiedad ya no está disponible.' });
+    const name = clip(b.name, 80); const phone = phone10(b.phone);
+    if (!name) return res.status(400).json({ error: 'Escribe tu nombre.' });
+    if (!phone) return res.status(400).json({ error: 'Escribe tu WhatsApp a 10 dígitos.' });
+    const s = siteSettings(db);
+    const now = localNow();
+    const slots = slotsFor(db, p.id, s.visit_hours, s.visit_days, now);
+    const day = slots.find((d) => d.date === b.date);
+    const slot = day && day.slots.find((x) => x.time === b.time);
+    if (!isDate(b.date) || !slot) return res.status(400).json({ error: 'Elige un día y una hora de los que aparecen.' });
+    if (!slot.free) return res.status(409).json({ error: 'Ese horario ya no está disponible. Elige otro.' });
+    const u = b.utm && typeof b.utm === 'object' ? b.utm : {};
+    const id = Number(db.prepare(`INSERT INTO leads (property_id, name, phone, visit_date, visit_time, advisor_id, origin, utm_source, utm_medium, utm_campaign, utm_content, search_context)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, name, phone, b.date, b.time, p.advisor_id, originOf(u.source),
+      clip(u.source, 80) || null, clip(u.medium, 80) || null, clip(u.campaign, 120) || null, clip(u.content, 120) || null, clip(b.busca, 300) || null).lastInsertRowid);
+    db.prepare("INSERT INTO lead_events (lead_id, type, content) VALUES (?, 'creado', ?)").run(id, `Solicitó visita a ${p.code} el ${b.date} a las ${b.time}`);
+    res.on('finish', () => { if (res.statusCode < 400) onLead(id); });
+    res.status(201).json({ ok: true, folio: `C-${id}` });
+  });
+
+  app.post('/api/avisame', guard, (req, res) => {
+    const b = req.body; const phone = phone10(b.phone);
+    if (!phone) return res.status(400).json({ error: 'Escribe tu WhatsApp a 10 dígitos.' });
+    const f = b.filters && typeof b.filters === 'object' ? b.filters : {};
+    const clean = { zona: clip(f.zona, 60), min: Number(f.min) || 0, max: Number(f.max) || 0, rec: Number(f.rec) || 0, ban: Number(f.ban) || 0, m2: Number(f.m2) || 0, extra: EXTRAS.includes(f.extra) ? f.extra : '' };
+    const text = V.filtersText(clean, db.prepare('SELECT * FROM zones').all());
+    const id = Number(db.prepare('INSERT INTO alerts (name, phone, filters, filters_text) VALUES (?, ?, ?, ?)').run(clip(b.name, 80) || null, phone, JSON.stringify(clean), text).lastInsertRowid);
+    res.status(201).json({ ok: true, folio: `A-${id}` });
+  });
+
+  app.post('/api/propietario', guard, (req, res) => {
+    const b = req.body; const phone = phone10(b.phone); const name = clip(b.name, 80);
+    if (!name) return res.status(400).json({ error: 'Escribe tu nombre.' });
+    if (!phone) return res.status(400).json({ error: 'Escribe tu WhatsApp a 10 dígitos.' });
+    if (!Number(b.bedrooms)) return res.status(400).json({ error: 'Elige cuántas recámaras tiene.' });
+    if (!Number(b.expected_rent)) return res.status(400).json({ error: 'Escribe la renta que esperas.' });
+    const id = Number(db.prepare(`INSERT INTO owners (name, phone, best_time, prop_type, zone, colonia, bedrooms, m2, expected_rent, occupied, available_from, furnished, pets, listed_elsewhere, lives_outside, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(name, phone, clip(b.best_time, 20), clip(b.prop_type, 30), clip(b.zone, 60), clip(b.colonia, 120),
+      Number(b.bedrooms) || null, Number(b.m2) || null, Number(b.expected_rent) || null, clip(b.occupied, 40), isDate(b.available_from) ? b.available_from : null,
+      clip(b.furnished, 10), clip(b.pets, 10), clip(b.listed_elsewhere, 5), clip(b.lives_outside, 5), clip(b.notes, 1000)).lastInsertRowid);
+    res.on('finish', () => { if (res.statusCode < 400) notify.staff('Nuevo propietario registrado', `${name} (${phone}) registró ${b.prop_type || 'una propiedad'} en ${b.zone || '—'}. Revísalo en el panel → Seguimiento.`); });
+    res.status(201).json({ ok: true, folio: `P-${id}` });
+  });
+
+  app.post('/api/queja', guard, (req, res) => {
+    const b = req.body; const message = clip(b.message, 2000); const contact = clip(b.contact, 120);
+    if (!message) return res.status(400).json({ error: 'Escribe tu mensaje.' });
+    if (!contact) return res.status(400).json({ error: 'Déjanos un WhatsApp o correo para responderte.' });
+    const kind = ['Queja', 'Inconformidad', 'Sugerencia'].includes(b.kind) ? b.kind : 'Queja';
+    const id = Number(db.prepare('INSERT INTO tickets (kind, name, contact, property_ref, message) VALUES (?, ?, ?, ?, ?)')
+      .run(kind, clip(b.name, 80) || null, contact, clip(b.property_ref, 40) || null, message).lastInsertRowid);
+    res.on('finish', () => { if (res.statusCode < 400) notify.staff(`${kind} #${id}`, `${message}\n\nContacto: ${contact}`); });
+    res.status(201).json({ ok: true, folio: `#${id}` });
+  });
+
+  app.post('/api/juridico', guard, (req, res) => {
+    const b = req.body; const phone = phone10(b.phone); const name = clip(b.name, 80);
+    if (!name || !phone) return res.status(400).json({ error: 'Completa nombre y WhatsApp a 10 dígitos.' });
+    const id = Number(db.prepare('INSERT INTO legal_requests (name, phone, who) VALUES (?, ?, ?)').run(name, phone, b.who === 'Propietario' ? 'Propietario' : 'Inquilino').lastInsertRowid);
+    res.status(201).json({ ok: true, folio: `J-${id}` });
+  });
+
+  // Conteo de clics a WhatsApp (por propiedad, o 0 = el botón general de la portada).
+  app.post('/api/wa-click', (req, res) => {
+    const id = Number(req.body?.property_id) || 0;
+    if (forms.hit(`wa:${clientIp(req)}`)) return res.status(204).end();
+    if (id) db.prepare('UPDATE properties SET wa_clicks = wa_clicks + 1 WHERE id = ?').run(id);
+    else db.prepare("INSERT INTO settings (key, value) VALUES ('wa_clicks_home', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1").run();
+    res.status(204).end();
+  });
+  app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
+
+  app.use((req, res) => html(res, V.notFound(ctxOf(req)), 404));
+  return app;
+}
+
+module.exports = { siteRouter, rateLimiter, clientIp };
