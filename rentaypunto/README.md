@@ -14,6 +14,8 @@ Sitio público de rentas en Querétaro y panel interno del equipo. Fases 1 a 4.
 
 - **Diseño:** identidad propia (logo de casa dentro de un pin con el "punto" en ámbar, ilustración del Acueducto de Querétaro en el banner), tipografía Plus Jakarta Sans servida desde el propio sitio (licencia OFL), íconos propios en `public/sitio/brand.js` y modo oscuro automático. El panel usa los mismos colores, letra, logo e íconos. No hay fotos de stock ni testimonios o cifras inventados: sin fotos reales se muestra un dibujo neutro.
 
+- **Seguridad:** ver `SEGURIDAD.md`. CSP con nonce, HSTS, candado de origen con Cloudflare, verificación en dos pasos (sin repetir códigos), sesiones `__Host-`, login sin revelar cuentas, contraseñas débiles bloqueadas, bitácora de seguridad, documentos cifrados con borrado automático y todo el panel sin dependencias de terceros.
+
 Cómo publicarlo: `PUBLICAR.md`. Lo que falta definir con el cliente: `PENDIENTES_CLIENTE.md`.
 
 ```bash

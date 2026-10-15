@@ -28,9 +28,10 @@ function metaCapi(config, log = console) {
         custom_data: { content_ids: [code], content_type: 'product', value: rent, currency: 'MXN' },
       }],
       ...(config.metaTestCode ? { test_event_code: config.metaTestCode } : {}),
+      access_token: config.metaToken, // en el cuerpo y no en la dirección: las direcciones quedan en registros de proxies
     };
     try {
-      const r = await fetch(`https://graph.facebook.com/${config.metaApiVersion}/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(config.metaToken)}`, {
+      const r = await fetch(`https://graph.facebook.com/${config.metaApiVersion}/${encodeURIComponent(pixelId)}/events`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10000),
       });
       if (!r.ok) throw new Error(`Meta respondió ${r.status}: ${(await r.text()).slice(0, 200)}`);

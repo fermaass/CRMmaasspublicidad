@@ -9,7 +9,8 @@ const {
 const { getProp, PROP_SQL, shapeProp, isDate, localNow } = require('./data');
 const { seoAuto, cleanSlug } = require('./seo');
 const { transactionalRoutes } = require('./tx');
-const { rateLimiter, clientIp } = require('./site');
+const { rateLimiter } = require('./site');
+const { clientIp, passwordProblem } = require('./security');
 const { alertMatches, alertsFor, ownerReport, reportMessage, summary, myNumbers, opinionStats } = require('./insights');
 const { ACTA_ITEMS, OWNER_REQUESTS, DOC_KINDS, PAY_CONCEPTS } = require('./db');
 const { panelDocsRoutes } = require('./docs');
@@ -29,6 +30,15 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
   const loginByIp = rateLimiter(30, 15 * 60e3);
   const setupTries = rateLimiter(10, 15 * 60e3);
   const codeTries = rateLimiter(10, 15 * 60e3);
+  const linkTries = rateLimiter(30, 15 * 60e3);
+  const secure = (req) => Boolean(config.cookieSecure || req.secure);
+  // Bitácora de seguridad. Se escribe al terminar la respuesta (fuera de la transacción), así también quedan los intentos fallidos.
+  const audit = (req, res, action, detail, userId) => res.on('finish', () => {
+    try {
+      db.prepare('INSERT INTO audit_log (user_id, action, detail, ip) VALUES (?, ?, ?, ?)').run(userId ?? req.user?.id ?? req.pendingUser?.id ?? null, action, detail ? String(detail).slice(0, 300) : null, clientIp(req).slice(0, 60));
+      db.prepare('DELETE FROM audit_log WHERE id <= (SELECT MAX(id) - 5000 FROM audit_log)').run();
+    } catch { /* la bitácora nunca tumba la app */ }
+  });
 
   // El panel nunca aparece en Google.
   app.use((req, res, next) => { res.set('X-Robots-Tag', 'noindex, nofollow'); next(); });
@@ -48,15 +58,18 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
   });
 
   const startSession = (req, res, userId, pending) => {
-    const { token, expires } = auth.createSession(db, userId, pending);
-    res.set('Set-Cookie', auth.sessionCookie(token, expires, config.cookieSecure || req.secure));
+    const { role } = db.prepare('SELECT role FROM users WHERE id = ?').get(userId);
+    const { token, expires } = auth.createSession(db, userId, pending, role);
+    res.set('Set-Cookie', auth.sessionCookie(token, expires, secure(req)));
   };
   const me = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, publish_direct: u.publish_direct });
   const userCount = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
-  const needsMfa = (u) => auth.MFA_ROLES.includes(u.role) && !config.mfaOff;
+  // Gerente y Dueño siempre; vendedores también si el Dueño lo activa.
+  const needsMfa = (u) => !config.mfaOff && (auth.MFA_ROLES.includes(u.role) || siteSettings(db).mfa_all);
   // Tras la contraseña: si es Gerente o Dueño, queda a medias hasta poner el código de la app.
   function afterPassword(req, res, user) {
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(isoNow(), user.id);
+    audit(req, res, 'entró (contraseña)', req.get('user-agent'), user.id);
     if (needsMfa(user)) {
       startSession(req, res, user.id, true);
       return res.json({ mfa: user.totp_enabled ? 'code' : 'setup' });
@@ -78,7 +91,8 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
     }
     const { name, email, password } = req.body || {};
     if (!clip(name, 80) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) return res.status(400).json({ error: 'Escribe tu nombre y un correo válido.' });
-    if (String(password || '').length < 10) return res.status(400).json({ error: 'La contraseña debe tener al menos 10 caracteres.' });
+    const weak = passwordProblem(password, email);
+    if (weak) return res.status(400).json({ error: weak });
     const id = Number(db.prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'dueno')")
       .run(clip(name, 80), String(email).trim(), auth.hashPassword(String(password))).lastInsertRowid);
     afterPassword(req, res.status(201), db.prepare('SELECT * FROM users WHERE id = ?').get(id));
@@ -91,8 +105,10 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
     const fails = loginFails.get(key);
     if (fails && fails.until > Date.now()) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos o pide al Dueño un link para una contraseña nueva.' });
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(key);
-    if (user && !user.password_hash) return res.status(401).json({ error: 'Todavía no activas tu acceso: abre el link de invitación que te mandaron.' });
-    if (!user || !auth.verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+    // Mismo mensaje y mismo tiempo exista o no el correo: así no se puede averiguar quién tiene cuenta.
+    const ok = auth.verifyPassword(String(req.body?.password || ''), user && user.password_hash ? user.password_hash : auth.DUMMY_HASH) && user && user.password_hash;
+    if (!ok) {
+      audit(req, res, 'intento fallido de entrar', key.slice(0, 80), user ? user.id : null);
       if (loginByIp.hit(ip)) return res.status(429).json({ error: 'Demasiados intentos desde esta conexión. Espera 15 minutos.' });
       const n = (fails && fails.until && fails.until <= Date.now() ? 0 : fails?.n || 0) + 1;
       loginFails.set(key, { n, until: n >= 5 ? Date.now() + 15 * 60e3 : 0 });
@@ -114,10 +130,13 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
   app.post('/api/2fa', (req, res) => {
     const u = req.pendingUser;
     if (!u) return res.status(401).json({ error: 'Pasaron más de 10 minutos. Vuelve a entrar con tu contraseña.' });
-    if (codeTries.hit(`${u.id}`)) return res.status(429).json({ error: 'Demasiados códigos equivocados. Espera 15 minutos.' });
-    const { totp_secret: secret } = db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(u.id);
-    if (!auth.verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Código incorrecto. Revisa que la hora de tu celular esté en automático.' });
-    if (!u.totp_enabled) db.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').run(u.id);
+    if (codeTries.hit(`${u.id}`)) { audit(req, res, 'bloqueo por códigos equivocados'); return res.status(429).json({ error: 'Demasiados códigos equivocados. Espera 15 minutos.' }); }
+    const { totp_secret: secret, totp_last_step: last } = db.prepare('SELECT totp_secret, totp_last_step FROM users WHERE id = ?').get(u.id);
+    // Un código ya usado no vuelve a servir (aunque alguien lo haya visto por encima del hombro).
+    const step = auth.verifyTotp(secret, req.body?.code, Date.now(), last);
+    if (!step) { audit(req, res, 'código de verificación incorrecto'); return res.status(400).json({ error: 'Código incorrecto o ya usado. Espera el siguiente código de tu app.' }); }
+    db.prepare('UPDATE users SET totp_last_step = ?, totp_enabled = 1 WHERE id = ?').run(step, u.id);
+    audit(req, res, u.totp_enabled ? 'entró (verificación en dos pasos)' : 'activó la verificación en dos pasos');
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(req.sessionHash);
     startSession(req, res, u.id, false);
     res.json(me(u));
@@ -125,16 +144,25 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
 
   app.post('/api/logout', (req, res) => {
     if (req.sessionHash) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(req.sessionHash);
-    res.set('Set-Cookie', auth.clearCookie()).json({ ok: true });
+    // Además de borrar la sesión, se le pide al navegador que olvide lo guardado de este sitio.
+    res.set({ 'Set-Cookie': auth.clearCookie(secure(req)), 'Clear-Site-Data': '"cache", "storage"' }).json({ ok: true });
   });
   app.get('/api/me', auth.requireUser, (req, res) => res.json(me(req.user)));
   app.post('/api/me/password', auth.requireUser, (req, res) => {
     const u = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
     if (!auth.verifyPassword(String(req.body?.current || ''), u.password_hash)) return res.status(400).json({ error: 'Tu contraseña actual no es correcta' });
-    if (String(req.body?.password || '').length < 10) return res.status(400).json({ error: 'La contraseña nueva debe tener al menos 10 caracteres' });
+    const weak = passwordProblem(req.body?.password, req.user.email);
+    if (weak) return res.status(400).json({ error: weak });
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(String(req.body.password)), req.user.id);
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(req.user.id, req.sessionHash);
+    audit(req, res, 'cambió su contraseña');
     res.json({ ok: true });
+  });
+  // "Cerrar mis otras sesiones": por si dejó la sesión abierta en otra computadora o perdió el celular.
+  app.post('/api/me/logout-others', auth.requireUser, (req, res) => {
+    const n = db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(req.user.id, req.sessionHash).changes;
+    audit(req, res, 'cerró sus otras sesiones', `${n}`);
+    res.json({ ok: true, closed: n });
   });
 
   // ---------- Invitaciones y contraseña nueva (link de un solo uso, 72 h) ----------
@@ -149,15 +177,19 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
   const findToken = (t) => db.prepare('SELECT t.*, u.name, u.email, u.active FROM user_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?').get(auth.sha256(t));
   const dead = (t) => !t || t.used_at || t.expires_at < Date.now() || !t.active;
   app.get('/api/access/:token', (req, res) => {
+    if (linkTries.hit(clientIp(req))) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos.' });
     const t = findToken(req.params.token);
     if (dead(t)) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pide uno nuevo al Dueño.' });
     res.json({ name: t.name, email: t.email, kind: t.kind });
   });
   app.post('/api/access/:token', (req, res) => {
+    if (linkTries.hit(clientIp(req))) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos.' });
     const t = findToken(req.params.token);
     if (dead(t)) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pide uno nuevo al Dueño.' });
     const password = String(req.body?.password || '');
-    if (password.length < 10) return res.status(400).json({ error: 'La contraseña debe tener al menos 10 caracteres' });
+    const weak = passwordProblem(password, t.email);
+    if (weak) return res.status(400).json({ error: weak });
+    audit(req, res, t.kind === 'invite' ? 'activó su acceso con invitación' : 'creó contraseña nueva con link', null, t.user_id);
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(password), t.user_id);
     db.prepare('UPDATE user_tokens SET used_at = ? WHERE token_hash = ?').run(isoNow(), t.token_hash);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(t.user_id);
@@ -180,6 +212,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
     if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return res.status(409).json({ error: 'Ya hay alguien con ese correo.' });
     const id = Number(db.prepare('INSERT INTO users (name, email, phone, role, publish_direct) VALUES (?, ?, ?, ?, ?)')
       .run(name, email, phone10(b.phone) || null, b.role, b.role === 'vendedor' && b.publish_direct ? 1 : 0).lastInsertRowid);
+    audit(req, res, 'dio de alta a un usuario', `${name} (${b.role})`);
     res.status(201).json({ id, ...accessLink(req, id, 'invite') });
   });
   app.patch('/api/users/:id', auth.requireRole('dueno'), (req, res) => {
@@ -199,19 +232,23 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
       db.prepare("UPDATE leads SET advisor_id = NULL WHERE advisor_id = ? AND stage NOT IN ('firmado','perdido')").run(u.id);
     }
     if (next.role !== u.role && auth.MFA_ROLES.includes(next.role)) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id); // que entre de nuevo con verificación
+    const changes = ['name', 'phone', 'role', 'active', 'publish_direct'].filter((k) => String(next[k] ?? '') !== String(u[k] ?? '')).map((k) => `${k}: ${u[k] ?? '—'} → ${next[k] ?? '—'}`);
+    if (changes.length) audit(req, res, `cambió a ${u.name}`, changes.join(', '));
     res.json({ ok: true });
   });
   app.post('/api/users/:id/link', auth.requireRole('dueno'), (req, res) => {
     const u = db.prepare('SELECT id, active FROM users WHERE id = ?').get(Number(req.params.id));
     if (!u || !u.active) return res.status(404).json({ error: 'No existe o está desactivado' });
+    audit(req, res, 'generó link de contraseña', `usuario ${u.id}`);
     res.json(accessLink(req, u.id, 'reset'));
   });
   // Si alguien cambia de celular, el Dueño le borra la verificación y la vuelve a configurar al entrar.
   app.post('/api/users/:id/reset-2fa', auth.requireRole('dueno'), (req, res) => {
     const id = Number(req.params.id);
     if (id === req.user.id) return res.status(400).json({ error: 'La tuya se reinicia con la variable RESET_2FA en Railway (ver PUBLICAR.md).' });
-    db.prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?').run(id);
+    db.prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last_step = 0 WHERE id = ?').run(id);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    audit(req, res, 'reinició la verificación en dos pasos', `usuario ${id}`);
     res.json({ ok: true });
   });
 
@@ -247,6 +284,13 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
       const id = String(b.meta_pixel_id).replace(/\D/g, '');
       if (b.meta_pixel_id && !/^\d{5,20}$/.test(id)) return res.status(400).json({ error: 'El ID del píxel son solo números (Administrador de eventos de Meta).' });
       setSetting(db, 'meta_pixel_id', id);
+    }
+    if (b.mfa_all !== undefined) { setSetting(db, 'mfa_all', b.mfa_all ? '1' : '0'); audit(req, res, `verificación en dos pasos para todos: ${b.mfa_all ? 'sí' : 'no'}`); }
+    if (b.docs_retention_days !== undefined) {
+      const n = Number(b.docs_retention_days);
+      if (!(n === 0 || (n >= 30 && n <= 3650))) return res.status(400).json({ error: 'Días para borrar documentos: 0 (nunca) o entre 30 y 3650.' });
+      setSetting(db, 'docs_retention_days', n);
+      audit(req, res, `borrado automático de documentos: ${n ? `${n} días` : 'apagado'}`);
     }
     if (b.social_links !== undefined) {
       const links = String(b.social_links).split(/[\s,]+/).filter(Boolean);
@@ -345,6 +389,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
       contract_start: pick('contract_start', (v) => (isDate(v) ? v : null)),
       contract_end: pick('contract_end', (v) => (isDate(v) ? v : null)),
       owner_id: pick('owner_id', (v) => (num(v) && db.prepare('SELECT 1 FROM owners WHERE id = ?').get(num(v)) ? num(v) : null)),
+      // (el vendedor no puede ligar propietarios: vería nombre y teléfono de registros que no le tocan; ver más abajo)
     };
     for (const k of ['m2', 'bedrooms', 'bathrooms', 'parking', 'max_occupants', 'min_term']) if (data[k] != null && data[k] < 0) return { error: 'Los números no pueden ser negativos.' };
     if (data.contract_start && data.contract_end && data.contract_end <= data.contract_start) return { error: 'El contrato debe terminar después de que empieza.' };
@@ -359,7 +404,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
 
   app.post('/api/properties', auth.requireUser, (req, res) => {
     const b = req.body || {}; const u = req.user;
-    const r = readProp(b);
+    const r = readProp(isManager(u) ? b : { ...b, owner_id: undefined });
     if (r.error) return res.status(400).json({ error: r.error });
     const code = nextCode();
     const seo = readSeo(b, r.data, r.zone, code);
@@ -378,7 +423,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
     const u = req.user; const p = getProp(db, Number(req.params.id));
     if (!p) return res.status(404).json({ error: 'No existe' });
     if (!canEdit(u, p)) return res.status(403).json({ error: p.status === 'borrador' ? 'Solo puedes editar lo que capturaste o tienes asignado.' : 'Ya está publicada: pide al Gerente que haga el cambio.' });
-    const b = req.body || {};
+    const b = isManager(u) ? (req.body || {}) : { ...(req.body || {}), owner_id: undefined };
     const r = readProp(b, p);
     if (r.error) return res.status(400).json({ error: r.error });
     const seo = readSeo(b, r.data, r.zone, p.code, p);
@@ -418,6 +463,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
     if (!p) return res.status(404).json({ error: 'No existe' });
     if (leadCount.get(p.id).n) return res.status(409).json({ error: 'Tiene leads: mejor ponla en Pausada para no perder su historial.' });
     db.prepare('DELETE FROM properties WHERE id = ?').run(p.id);
+    audit(req, res, 'eliminó una propiedad', `${p.code} · ${p.title}`);
     res.on('finish', () => { if (res.statusCode < 400) p.photos.forEach((f) => photos.remove(f.file)); });
     res.json({ ok: true });
   });
@@ -593,6 +639,14 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
 
   // ---------- Fase 3 y 4: expedientes, documentos cifrados, pagos y bitácora de WhatsApp ----------
   panelDocsRoutes(app, { db, vlt, config });
+  app.get('/api/audit', auth.requireRole('dueno'), (req, res) => res.json(db.prepare(`SELECT a.at, a.action, a.detail, a.ip, u.name AS user_name FROM audit_log a
+    LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300`).all()));
+  // Llave nueva para la bóveda: se genera aquí, se muestra una sola vez al Dueño y no se guarda en ningún lado.
+  app.post('/api/docs-key', auth.requireRole('dueno'), (req, res) => {
+    if (vlt.enabled) return res.status(409).json({ error: 'La bóveda ya tiene llave. Cambiarla haría ilegibles los documentos guardados.' });
+    audit(req, res, 'generó una llave para la bóveda de documentos');
+    res.json({ key: crypto.randomBytes(32).toString('hex') });
+  });
   app.get('/api/wa-log', auth.requireRole('dueno'), (req, res) => res.json(db.prepare('SELECT key, to_phone, template, status, error, at FROM wa_messages ORDER BY id DESC LIMIT 40').all()));
 
   // ---------- SEO: páginas que genera el sitio, para que el equipo vea qué existe y qué le falta ----------

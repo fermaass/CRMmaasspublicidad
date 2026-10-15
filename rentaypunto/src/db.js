@@ -314,6 +314,17 @@ function migrate(db) {
   `);
   // Fase 3: expedientes con documentos cifrados. Fase 4: administración (pagos) y WhatsApp oficial.
   // SEO: texto propio de cada zona (cómo es, qué hay cerca) y fecha de cambio para el mapa del sitio.
+  // Seguridad: código de verificación ya usado (no se acepta dos veces) y bitácora de acciones sensibles.
+  addColumn(db, 'users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      detail TEXT,
+      ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS audit_at ON audit_log(at);`);
   addColumn(db, 'zones', 'intro', 'TEXT');
   addColumn(db, 'zones', 'near', 'TEXT');
   addColumn(db, 'zones', 'updated_at', 'TEXT');
@@ -419,6 +430,8 @@ function siteSettings(db) {
     commission_pct: Number(getSetting(db, 'commission_pct', '20')), // supuesto: 20% de ese cobro para el asesor
     // WhatsApp oficial: qué mensajes salen solos (todo apagado hasta que el Dueño lo encienda).
     indexnow_last: getSetting(db, 'indexnow_last', '') || '',
+    mfa_all: getSetting(db, 'mfa_all', '0') === '1', // verificación en dos pasos también para vendedores
+    docs_retention_days: Number(getSetting(db, 'docs_retention_days', '0')) || 0, // 0 = no se borran solos
     social_links: getJsonSetting(db, 'social_links', []), // Facebook, Instagram, Google Business… (para que Google ligue la marca)
     wa_auto: getJsonSetting(db, 'wa_auto', { prospect: false, advisor: false, reminder: false, weekly: false, file: false }),
   };

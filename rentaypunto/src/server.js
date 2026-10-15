@@ -16,6 +16,7 @@ const { metaCapi } = require('./meta');
 const { vault, parseKey } = require('./vault');
 const { whatsapp } = require('./whatsapp');
 const { indexNow } = require('./indexnow');
+const { originGuard, baseHeaders, siteCsp, panelCsp } = require('./security');
 
 function loadConfig(env = process.env) {
   const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
@@ -41,6 +42,8 @@ function loadConfig(env = process.env) {
     waToken: env.WA_TOKEN, // WhatsApp Cloud API: token permanente del usuario del sistema
     waPhoneId: env.WA_PHONE_ID, // ID del número de WhatsApp Business
     waLang: env.WA_LANG || 'es_MX',
+    // Candado de origen: el mismo valor se pone en Cloudflare (Reglas → Transformación → encabezado X-Origin-Auth). Ver SEGURIDAD.md.
+    originSecret: env.ORIGIN_SECRET && env.ORIGIN_SECRET.length >= 24 ? env.ORIGIN_SECRET : null,
     version: `${require('../package.json').version}-${Date.now().toString(36)}`,
   };
 }
@@ -87,10 +90,8 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
-  app.use((req, res, next) => {
-    res.set({ 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Content-Security-Policy': "frame-ancestors 'none'" });
-    next();
-  });
+  app.use(originGuard(config));
+  app.use(baseHeaders(config));
   app.get('/health', (req, res) => {
     try { db.prepare('SELECT 1').get(); res.send('ok'); } catch (err) { res.status(503).send(`base de datos sin respuesta: ${err.message}`); }
   });
@@ -100,11 +101,12 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
   const site = siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived });
   if (config.panelHost) {
     // Cada dirección ve solo su aplicación: el panel no existe en rentaypunto.com y el sitio no existe en el panel.
-    app.use((req, res, next) => (req.hostname.toLowerCase() === config.panelHost ? panel(req, res, next) : site(req, res, next)));
+    const pcsp = panelCsp(); const scsp = siteCsp(config);
+    app.use((req, res, next) => (req.hostname.toLowerCase() === config.panelHost ? pcsp(req, res, () => panel(req, res, next)) : scsp(req, res, () => site(req, res, next))));
   } else {
     app.use((req, res, next) => (req.path === '/panel' ? res.redirect(301, '/panel/') : next()));
-    app.use('/panel', panel);
-    app.use(site);
+    app.use('/panel', panelCsp(), panel);
+    app.use(siteCsp(config), site);
   }
 
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
@@ -156,11 +158,17 @@ if (require.main === module) {
   };
   backup();
   setInterval(backup, 6 * 3600e3).unref();
+  // Borrado automático de documentos (si el Dueño lo activó): expedientes de leads cerrados y documentos de propietarios
+  // descartados, pasados N días. Se borra el archivo cifrado y su copia externa; queda constancia en la bitácora.
+  const purge = () => { try { const n = purgeDocs(db, vault(path.join(config.dataDir, 'docs'), config.docsKey, offsite)); if (n) console.log(`Documentos borrados por antigüedad: ${n}`); } catch (err) { logError(db, 'borrado de documentos', err.message); } };
+  purge();
+  setInterval(purge, 24 * 3600e3).unref();
+  if (!config.originSecret && process.env.ORIGIN_SECRET) console.error('ATENCIÓN: ORIGIN_SECRET debe tener al menos 24 caracteres; el candado de origen está apagado.');
 
   if (config.docsKeyInvalid) console.error('ATENCIÓN: DOCS_KEY no es válida (deben ser 32 bytes en base64). La bóveda de documentos queda apagada.');
   else if (!config.docsKey) {
     console.log('Sin DOCS_KEY: la bóveda de documentos (expedientes) está apagada.');
-    console.log(`Para activarla, crea la variable DOCS_KEY en Railway con este valor (y guárdalo en tu gestor de contraseñas; si se pierde, los documentos no se recuperan): ${crypto.randomBytes(32).toString('hex')}`);
+    console.log('Para activarla: entra al panel como Dueño → Equipo → Bóveda de documentos → "Generar llave" y cópiala a la variable DOCS_KEY en Railway.');
   }
   const wa = whatsapp(db, config);
   if (wa.start()) console.log('WhatsApp oficial conectado: mensajes automáticos según la configuración del panel.');
@@ -176,4 +184,22 @@ if (require.main === module) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-module.exports = { createApp, loadConfig, ensureSetupCode };
+// Documentos que ya no se necesitan: de leads perdidos o firmados y de propietarios descartados, más viejos que N días.
+function purgeDocs(db, vlt, now = Date.now()) {
+  const days = Number(getSetting(db, 'docs_retention_days', '0')) || 0;
+  if (!days) return 0;
+  const limit = new Date(now - days * 86400e3).toISOString();
+  const rows = db.prepare(`SELECT d.id, d.file FROM documents d WHERE d.deleted_at IS NULL AND d.uploaded_at < ? AND (
+      (d.subject_type = 'lead' AND d.subject_id IN (SELECT id FROM leads WHERE stage IN ('perdido','firmado') AND updated_at < ?))
+      OR (d.subject_type = 'owner' AND d.subject_id IN (SELECT id FROM owners WHERE status = 'descartado')))`).all(limit, limit);
+  const now2 = new Date(now).toISOString();
+  for (const r of rows) {
+    db.prepare('UPDATE documents SET deleted_at = ? WHERE id = ?').run(now2, r.id);
+    db.prepare("INSERT INTO doc_access (document_id, user_id, action) VALUES (?, NULL, 'borrado automático por antigüedad')").run(r.id);
+    vlt.remove(r.file);
+  }
+  if (rows.length) db.prepare("INSERT INTO audit_log (action, detail) VALUES ('borrado automático de documentos', ?)").run(`${rows.length} documento(s) de más de ${days} días`);
+  return rows.length;
+}
+
+module.exports = { createApp, loadConfig, ensureSetupCode, purgeDocs };

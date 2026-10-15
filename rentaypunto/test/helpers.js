@@ -45,7 +45,7 @@ function client(base, prefix = '/panel') {
 // Crea al Dueño con el código de instalación y completa la verificación en dos pasos.
 async function owner(t) {
   const c = client(t.base);
-  let r = await c.post('/api/setup', { setup_code: 'abcd1234', name: 'Fer', email: 'fer@example.com', password: 'contrasena-larga' });
+  let r = await c.post('/api/setup', { setup_code: 'abcd1234', name: 'Fer', email: 'fer@example.com', password: 'Jacaranda-Norte-2026' });
   if (r.status !== 201) throw new Error(JSON.stringify(r.body));
   r = await c.get('/api/2fa');
   r = await c.post('/api/2fa', { code: auth.totpCode(r.body.secret, Math.floor(Date.now() / 30000)) });
@@ -59,7 +59,7 @@ async function invite(t, dueno, { name, email, role, publish_direct, phone }) {
   if (r.status !== 201) throw new Error(JSON.stringify(r.body));
   const token = new URL(r.body.link).searchParams.get('acceso');
   const c = client(t.base);
-  const a = await c.post(`/api/access/${token}`, { password: 'otra-contrasena' });
+  const a = await c.post(`/api/access/${token}`, { password: 'Mirador-Sur-4471' });
   if (a.body.mfa) {
     const s = await c.get('/api/2fa');
     await c.post('/api/2fa', { code: auth.totpCode(s.body.secret, Math.floor(Date.now() / 30000)) });

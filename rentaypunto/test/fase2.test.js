@@ -162,7 +162,8 @@ test('API de Conversiones: teléfono cifrado y mismo event_id que el píxel', as
     const m = metaCapi({ metaToken: 'TOKEN', metaApiVersion: 'v23.0' });
     assert.equal(await m.sendLead({ pixelId: '123456', leadId: 7, phone: '4421234567', firstName: 'Laura', url: 'https://x', ip: '1.2.3.4', ua: 'UA', fbp: 'fb.1.1.1', code: 'RP-0001', rent: 100 }), true);
   } finally { global.fetch = orig; }
-  assert.match(calls[0].url, /^https:\/\/graph\.facebook\.com\/v23\.0\/123456\/events\?access_token=TOKEN$/);
+  assert.equal(calls[0].url, 'https://graph.facebook.com/v23.0/123456/events', 'el token no va en la dirección');
+  assert.equal(calls[0].body.access_token, 'TOKEN');
   const e = calls[0].body.data[0];
   assert.equal(e.event_name, 'Lead');
   assert.equal(e.event_id, 'lead-7');

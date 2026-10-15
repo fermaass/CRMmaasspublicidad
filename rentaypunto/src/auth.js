@@ -2,9 +2,14 @@
 // de una app como Google Authenticator) para Gerente y Dueño.
 const crypto = require('node:crypto');
 
-const SESSION_DAYS = 14;
+const SESSION_DAYS = 14; // Vendedor
+const MANAGER_SESSION_DAYS = 7; // Gerente y Dueño ven datos de todo el equipo: su sesión dura menos
 const PENDING_MINUTES = 10; // tiempo para escribir el código después de la contraseña
 const COOKIE = 'rp_panel';
+// Con HTTPS la cookie lleva el prefijo __Host-: el navegador la ata a este dominio exacto y solo por HTTPS.
+const cookieName = (secure) => (secure ? `__Host-${COOKIE}` : COOKIE);
+// Para que "correo no existe" y "contraseña mala" tarden lo mismo (no se puede averiguar qué correos existen).
+const DUMMY_HASH = `${'0'.repeat(32)}:${'0'.repeat(128)}`;
 const MFA_ROLES = ['gerente', 'dueno'];
 
 const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
@@ -31,25 +36,27 @@ function parseCookies(header) {
 }
 
 // La cookie guarda el token; la base solo su huella (si alguien copia la base, no puede entrar con ella).
-function createSession(db, userId, pending) {
+function createSession(db, userId, pending, role) {
   const token = crypto.randomBytes(32).toString('hex');
-  const expires = Date.now() + (pending ? PENDING_MINUTES * 60e3 : SESSION_DAYS * 86400e3);
+  const days = MFA_ROLES.includes(role) ? MANAGER_SESSION_DAYS : SESSION_DAYS;
+  const expires = Date.now() + (pending ? PENDING_MINUTES * 60e3 : days * 86400e3);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
   db.prepare('INSERT INTO sessions (token_hash, user_id, pending, expires_at) VALUES (?, ?, ?, ?)').run(sha256(token), userId, pending ? 1 : 0, expires);
   return { token, expires };
 }
 function sessionCookie(token, expires, secure) {
-  const parts = [`${COOKIE}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Expires=${new Date(expires).toUTCString()}`];
+  const parts = [`${cookieName(secure)}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Expires=${new Date(expires).toUTCString()}`];
   if (secure) parts.push('Secure');
   return parts.join('; ');
 }
-const clearCookie = () => `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+const clearCookie = (secure) => `${cookieName(secure)}=; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
 
 function authMiddleware(db) {
   const find = db.prepare(`SELECT u.id, u.name, u.email, u.phone, u.role, u.publish_direct, u.totp_enabled, s.pending
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1`);
   return (req, res, next) => {
-    const token = parseCookies(req.headers.cookie)[COOKIE];
+    const c = parseCookies(req.headers.cookie);
+    const token = c[`__Host-${COOKIE}`] || c[COOKIE];
     const row = token ? find.get(sha256(token), Date.now()) : null;
     req.sessionHash = token ? sha256(token) : null;
     // Sesión a medias (falta el código): solo sirve para terminar la verificación.
@@ -94,15 +101,19 @@ function totpCode(secret, step) {
   return String((h.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, '0');
 }
 // Acepta el código actual y el de 30 s antes o después (relojes de celular desfasados).
-function verifyTotp(secret, code, now = Date.now()) {
+// Devuelve el "paso" que coincidió (para no aceptar el mismo código dos veces) o 0 si no sirve.
+function verifyTotp(secret, code, now = Date.now(), lastStep = 0) {
   const c = String(code || '').replace(/\D/g, '');
-  if (!secret || c.length !== 6) return false;
+  if (!secret || c.length !== 6) return 0;
   const step = Math.floor(now / 30000);
-  return [-1, 0, 1].some((d) => crypto.timingSafeEqual(Buffer.from(totpCode(secret, step + d)), Buffer.from(c)));
+  for (const d of [-1, 0, 1]) {
+    if (step + d > lastStep && crypto.timingSafeEqual(Buffer.from(totpCode(secret, step + d)), Buffer.from(c))) return step + d;
+  }
+  return 0;
 }
 const totpUri = (secret, email) => `otpauth://totp/${encodeURIComponent(`Rentaypunto:${email}`)}?secret=${secret}&issuer=Rentaypunto`;
 
 module.exports = {
-  COOKIE, MFA_ROLES, sha256, parseCookies, hashPassword, verifyPassword, createSession, sessionCookie, clearCookie,
+  COOKIE, MFA_ROLES, DUMMY_HASH, sha256, parseCookies, hashPassword, verifyPassword, createSession, sessionCookie, clearCookie,
   authMiddleware, requireUser, requireRole, newTotpSecret, totpCode, verifyTotp, totpUri,
 };

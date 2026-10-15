@@ -102,9 +102,10 @@
         + '<ol class="note"><li>Instala <b>Google Authenticator</b> (o Microsoft Authenticator) en tu celular.</li><li>En la app toca <b>+</b> y escanea este código. Si estás en el mismo celular, usa el botón o escribe la clave.</li><li>Escribe abajo el número de 6 dígitos que te muestra.</li></ol>'
         + '<div id="qr"></div><p class="note">Clave: <code>' + esc(info.secret.replace(/(.{4})/g, '$1 ').trim()) + '</code></p><p><a class="b s sm" href="' + esc(info.uri) + '">Abrir en la app del celular</a></p>'
         + '<form id="mf"><label for="mc">Código de 6 dígitos</label><input id="mc" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required><p class="err" id="merr"></p><p><button class="b">Activar y entrar</button></p></form>');
+      // El QR se dibuja con una librería alojada aquí mismo (no se carga nada de otros sitios).
       const sc = document.createElement('script');
-      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
-      sc.onload = () => { try { new window.QRCode($('#qr'), { text: info.uri, width: 180, height: 180 }); } catch (e) { /* queda la clave escrita */ } };
+      sc.src = 'vendor/qrcode.js';
+      sc.onload = () => { try { const q = window.qrcode(0, 'M'); q.addData(info.uri); q.make(); $('#qr').innerHTML = q.createSvgTag(5, 10); } catch (e) { /* queda la clave escrita */ } };
       document.head.appendChild(sc);
     } else {
       screen('<h2>Código de verificación</h2><p class="note">Abre tu app de códigos (Google Authenticator) y escribe el número de 6 dígitos de Rentaypunto.</p>'
@@ -152,7 +153,9 @@
     ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, res: renderRes, rep: renderRep, seo: renderSeoTab, seg: renderSeg, equipo: renderEquipo })[S.tab]();
   }
   function renderPw() {
-    $('#app').innerHTML = '<div class="card center"><h2>Cambiar mi contraseña</h2><label for="pc">Contraseña actual</label><input id="pc" type="password" autocomplete="current-password"><label for="pn">Nueva (10 caracteres o más)</label><input id="pn" type="password" autocomplete="new-password"><p class="err" id="perr"></p><p><button class="b" id="pgo">Guardar</button> <button class="b s" id="pback">Volver</button></p><p class="note">Se cierra tu sesión en los demás dispositivos.</p></div>';
+    $('#app').innerHTML = '<div class="card" style="max-width:460px;margin:24px auto"><h2>Cambiar mi contraseña</h2><label for="pc">Contraseña actual</label><input id="pc" type="password" autocomplete="current-password"><label for="pn">Nueva (10 caracteres o más)</label><input id="pn" type="password" autocomplete="new-password"><p class="note">Usa una frase fácil de recordar para ti, con palabras y números (por ejemplo, tres palabras y un año). No sirven las muy comunes ni tu correo.</p><p class="err" id="perr"></p><p class="row"><button class="b" id="pgo">Guardar</button><button class="b s" id="pback">Volver</button></p><p class="note">Se cierra tu sesión en los demás dispositivos.</p></div>'
+      + '<div class="card" style="max-width:460px;margin:16px auto"><h2>Mis sesiones</h2><p class="note">¿Dejaste el panel abierto en otra computadora o perdiste tu celular? Cierra todas tus sesiones menos esta.</p><p><button class="b s" id="pout">Cerrar mis otras sesiones</button></p></div>';
+    $('#pout').onclick = () => act(async () => { const r = await api('me/logout-others', { method: 'POST', body: {} }); toast(r.closed ? 'Se cerraron ' + r.closed + ' sesión(es).' : 'No tenías otras sesiones abiertas.'); });
     $('#pback').onclick = () => { S.tab = 'hoy'; render(); };
     $('#pgo').onclick = async () => { try { await api('me/password', { method: 'POST', body: { current: $('#pc').value, password: $('#pn').value } }); toast('Contraseña cambiada.'); S.tab = 'hoy'; render(); } catch (x) { $('#perr').textContent = x.message; } };
   }
@@ -745,7 +748,12 @@
       + [['prospect', 'Confirmación al prospecto cuando agenda'], ['advisor', 'Aviso al asesor cuando le llega un lead'], ['reminder', 'Recordatorio al prospecto la víspera de su cita confirmada (después de las 18:00)'], ['weekly', 'Reporte semanal al propietario (lunes después de las 10:00)'], ['file', 'Aviso al asesor cuando llega un expediente o comprobante']]
         .map((x) => '<label class="chk" style="display:flex"><input type="checkbox" data-wa="' + x[0] + '"' + (st.wa_auto[x[0]] ? ' checked' : '') + (S.cfg.wa ? '' : ' disabled') + '> ' + x[1] + ' <code>' + esc(S.cfg.waTemplates[x[0]]) + '</code></label>').join('')
       + '<div id="walog"></div></div>'
-      + '<div class="card"><h2>Bóveda de documentos</h2><p class="note">' + (S.cfg.docs ? 'Activa: los expedientes y comprobantes se guardan cifrados.' : 'Apagada: falta DOCS_KEY en Railway. Sin ella no se pueden pedir expedientes.') + '</p></div>'
+      + '<div class="card"><h2>' + IC('shield') + ' Seguridad</h2>'
+      + '<label class="chk" style="display:flex"><input type="checkbox" id="sx_mfa"' + (st.mfa_all ? ' checked' : '') + '> Pedir verificación en dos pasos también a los vendedores (recomendado: ven teléfonos y expedientes de clientes)</label>'
+      + '<div class="filters" style="margin-top:8px"><div><label for="sx_ret">Borrar solos los documentos de leads cerrados y propietarios descartados después de (días)</label><input id="sx_ret" type="number" min="0" value="' + esc(st.docs_retention_days) + '" placeholder="0 = nunca"></div><div><label>&nbsp;</label><button class="b s" id="sx_save">Guardar</button></div></div>'
+      + '<p class="note">Bóveda de documentos: ' + (S.cfg.docs ? '<b>activa</b>, los expedientes y comprobantes se guardan cifrados.' : '<b>apagada</b>. Genera una llave, cópiala a la variable DOCS_KEY en Railway y guárdala en tu gestor de contraseñas: si se pierde, los documentos no se pueden abrir.') + '</p>'
+      + (S.cfg.docs ? '' : '<p><button class="b s sm" id="sx_key">Generar llave</button></p><div id="sx_keyout"></div>')
+      + '<details><summary class="note">Bitácora de seguridad (últimos movimientos)</summary><div class="hist" id="sx_log"><p class="note">Cargando…</p></div></details></div>'
       + '<div class="card"><h2>Zonas</h2><div class="row">' + S.cfg.zones.map((z) => '<label class="chk"><input type="checkbox" data-zone="' + z.id + '"' + (z.active ? ' checked' : '') + '> ' + esc(z.name) + '</label>').join('') + '</div><div class="row" style="margin-top:8px"><input id="z_n" placeholder="Nueva zona" style="max-width:240px"><button class="b s sm" id="zadd">Agregar</button></div><p class="note">Una zona apagada ya no aparece en el sitio ni en los filtros.</p></div>';
     const showLink = (name, r, phone) => { $('#linkout').innerHTML = '<div class="card"><p>Link para <b>' + esc(name) + '</b> (vence ' + fdt(r.expires_at) + '):</p><p><code>' + esc(r.link) + '</code></p><p class="row">' + (phone ? '<a class="b sm" target="_blank" rel="noopener" href="' + esc(waL(phone, 'Hola ' + first(name) + ', este es tu acceso al panel de Rentaypunto. Ábrelo y crea tu contraseña: ' + r.link)) + '">Mandar por WhatsApp</a>' : '') + '<button class="b s sm" id="lcopy">Copiar</button></p></div>'; $('#lcopy').onclick = () => navigator.clipboard.writeText(r.link).then(() => toast('Copiado.')); $('#linkout').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
     $('#uadd').onclick = async () => {
@@ -764,6 +772,10 @@
       if (r) { await reload(['cfg']); renderEquipo(); }
     };
     $$('[data-zone]').forEach((c) => { c.onchange = () => act(async () => { await api('zones/' + c.dataset.zone, { method: 'PATCH', body: { active: c.checked } }); await reload(['cfg']); }, 'Zona actualizada.'); });
+    $('#sx_save').onclick = () => act(async () => { await api('settings', { method: 'PATCH', body: { mfa_all: $('#sx_mfa').checked, docs_retention_days: $('#sx_ret').value || 0 } }); await reload(['cfg']); renderEquipo(); }, 'Seguridad actualizada.');
+    $('#sx_mfa').onchange = () => $('#sx_save').click();
+    if ($('#sx_key')) $('#sx_key').onclick = async () => { const r = await act(() => api('docs-key', { method: 'POST', body: {} })); if (r) $('#sx_keyout').innerHTML = '<p>Copia esta llave a <b>DOCS_KEY</b> en Railway y guárdala en tu gestor de contraseñas. No se vuelve a mostrar:</p><p><code>' + esc(r.key) + '</code></p>'; };
+    api('audit').then((L) => { if ($('#sx_log')) $('#sx_log').innerHTML = L.map((x) => '<div><span class="note">' + fdt(x.at) + ' · ' + esc(x.ip || '') + '</span><br><b>' + esc(x.user_name || '—') + '</b> ' + esc(x.action) + (x.detail ? ' <span class="note">' + esc(x.detail) + '</span>' : '') + '</div>').join('') || '<p class="note">Sin movimientos.</p>'; }).catch(() => {});
     $$('[data-wa]').forEach((c) => { c.onchange = () => act(async () => { await api('settings', { method: 'PATCH', body: { wa_auto: { [c.dataset.wa]: c.checked } } }); await reload(['cfg']); }, c.checked ? 'Activado.' : 'Desactivado.'); });
     if (S.cfg.wa) api('wa-log').then((L) => { if ($('#walog')) $('#walog').innerHTML = L.length ? '<details><summary class="note">Últimos mensajes (' + L.length + ')</summary><div class="hist">' + L.map((m) => '<div><span class="note">' + fdt(m.at) + '</span> · ' + esc(m.template) + ' → ' + tel(m.to_phone) + ' · <span class="tag ' + (m.status === 'enviado' ? 'ok' : m.status === 'error' ? 'no' : 'wa') + '">' + esc(m.status) + '</span>' + (m.error ? ' <span class="note">' + esc(m.error) + '</span>' : '') + '</div>').join('') + '</div></details>' : '<p class="note">Aún no sale ningún mensaje.</p>'; }).catch(() => {});
     $('#zadd').onclick = async () => { const r = await act(() => api('zones', { method: 'POST', body: { name: $('#z_n').value } }), 'Zona agregada.'); if (r) { await reload(['cfg']); renderEquipo(); } };

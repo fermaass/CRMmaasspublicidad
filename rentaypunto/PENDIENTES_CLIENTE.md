@@ -51,3 +51,12 @@ La plataforma ya está construida. Para encenderla necesitamos estas respuestas.
 27. **Acceso para dar de alta el sitio en Google Search Console,** mediante el dominio en Cloudflare.
 28. **Revisar las preguntas frecuentes** que aparecen en el sitio (para estudiantes, familias, mascotas, etc.) y confirmar que sus respuestas describen cómo trabajan.
 29. **Alianzas o directorios de Querétaro** que puedan enlazar al sitio: universidades, empresas que traen personal de fuera, blogs de la zona.
+
+## 7. Seguridad y datos personales
+
+30. **¿Cuántos días se guardan los documentos** de quien no rentó o ya terminó su contrato? Después se borran solos. Recomendamos 180 días; confírmenlo con su despacho.
+31. **Verificación en dos pasos también para vendedores** (recomendado, porque ven teléfonos y expedientes de clientes): ¿sí o no?
+32. **Correo para derechos ARCO** (acceso, rectificación, cancelación y oposición): quién responde y en cuántos días. Va en el aviso de privacidad.
+33. **Quién de su equipo puede ver expedientes:** hoy el asesor de ese cliente, el Gerente y el Dueño. ¿Están de acuerdo?
+34. **Verificación en dos pasos** en todas las cuentas de la empresa (correo, Meta, Google, Cloudflare, Railway).
+35. **Prueba de seguridad externa** (opcional, recomendable antes de manejar mucho volumen): ¿la contratan?

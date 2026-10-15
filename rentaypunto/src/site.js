@@ -12,7 +12,7 @@ const { parseCookies } = require('./auth');
 const { publicDocsRoutes } = require('./docs');
 
 const BOT = /bot|crawl|spider|slurp|facebookexternalhit|preview|lighthouse/i;
-const clientIp = (req) => String(req.get('cf-connecting-ip') || req.ip || '');
+const { clientIp } = require('./security');
 const clip = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
 
 function rateLimiter(max, ms) {
@@ -32,6 +32,7 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
   const zones = () => db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY name').all();
   const ctxOf = (req) => ({
     siteUrl: config.siteUrl || `${req.protocol}://${req.get('host')}`,
+    nonce: req.res.locals.nonce || '', // permiso de los <script> en línea de esta página (CSP)
     settings: siteSettings(db), today: localNow().date, version: config.version,
     zones: db.prepare('SELECT name, slug FROM zones WHERE active = 1 ORDER BY name').all(), // para el pie de página
   });

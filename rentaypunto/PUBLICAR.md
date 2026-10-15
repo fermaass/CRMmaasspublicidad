@@ -27,7 +27,8 @@ Variables del servicio:
 | `BACKUP_S3_*` | Respaldo diario y copia de las fotos en Cloudflare R2 (igual que en Maass Leads) |
 | `META_CAPI_TOKEN` | Token de la API de Conversiones: Meta → Administrador de eventos → tu píxel → Configuración → "Generar token de acceso". El ID del píxel se pone en el panel (Equipo → Configuración) |
 | `META_TEST_EVENT_CODE` | Solo mientras pruebas: el código de "Probar eventos" del Administrador de eventos. Quítalo después |
-| `DOCS_KEY` | Llave de la bóveda de documentos (expedientes y comprobantes). Sin ella, los expedientes están apagados. El servidor sugiere una en **Deploy Logs** mientras no exista: cópiala a la variable y **guárdala en tu gestor de contraseñas**. Si se pierde o se cambia, los documentos ya guardados no se pueden abrir |
+| `DOCS_KEY` | Llave de la bóveda de documentos (expedientes y comprobantes). Sin ella, los expedientes están apagados. Se genera en el panel: **Equipo → Seguridad → Generar llave** (solo el Dueño, se muestra una vez). Cópiala a la variable y **guárdala en tu gestor de contraseñas**. Si se pierde o se cambia, los documentos ya guardados no se pueden abrir |
+| `ORIGIN_SECRET` | Candado de origen: la misma clave que pones en Cloudflare como encabezado `X-Origin-Auth` (24 caracteres o más). Con ella, el servidor solo responde a lo que pasa por Cloudflare. Ver `SEGURIDAD.md` |
 | `WA_TOKEN`, `WA_PHONE_ID` | WhatsApp oficial (ver `WHATSAPP.md`). Sin ellas, el panel usa enlaces wa.me |
 | `META_API_VERSION` | Opcional. De fábrica `v23.0`; cámbiala si Meta avisa que esa versión venció |
 | *(no poner `SEED_DEMO`)* | |
@@ -40,3 +41,7 @@ Después: en Google Search Console da de alta el dominio y envía `https://www.r
 
 - Gerente: el Dueño entra a **Equipo → Reiniciar verificación**.
 - Dueño: en Railway agrega la variable `RESET_2FA` = tu correo, deja que reinicie, entra y configura la app de nuevo. Luego **quita la variable**.
+
+## Seguridad
+
+Antes de abrir el sitio al público, sigue la sección "Lo que hay que configurar" de `SEGURIDAD.md`: Cloudflare en Full (strict), candado de origen, Bot Fight Mode, límite de intentos en el login, bucket R2 privado y verificación en dos pasos en todas las cuentas de la empresa.

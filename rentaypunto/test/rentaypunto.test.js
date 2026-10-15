@@ -15,8 +15,8 @@ test('primer uso y verificación en dos pasos del Dueño', async (t) => {
   const app = await start(); t.after(app.close);
   const c = client(app.base);
   assert.equal((await c.get('/api/setup')).body.needed, true);
-  assert.equal((await c.post('/api/setup', { setup_code: 'XXXX-0000', name: 'Fer', email: 'fer@example.com', password: 'contrasena-larga' })).status, 403);
-  const r = await c.post('/api/setup', { setup_code: 'abcd 1234', name: 'Fer', email: 'fer@example.com', password: 'contrasena-larga' });
+  assert.equal((await c.post('/api/setup', { setup_code: 'XXXX-0000', name: 'Fer', email: 'fer@example.com', password: 'Jacaranda-Norte-2026' })).status, 403);
+  const r = await c.post('/api/setup', { setup_code: 'abcd 1234', name: 'Fer', email: 'fer@example.com', password: 'Jacaranda-Norte-2026' });
   assert.equal(r.status, 201);
   assert.equal(r.body.mfa, 'setup');
   assert.equal((await c.get('/api/me')).status, 401, 'sin el código todavía no entra');
@@ -31,9 +31,11 @@ test('primer uso y verificación en dos pasos del Dueño', async (t) => {
   // Entrar otra vez: contraseña y luego código.
   const c2 = client(app.base);
   assert.equal((await c2.post('/api/login', { email: 'fer@example.com', password: 'mal' })).status, 401);
-  assert.equal((await c2.post('/api/login', { email: 'FER@example.com', password: 'contrasena-larga' })).body.mfa, 'code');
+  assert.equal((await c2.post('/api/login', { email: 'FER@example.com', password: 'Jacaranda-Norte-2026' })).body.mfa, 'code');
   assert.equal((await c2.get('/api/me')).status, 401);
-  assert.equal((await c2.post('/api/2fa', { code: auth.totpCode(s.body.secret, Math.floor(Date.now() / 30000)) })).status, 200);
+  const step = Math.floor(Date.now() / 30000);
+  assert.equal((await c2.post('/api/2fa', { code: auth.totpCode(s.body.secret, step) })).status, 400, 'el mismo código no sirve dos veces');
+  assert.equal((await c2.post('/api/2fa', { code: auth.totpCode(s.body.secret, step + 1) })).status, 200);
   assert.equal((await c2.get('/api/me')).status, 200);
 });
 

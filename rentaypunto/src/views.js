@@ -34,8 +34,8 @@ ${og.image ? `<meta property="og:image" content="${esc(og.image)}"><meta name="t
 <link rel="icon" href="/sitio/icon.svg" type="image/svg+xml">
 <link rel="preload" href="/sitio/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/sitio/site.css?v=${ctx.version}">
-${ld ? `<script type="application/ld+json">${json(ld)}</script>` : ''}
-${pixel(ctx.settings.meta_pixel_id)}
+${ld ? `<script type="application/ld+json" nonce="${ctx.nonce}">${json(ld)}</script>` : ''}
+${pixel(ctx.settings.meta_pixel_id, ctx.nonce)}
 </head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
 ${BRAND.sprite()}
 <header class="top"><div class="w nav"><a class="logo" href="/" aria-label="Rentaypunto, inicio">${BRAND.logo(34)}</a>
@@ -48,8 +48,8 @@ ${BRAND.sprite()}
 <div><h3>Zonas</h3>${zones.map((z) => `<a href="/renta/${z.slug}">${esc(z.name)}</a>`).join('')}</div>
 <div><h3>Rentaypunto</h3><a href="/renta-tu-propiedad">Renta tu propiedad</a><a href="/certeza-juridica">Póliza jurídica</a><a href="/ayuda">Ayuda</a><a href="/quejas">Quejas y sugerencias</a>${wa ? `<a target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(wa, 'Hola, tengo una pregunta.'))}">WhatsApp</a>` : ''}</div>
 </div><div class="legal"><span>© Rentaypunto · Querétaro, México</span><a href="/aviso-de-privacidad">Aviso de privacidad</a></div></div></footer>
-<script>window.RP=${json({ wa, today: ctx.today })}</script>
-${scripts.map((s) => `<script>${s}</script>`).join('')}
+<script nonce="${ctx.nonce}">window.RP=${json({ wa, today: ctx.today })}</script>
+${scripts.map((s) => `<script nonce="${ctx.nonce}">${s}</script>`).join('')}
 <script src="/sitio/brand.js?v=${ctx.version}"></script>
 <script src="/sitio/match.js?v=${ctx.version}"></script>
 <script src="/sitio/site.js?v=${ctx.version}"></script>
@@ -62,9 +62,9 @@ ${c.length ? `<nav class="bc" aria-label="Ruta">${c.map(([t, h], i) => (h && i <
 ${eyebrow ? `<span class="eyebrow">${eyebrow}</span>` : ''}<h1 class="${h1Class}">${esc(h1)}</h1>${lead ? `<p class="lead">${esc(lead)}</p>` : ''}</div></section>`;
 
 // Píxel de Meta (código estándar de Meta). Solo si el Dueño configuró el ID en el panel.
-function pixel(id) {
+function pixel(id, nonce) {
   if (!/^\d{5,20}$/.test(String(id || ''))) return '';
-  return `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${id}');fbq('track','PageView');</script>`;
+  return `<script nonce="${nonce}">!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${id}');fbq('track','PageView');</script>`;
 }
 
 // Costo de entrada: primer mes + depósito + mantenimiento (si no va incluido).
