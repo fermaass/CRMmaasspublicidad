@@ -11,7 +11,8 @@ const { seoAuto, cleanSlug } = require('./seo');
 const { transactionalRoutes } = require('./tx');
 const { rateLimiter, clientIp } = require('./site');
 const { alertMatches, alertsFor, ownerReport, reportMessage, summary, myNumbers, opinionStats } = require('./insights');
-const { ACTA_ITEMS, OWNER_REQUESTS } = require('./db');
+const { ACTA_ITEMS, OWNER_REQUESTS, DOC_KINDS, PAY_CONCEPTS } = require('./db');
+const { panelDocsRoutes } = require('./docs');
 
 const LINK_HOURS = 72;
 const clip = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
@@ -20,7 +21,7 @@ const isoNow = () => new Date().toISOString();
 const MANAGERS = ['gerente', 'dueno'];
 const isManager = (u) => MANAGERS.includes(u.role);
 
-function panelRouter({ db, config, photos, actas, onLead }) {
+function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
   const app = transactionalRoutes(express.Router(), db);
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3);
@@ -215,7 +216,8 @@ function panelRouter({ db, config, photos, actas, onLead }) {
       settings: siteSettings(db), zones: db.prepare('SELECT * FROM zones ORDER BY name').all(),
       lists: { roles: ROLES, propStatus: PROP_STATUS, stages: STAGES, lostReasons: LOST_REASONS, extras: EXTRAS, includes: INCLUDES, requirements: REQUIREMENTS, propTypes: PROP_TYPES },
       siteUrl: config.siteUrl || '', today: localNow().date, mail: Boolean(config.resendKey && config.mailFrom), capi: Boolean(config.metaToken),
-      actaItems: ACTA_ITEMS, ownerRequests: OWNER_REQUESTS,
+      actaItems: ACTA_ITEMS, ownerRequests: OWNER_REQUESTS, docKinds: DOC_KINDS, payConcepts: PAY_CONCEPTS,
+      docs: vlt.enabled, wa: wa.enabled, waTemplates: wa.TEMPLATES,
     });
   });
   app.patch('/api/settings', auth.requireRole('dueno'), (req, res) => {
@@ -240,6 +242,11 @@ function panelRouter({ db, config, photos, actas, onLead }) {
       const id = String(b.meta_pixel_id).replace(/\D/g, '');
       if (b.meta_pixel_id && !/^\d{5,20}$/.test(id)) return res.status(400).json({ error: 'El ID del píxel son solo números (Administrador de eventos de Meta).' });
       setSetting(db, 'meta_pixel_id', id);
+    }
+    if (b.wa_auto !== undefined) {
+      const cur = siteSettings(db).wa_auto;
+      for (const k of Object.keys(cur)) if (b.wa_auto[k] !== undefined) cur[k] = Boolean(b.wa_auto[k]);
+      setSetting(db, 'wa_auto', JSON.stringify(cur));
     }
     if (b.commission_months !== undefined) {
       const n = Number(b.commission_months);
@@ -492,6 +499,7 @@ function panelRouter({ db, config, photos, actas, onLead }) {
       // Firmado: la propiedad pasa a Rentada y sale del sitio y del mapa del sitio.
       if (b.stage === 'firmado' && l.property_id) {
         const p = db.prepare('SELECT status FROM properties WHERE id = ?').get(l.property_id);
+        db.prepare('UPDATE properties SET tenant_lead_id = ? WHERE id = ?').run(l.id, l.property_id); // quien firmó es el inquilino
         if (p && p.status !== 'rentada') {
           db.prepare("UPDATE properties SET status = 'rentada', rented_at = ?, updated_at = ? WHERE id = ?").run(now, now, l.property_id);
           event(l.id, u.id, 'propiedad', `${l.prop_code} pasó a Rentada y salió del sitio`);
@@ -563,6 +571,10 @@ function panelRouter({ db, config, photos, actas, onLead }) {
     if (req.body?.advisor_id !== undefined && req.params.kind === 'owners') db.prepare('UPDATE owners SET advisor_id = ? WHERE id = ?').run(num(req.body.advisor_id), row.id);
     res.json({ ok: true });
   });
+
+  // ---------- Fase 3 y 4: expedientes, documentos cifrados, pagos y bitácora de WhatsApp ----------
+  panelDocsRoutes(app, { db, vlt, config });
+  app.get('/api/wa-log', auth.requireRole('dueno'), (req, res) => res.json(db.prepare('SELECT key, to_phone, template, status, error, at FROM wa_messages ORDER BY id DESC LIMIT 40').all()));
 
   // ---------- Fase 2 ----------
   // Enlace de opinión para quien ya visitó (se manda por WhatsApp). Siempre el mismo para ese lead.

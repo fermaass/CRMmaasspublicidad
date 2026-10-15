@@ -149,6 +149,45 @@
     }
   }
 
+  // ---------- Expediente y portal de pagos (enlace privado) ----------
+  const token = (location.pathname.match(/^\/(?:expediente|portal)\/([\w-]+)/) || [])[1];
+  // Fotos muy pesadas se achican (máx. 2400 px) para que suban con datos del celular; los PDF van tal cual.
+  function prepare(file) {
+    if (!/^image\/(jpeg|png)$/.test(file.type) || file.size <= 3 * 1024 * 1024) return Promise.resolve(file);
+    return new Promise((ok) => {
+      const img = new Image(); const url = URL.createObjectURL(file);
+      img.onload = () => { const k = Math.min(1, 2400 / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); c.toBlob((b) => { URL.revokeObjectURL(url); ok(b || file); }, 'image/jpeg', 0.85); };
+      img.onerror = () => { URL.revokeObjectURL(url); ok(file); };
+      img.src = url;
+    });
+  }
+  async function upload(url, file) {
+    const body = await prepare(file);
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }, body: body });
+    let out = {}; try { out = await r.json(); } catch (e) { /* vacío */ }
+    if (!r.ok) throw new Error(out.error || 'No se pudo subir. Revisa tu internet e intenta de nuevo.');
+  }
+  if (token && $('#docs')) {
+    $$('[data-kind]').forEach((inp) => { inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      toast('Subiendo…');
+      try { await upload('/api/expediente/' + token + '/docs?kind=' + inp.dataset.kind, f); location.reload(); } catch (x) { toast(x.message); }
+    }; });
+    $$('[data-quitar]').forEach((b) => { b.onclick = async () => { try { await post('/api/expediente/' + token + '/docs/' + b.dataset.quitar + '/quitar', {}); location.reload(); } catch (x) { toast(x.message); } }; });
+    $('#ex_send').onclick = async () => {
+      const data = {}; $$('#pf_b,#pf_d,#pf_o,#pf_p,#pf_j,#pf_n').forEach((e) => { data[e.name] = e.value; });
+      $('#ex_err').textContent = ''; $('#ex_send').disabled = true;
+      try { await post('/api/expediente/' + token + '/enviar', data); location.reload(); } catch (x) { $('#ex_err').textContent = x.message; $('#ex_send').disabled = false; }
+    };
+  }
+  if (token && $('#pt_f')) {
+    $('#pt_f').onchange = async function () {
+      const f = this.files[0]; if (!f) return; $('#pt_err').textContent = ''; toast('Subiendo…');
+      try { await upload('/api/portal/' + token + '/comprobante?month=' + $('#pt_m').value + '&concept=' + $('#pt_c').value, f); location.reload(); } catch (x) { $('#pt_err').textContent = x.message; }
+    };
+  }
+
   // ---------- Ficha: galería, "para tu búsqueda" y agendado ----------
   const P = window.PROP;
   if (!P) return;

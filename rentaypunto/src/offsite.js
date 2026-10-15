@@ -75,6 +75,19 @@ async function putObject(key, body, contentType, cfg, fetchImpl = fetch) {
   return key;
 }
 
+// Borra un archivo del almacenamiento (p. ej. un documento que se eliminó por privacidad).
+async function deleteObject(key, cfg, fetchImpl = fetch) {
+  const url = `${cfg.endpoint}/${enc(cfg.bucket)}/${key.split('/').map(enc).join('/')}`;
+  const payloadHash = sha256hex('');
+  const amzDate = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const headers = signV4({ method: 'DELETE', url, payloadHash, accessKey: cfg.accessKey, secretKey: cfg.secretKey, region: cfg.region, service: 's3', amzDate,
+    headers: { 'x-amz-content-sha256': payloadHash } });
+  delete headers.host;
+  const r = await send(fetchImpl, url, { method: 'DELETE', headers, signal: AbortSignal.timeout(30000) });
+  if (!r.ok && r.status !== 404) throw new Error(`El almacenamiento respondió ${r.status} al borrar ${key}`);
+  return true;
+}
+
 // Baja un respaldo del almacenamiento (para restaurar). key = la ruta dentro del bucket, p. ej. maass/crm-2026-10-01.db.gz
 async function downloadBackup(key, cfg, fetchImpl = fetch) {
   const url = `${cfg.endpoint}/${enc(cfg.bucket)}/${String(key).split('/').map(enc).join('/')}`;
@@ -88,4 +101,4 @@ async function downloadBackup(key, cfg, fetchImpl = fetch) {
   return Buffer.from(await r.arrayBuffer());
 }
 
-module.exports = { signV4, offsiteConfig, uploadBackup, putObject, downloadBackup, sha256hex };
+module.exports = { signV4, offsiteConfig, uploadBackup, putObject, deleteObject, downloadBackup, sha256hex };

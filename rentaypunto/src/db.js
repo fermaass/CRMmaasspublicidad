@@ -24,6 +24,12 @@ const PROP_TYPES = ['Casa', 'Departamento', 'Estudio', 'Otro'];
 const DEFAULT_ZONES = ['Juriquilla', 'El Refugio', 'Centro Sur', 'Zibatá', 'Milenio III', 'Centro Histórico', 'Cumbres del Lago'];
 const ACTA_ITEMS = ['Llaves entregadas', 'Lecturas de luz, agua y gas anotadas', 'Estado de paredes, pisos y puertas revisado', 'Inventario de muebles y electrodomésticos', 'Fotos de cada espacio', 'Firma del inquilino y del propietario'];
 const OWNER_REQUESTS = { pausar: 'Pausar', reanudar: 'Reanudar', precio: 'Cambio de precio', ya_rentada: 'Ya la rentó por su cuenta', renovacion: 'Renovación', otro: 'Otro' };
+const DOC_KINDS = {
+  lead: { ine: ['INE (frente y vuelta)', true, 2], csf: ['Constancia de Situación Fiscal', true, 1], ingresos: ['Comprobante de ingresos (últimos 3 meses)', true, 3], aval: ['Documentos del aval o fiador (si la propiedad lo pide)', false, 4] },
+  owner: { identificacion: ['Identificación oficial', true, 2], predial: ['Predial o escritura', true, 2] },
+  tenancy: { comprobante: ['Comprobante de pago', true, 50] },
+};
+const PAY_CONCEPTS = { renta: 'Renta', luz: 'Luz', agua: 'Agua', gas: 'Gas', internet: 'Internet', mantenimiento: 'Mantenimiento' };
 const DEFAULT_HOURS = ['10:00', '11:00', '12:00', '13:00', '16:00', '17:00', '18:00'];
 
 const { slugify } = require('../public/panel/seo-shared.js');
@@ -306,6 +312,76 @@ function migrate(db) {
     -- Inversión en Meta por mes (solo el Dueño la ve).
     CREATE TABLE IF NOT EXISTS meta_spend (month TEXT PRIMARY KEY, amount INTEGER NOT NULL);
   `);
+  // Fase 3: expedientes con documentos cifrados. Fase 4: administración (pagos) y WhatsApp oficial.
+  addColumn(db, 'leads', 'tenant_profile', 'TEXT'); // lo que el inquilino llena en su expediente (JSON)
+  addColumn(db, 'leads', 'file_status', "TEXT NOT NULL DEFAULT 'sin_iniciar'"); // sin_iniciar, enviado, recibido, aprobado, rechazado
+  addColumn(db, 'owners', 'file_status', "TEXT NOT NULL DEFAULT 'sin_iniciar'");
+  addColumn(db, 'properties', 'tenant_lead_id', 'INTEGER'); // lead que firmó (el inquilino)
+  db.exec(`
+    -- Enlaces privados: expediente del inquilino, documentos del propietario o portal de pagos del inquilino.
+    -- Solo se guarda la huella del enlace. El de expediente se cierra al enviarlo.
+    CREATE TABLE IF NOT EXISTS doc_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL CHECK (subject_type IN ('lead','owner','tenancy')),
+      subject_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      expires_at TEXT NOT NULL,
+      submitted_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS doc_links_subject ON doc_links(subject_type, subject_id);
+    -- Documentos cifrados (el archivo vive en la bóveda; aquí solo lo necesario para descifrarlo y revisarlo).
+    CREATE TABLE IF NOT EXISTS documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL CHECK (subject_type IN ('lead','owner','tenancy')),
+      subject_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      file TEXT NOT NULL, iv TEXT NOT NULL, tag TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+      original_name TEXT,
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente','validado','rechazado')),
+      note TEXT,
+      uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      deleted_at TEXT,
+      deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS documents_subject ON documents(subject_type, subject_id);
+    -- Bitácora: quién abrió, validó o borró cada documento y cuándo.
+    CREATE TABLE IF NOT EXISTS doc_access (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    -- Administración de la renta: cada mes, cada concepto con su estado y su comprobante.
+    CREATE TABLE IF NOT EXISTS payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      month TEXT NOT NULL,
+      concept TEXT NOT NULL CHECK (concept IN ('renta','luz','agua','gas','internet','mantenimiento')),
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente','validado','rechazado')),
+      document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+      note TEXT,
+      updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE (property_id, month, concept)
+    );
+    -- Mensajes de WhatsApp oficial: la llave evita mandar dos veces lo mismo.
+    CREATE TABLE IF NOT EXISTS wa_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      to_phone TEXT NOT NULL,
+      template TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      wa_id TEXT,
+      at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+  `);
   // Leads de la fase 1: se calculan sus hitos con la etapa en la que van.
   db.exec(`UPDATE leads SET confirmed_at = COALESCE(confirmed_at, updated_at) WHERE stage IN ('cita','visito','expediente','firmado') AND confirmed_at IS NULL;
     UPDATE leads SET visited_at = COALESCE(visited_at, updated_at) WHERE stage IN ('visito','expediente','firmado') AND visited_at IS NULL;
@@ -337,11 +413,13 @@ function siteSettings(db) {
     meta_pixel_id: getSetting(db, 'meta_pixel_id', '') || '', // píxel de Meta (el token de la API de Conversiones va en Railway)
     commission_months: Number(getSetting(db, 'commission_months', '1')), // supuesto: Rentaypunto cobra 1 mes de renta al cerrar
     commission_pct: Number(getSetting(db, 'commission_pct', '20')), // supuesto: 20% de ese cobro para el asesor
+    // WhatsApp oficial: qué mensajes salen solos (todo apagado hasta que el Dueño lo encienda).
+    wa_auto: getJsonSetting(db, 'wa_auto', { prospect: false, advisor: false, reminder: false, weekly: false, file: false }),
   };
 }
 
 module.exports = {
   openDb, getSetting, setSetting, getJsonSetting, siteSettings, slugify, phone10,
   ROLES, ROLE_LABELS, PROP_STATUS, PROP_LABELS, VISIBLE, STAGES, STAGE_LABELS, LOST_REASONS,
-  EXTRAS, INCLUDES, REQUIREMENTS, PROP_TYPES, DEFAULT_HOURS, ACTA_ITEMS, OWNER_REQUESTS,
+  EXTRAS, INCLUDES, REQUIREMENTS, PROP_TYPES, DEFAULT_HOURS, ACTA_ITEMS, OWNER_REQUESTS, DOC_KINDS, PAY_CONCEPTS,
 };

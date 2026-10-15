@@ -7,6 +7,7 @@ const { visibleProps, publicProp, similar, slotsFor, localNow, isDate, originOf,
 const { transactionalRoutes } = require('./tx');
 const { opinionStats } = require('./insights');
 const { parseCookies } = require('./auth');
+const { publicDocsRoutes } = require('./docs');
 
 const BOT = /bot|crawl|spider|slurp|facebookexternalhit|preview|lighthouse/i;
 const clientIp = (req) => String(req.get('cf-connecting-ip') || req.ip || '');
@@ -23,7 +24,7 @@ function rateLimiter(max, ms) {
   };
 }
 
-function siteRouter({ db, config, notify, onLead, meta }) {
+function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
   const app = transactionalRoutes(express.Router(), db);
   const forms = rateLimiter(20, 10 * 60e3); // 20 envíos por conexión cada 10 minutos
   const zones = () => db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY name').all();
@@ -191,6 +192,8 @@ function siteRouter({ db, config, notify, onLead, meta }) {
     else db.prepare("INSERT INTO settings (key, value) VALUES ('wa_clicks_home', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1").run();
     res.status(204).end();
   });
+
+  publicDocsRoutes(app, { db, vlt, views: V, ctxOf, limiter: rateLimiter(80, 10 * 60e3), clientIp, onFileReceived });
 
   // Opinión después de la visita: el asesor manda el enlace por WhatsApp; sirve una sola vez y no pide nombre.
   const opinionLead = (token) => (/^[\w-]{16,64}$/.test(String(token || '')) ? db.prepare(`SELECT l.id, l.property_id, p.title, p.code FROM leads l

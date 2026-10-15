@@ -13,6 +13,8 @@ const { offsiteConfig, uploadBackup } = require('./offsite');
 const { dailyBackup } = require('./backup');
 const { seedDemo } = require('./demo');
 const { metaCapi } = require('./meta');
+const { vault, parseKey } = require('./vault');
+const { whatsapp } = require('./whatsapp');
 
 function loadConfig(env = process.env) {
   const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
@@ -33,6 +35,11 @@ function loadConfig(env = process.env) {
     metaToken: env.META_CAPI_TOKEN, // token de la API de Conversiones (Administrador de eventos de Meta)
     metaApiVersion: env.META_API_VERSION || 'v23.0',
     metaTestCode: env.META_TEST_EVENT_CODE, // solo para probar en el Administrador de eventos
+    docsKey: parseKey(env.DOCS_KEY), // llave de la bóveda de documentos (32 bytes en base64)
+    docsKeyInvalid: Boolean(env.DOCS_KEY) && !parseKey(env.DOCS_KEY),
+    waToken: env.WA_TOKEN, // WhatsApp Cloud API: token permanente del usuario del sistema
+    waPhoneId: env.WA_PHONE_ID, // ID del número de WhatsApp Business
+    waLang: env.WA_LANG || 'es_MX',
     version: `${require('../package.json').version}-${Date.now().toString(36)}`,
   };
 }
@@ -45,7 +52,8 @@ function logError(db, place, message) {
 }
 
 function createApp({ db, config, mail = mailer(config), photos = photoStore(path.join(config.dataDir, 'fotos'), offsiteConfig()), meta = metaCapi(config),
-  actas = photoStore(path.join(config.dataDir, 'actas'), offsiteConfig(), console, 'actas') }) {
+  actas = photoStore(path.join(config.dataDir, 'actas'), offsiteConfig(), console, 'actas'),
+  vlt = vault(path.join(config.dataDir, 'docs'), config.docsKey, offsiteConfig()), wa = whatsapp(db, config) }) {
   ensureSetupCode(db, config);
   const panelBase = () => (config.panelHost ? `https://${config.panelHost}` : `${config.siteUrl || ''}/panel`);
   const managers = () => db.prepare("SELECT email FROM users WHERE active = 1 AND role IN ('gerente','dueno')").all().map((u) => u.email);
@@ -60,7 +68,19 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
     const text = `${reassigned ? 'Te asignaron un lead' : 'Nuevo lead'}: ${l.name} (WhatsApp ${l.phone})\n`
       + `Propiedad: ${l.code ? `${l.code} · ${l.title}` : '—'}\nVisita: ${l.visit_date || '—'} ${l.visit_time || ''}\nEtapa: ${STAGE_LABELS[l.stage]}\nOrigen: ${l.origin}\n`
       + `${l.search_context ? `Busca: ${l.search_context}\n` : ''}${l.advisor_name ? '' : 'Sin asesor asignado: asígnalo en el panel.\n'}\nÁbrelo en el panel: ${panelBase()}/`;
+    wa.onLead(id);
     mail.send([...to, reassigned ? '' : extra()].filter(Boolean), `Rentaypunto · ${reassigned ? 'Lead asignado' : 'Nuevo lead'}: ${l.name}${l.code ? ` · ${l.code}` : ''}`, text);
+  };
+
+  // Expediente, documentos de propietario o comprobante recibido: aviso al asesor (o a Gerente y Dueño si no hay asesor).
+  const onFileReceived = (type, id) => {
+    const row = type === 'lead' ? db.prepare('SELECT l.name, u.email FROM leads l LEFT JOIN users u ON u.id = l.advisor_id WHERE l.id = ?').get(id)
+      : type === 'owner' ? db.prepare('SELECT o.name, u.email FROM owners o LEFT JOIN users u ON u.id = o.advisor_id WHERE o.id = ?').get(id)
+        : db.prepare('SELECT p.code AS name, u.email FROM properties p LEFT JOIN users u ON u.id = p.advisor_id WHERE p.id = ?').get(id);
+    if (!row) return;
+    const what = type === 'lead' ? 'envió su expediente' : type === 'owner' ? 'envió los documentos de su propiedad' : 'subió un comprobante de pago';
+    mail.send((row.email ? [row.email] : managers()).filter(Boolean), `Rentaypunto · ${row.name} ${what}`, `${row.name} ${what}. Revísalo en el panel: ${panelBase()}/`);
+    wa.onFile(type, id);
   };
 
   const app = express();
@@ -75,8 +95,8 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
   });
   app.use('/fotos', express.static(photos.dir, { maxAge: '30d', immutable: true, fallthrough: false }));
 
-  const panel = panelRouter({ db, config, photos, actas, onLead });
-  const site = siteRouter({ db, config, notify, onLead, meta });
+  const panel = panelRouter({ db, config, photos, actas, onLead, vlt, wa });
+  const site = siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived });
   if (config.panelHost) {
     // Cada dirección ve solo su aplicación: el panel no existe en rentaypunto.com y el sitio no existe en el panel.
     app.use((req, res, next) => (req.hostname.toLowerCase() === config.panelHost ? panel(req, res, next) : site(req, res, next)));
@@ -136,7 +156,14 @@ if (require.main === module) {
   backup();
   setInterval(backup, 6 * 3600e3).unref();
 
-  const server = createApp({ db, config }).listen(config.port, () => {
+  if (config.docsKeyInvalid) console.error('ATENCIÓN: DOCS_KEY no es válida (deben ser 32 bytes en base64). La bóveda de documentos queda apagada.');
+  else if (!config.docsKey) {
+    console.log('Sin DOCS_KEY: la bóveda de documentos (expedientes) está apagada.');
+    console.log(`Para activarla, crea la variable DOCS_KEY en Railway con este valor (y guárdalo en tu gestor de contraseñas; si se pierde, los documentos no se recuperan): ${crypto.randomBytes(32).toString('hex')}`);
+  }
+  const wa = whatsapp(db, config);
+  if (wa.start()) console.log('WhatsApp oficial conectado: mensajes automáticos según la configuración del panel.');
+  const server = createApp({ db, config, wa }).listen(config.port, () => {
     console.log(`Rentaypunto en http://localhost:${config.port}${config.panelHost ? ` · panel en https://${config.panelHost}` : ' · panel en /panel/'}`);
   });
   const shutdown = (signal) => {

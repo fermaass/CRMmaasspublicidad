@@ -334,6 +334,56 @@ function opinion(ctx, { l, done, token }) {
   return simplePage(ctx, { path: '/opinion', noindex: true, title: 'Tu opinión de la visita | Rentaypunto', desc: 'Cuéntanos qué te pareció la propiedad que visitaste.', h1: '¿Qué te pareció la visita?', lead: `${l.code} · ${l.title}. Es anónima y toma 20 segundos.`, inner });
 }
 
+// ---------- Expediente y portal (páginas privadas por enlace) ----------
+const DOC_ST = { pendiente: ['En revisión', 'wa'], validado: ['Validado', 'ok'], rechazado: ['Rechazado', 'no'] };
+function fileGone(ctx) {
+  return simplePage(ctx, { path: '/expediente', noindex: true, title: 'Enlace no disponible | Rentaypunto', desc: 'Enlace privado.', h1: 'Este enlace ya no sirve',
+    lead: 'Venció, ya se usó o tu asesor generó uno nuevo. Pídele a tu asesor un enlace nuevo por WhatsApp.', inner: '<p><a class="b" href="/">Ver propiedades</a></p>' });
+}
+function filePage(ctx, { link, s, docs, kinds, enabled }) {
+  const lead = link.subject_type === 'lead';
+  const title = lead ? 'Mi expediente de inquilino' : 'Documentos de tu propiedad';
+  if (link.closed) {
+    return simplePage(ctx, { path: '/expediente', noindex: true, title: `${title} | Rentaypunto`, desc: 'Enlace privado.', h1: '✓ Recibimos tus documentos',
+      lead: 'Tu asesor los revisa y te avisa por WhatsApp. Si falta algo, te manda un enlace nuevo.', inner: '' });
+  }
+  const rows = Object.entries(kinds).map(([k, [label, required, max]]) => {
+    const mine = docs.filter((d) => d.kind === k);
+    const live = mine.filter((d) => d.status !== 'rechazado').length;
+    return `<div class="card"><h2>${esc(label)} ${required ? '' : '<span class="tag">Opcional</span>'}</h2>
+${mine.map((d) => `<div class="fi"><span>${esc(d.original_name || k)} <span class="tag ${DOC_ST[d.status][1]}">${DOC_ST[d.status][0]}</span>${d.note ? `<br><span class="note">${esc(d.note)}</span>` : ''}</span>${d.status === 'pendiente' ? `<button type="button" class="b s sm" data-quitar="${d.id}">Quitar</button>` : ''}</div>`).join('')}
+${live < max ? `<label class="b s sm" style="margin-top:8px">${live ? 'Agregar otro' : 'Subir'} <input type="file" accept="application/pdf,image/jpeg,image/png" data-kind="${k}" hidden></label>` : ''}
+</div>`;
+  }).join('');
+  const inner = !enabled ? '<div class="card"><p>Por ahora no podemos recibir documentos por aquí. Tu asesor te dirá cómo enviarlos.</p></div>'
+    : `<div class="card"><p>Hola ${esc(String(s.name || '').split(' ')[0])}. ${lead ? `Este es tu expediente para ${esc(s.code ? `${s.code} · ${s.title}` : 'tu renta')}.` : 'Sube los documentos que confirman que eres el dueño.'} Puedes subir fotos claras o PDF (hasta 8 MB cada uno).</p>
+<p class="note">Este enlace es solo para ti: no lo compartas. Tus documentos se guardan cifrados y solo los ve el personal de Rentaypunto que los revisa.${lead ? ' Se usan únicamente para validar tu solicitud de renta.' : ''}</p></div>
+${lead && s.requirements ? `<p class="note">Esta propiedad pide además: <b>${esc(s.requirements)}</b>.</p>` : ''}
+<div id="docs">${rows}</div>
+${lead ? `<div class="card"><h2>Tu búsqueda</h2><div class="filters">
+<div><label for="pf_b">Presupuesto máximo al mes (MXN)</label><input id="pf_b" name="budget" type="number" inputmode="numeric"></div>
+<div><label for="pf_d">Fecha de mudanza</label><input id="pf_d" name="move_date" type="date"></div>
+<div><label for="pf_o">¿Cuántas personas van a vivir?</label><input id="pf_o" name="occupants" type="number" inputmode="numeric"></div>
+<div><label for="pf_p">Mascotas</label><select id="pf_p" name="pets"><option>No</option><option>Sí, perro</option><option>Sí, gato</option><option>Sí, otra</option></select></div>
+<div><label for="pf_j">Ocupación</label><input id="pf_j" name="occupation" maxlength="80" placeholder="Empleado, negocio propio, estudiante…"></div></div>
+<label for="pf_n">Algo más que tu asesor deba saber</label><textarea id="pf_n" name="notes" rows="2" maxlength="500"></textarea></div>` : ''}
+<p class="err" id="ex_err"></p><p><button type="button" class="b" id="ex_send">Enviar ${lead ? 'mi expediente' : 'documentos'}</button></p>
+<p class="note">Cuando lo envíes, este enlace se cierra. Si después falta algo, tu asesor te manda uno nuevo.</p>`;
+  return simplePage(ctx, { path: '/expediente', noindex: true, title: `${title} | Rentaypunto`, desc: 'Enlace privado.', h1: title, inner });
+}
+function portalPage(ctx, { s, pays, concepts, enabled, month }) {
+  const months = []; const d = new Date(`${month}-15T12:00:00Z`);
+  for (let i = 0; i < 6; i++) { months.push(d.toISOString().slice(0, 7)); d.setUTCMonth(d.getUTCMonth() - 1); }
+  const label = (m) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+  const inner = !enabled ? '<div class="card"><p>Por ahora no podemos recibir comprobantes por aquí. Envíalos a tu asesor.</p></div>'
+    : `<div class="card"><p>Hola ${esc(String(s.name || '').split(' ')[0])}. Aquí subes tus comprobantes de pago de <b>${esc(`${s.code} · ${s.title}`)}</b> y ves si ya se validaron.</p><p class="note">Este enlace es solo para ti. Los comprobantes se guardan cifrados.</p></div>
+<div class="card"><h2>Subir comprobante</h2><div class="filters"><div><label for="pt_m">Mes</label><select id="pt_m">${months.map((m) => `<option value="${m}">${esc(label(m))}</option>`).join('')}</select></div>
+<div><label for="pt_c">Concepto</label><select id="pt_c">${Object.entries(concepts).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div></div>
+<p><label class="b">Elegir archivo y subir <input type="file" id="pt_f" accept="application/pdf,image/jpeg,image/png" hidden></label></p><p class="err" id="pt_err"></p></div>
+<div class="card"><h2>Mis pagos</h2>${pays.length ? pays.map((p) => `<div class="fi"><span>${esc(label(p.month))} · ${esc(concepts[p.concept])}${p.note ? `<br><span class="note">${esc(p.note)}</span>` : ''}</span><span class="tag ${DOC_ST[p.status][1]}">${DOC_ST[p.status][0]}</span></div>`).join('') : '<p class="note">Aún no hay comprobantes.</p>'}</div>`;
+  return simplePage(ctx, { path: '/portal', noindex: true, title: 'Mis pagos | Rentaypunto', desc: 'Enlace privado.', h1: 'Mis pagos de renta', inner });
+}
+
 function notFound(ctx, msg) {
   return simplePage(ctx, { path: '/404', noindex: true, title: 'No encontramos esta página | Rentaypunto', desc: 'Página no encontrada.', h1: 'No encontramos esta página', lead: msg || 'Puede que la dirección esté mal escrita o que la propiedad ya no esté publicada.', inner: '<p><a class="b" href="/">Ver propiedades disponibles</a></p>' });
 }
@@ -347,4 +397,4 @@ ${[u('/'), ...zones.map((z) => u(`/renta/${z.slug}`)), ...props.map((p) => u(`/$
 </urlset>`;
 }
 
-module.exports = { esc, home, zonePage, ficha, owners, help, complaints, legal, privacy, opinion, notFound, sitemap, filtersText };
+module.exports = { esc, home, zonePage, ficha, owners, help, complaints, legal, privacy, opinion, fileGone, filePage, portalPage, notFound, sitemap, filtersText };
