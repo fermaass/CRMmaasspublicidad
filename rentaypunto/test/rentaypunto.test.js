@@ -98,8 +98,14 @@ test('SEO de la ficha, redirección de URL vieja, dirección privada y mapa del 
   map = (await site(app).get('/sitemap.xml')).text;
   assert.ok(!map.includes(moved.seo_slug), 'rentada sale del mapa del sitio');
   const gone = await site(app).get(`/${moved.seo_slug}`);
-  assert.equal(gone.status, 410);
+  assert.equal(gone.status, 200, 'recién rentada: se ve con similares');
   assert.match(gone.text, /noindex/);
+  assert.match(gone.text, /ya no está disponible/);
+  // A los 30 días, su dirección manda a la página de su zona.
+  app.db.prepare("UPDATE properties SET rented_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(p.id);
+  const old30 = await site(app).get(`/${moved.seo_slug}`);
+  assert.equal(old30.status, 301);
+  assert.equal(old30.headers.get('location'), '/renta/centro-sur');
   assert.ok(!(await site(app).get('/')).text.includes('RP-0001'));
 });
 
@@ -150,7 +156,7 @@ test('agendar visita: lead al asesor de la propiedad, aviso por correo y horario
   const after = (await dueno.get(`/api/properties/${p.id}`)).body;
   assert.equal(after.status, 'rentada');
   assert.ok(after.rented_at);
-  assert.equal((await pub.get(`/${p.seo_slug}`)).status, 410);
+  assert.match((await pub.get(`/${p.seo_slug}`)).text, /noindex/);
   const hist = (await ven.get(`/api/leads/${l.id}`)).body.events.map((e) => e.type);
   assert.ok(hist.includes('creado') && hist.includes('etapa') && hist.includes('propiedad'));
 });

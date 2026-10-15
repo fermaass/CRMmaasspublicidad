@@ -6,6 +6,8 @@ const { siteSettings, phone10, VISIBLE, EXTRAS } = require('./db');
 const { visibleProps, publicProp, similar, slotsFor, localNow, isDate, originOf, PROP_SQL, shapeProp } = require('./data');
 const { transactionalRoutes } = require('./tx');
 const { opinionStats } = require('./insights');
+const { CITY, landingsFor, landing, IDEAL_LINK } = require('./landings');
+const { indexNowKey } = require('./indexnow');
 const { parseCookies } = require('./auth');
 const { publicDocsRoutes } = require('./docs');
 
@@ -32,7 +34,7 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
     siteUrl: config.siteUrl || `${req.protocol}://${req.get('host')}`,
     settings: siteSettings(db), today: localNow().date, version: config.version,
   });
-  const visible = () => visibleProps(db).map((p) => ({ ...publicProp(p), zone_id: p.zone_id }));
+  const visible = () => visibleProps(db).map((p) => ({ ...publicProp(p), zone_id: p.zone_id, photos_all: p.photos }));
   const html = (res, body, status = 200) => res.status(status).type('html').set('Cache-Control', 'no-cache').send(body);
 
   app.use('/sitio', express.static(path.join(__dirname, '..', 'public', 'sitio'), { maxAge: '7d' }));
@@ -46,7 +48,7 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
     let list = all.filter((p) => (!f.zona || p.zone_slug === f.zona) && (!f.min || p.rent >= f.min) && (!f.max || p.rent <= f.max)
       && (!f.rec || p.bedrooms >= f.rec) && (!f.ban || p.bathrooms >= f.ban) && (!f.m2 || p.m2 >= f.m2) && (!f.extra || p.extras.includes(f.extra)));
     if (f.orden) list = list.slice().sort((a, b) => (f.orden === 'precio' ? a.rent - b.rent : b.rent - a.rent));
-    html(res, V.home(ctxOf(req), { list, all, zones: zones(), f }));
+    html(res, V.home(ctxOf(req), { list, all, zones: zones(), f, cityLandings: landingsFor({ id: 0, slug: CITY.slug, name: CITY.name }, all) }));
   });
 
   app.get('/renta-tu-propiedad', (req, res) => {
@@ -59,15 +61,31 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
   app.get('/certeza-juridica', (req, res) => html(res, V.legal(ctxOf(req))));
   app.get('/aviso-de-privacidad', (req, res) => html(res, V.privacy(ctxOf(req))));
 
+  const CITY_ZONE = { id: 0, slug: CITY.slug, name: CITY.name };
+  const zoneBySlug = (slug) => (slug === CITY.slug ? CITY_ZONE : db.prepare('SELECT * FROM zones WHERE slug = ? AND active = 1').get(slug));
+  const inZone = (zone, all) => (zone.slug === CITY.slug ? all : all.filter((p) => p.zone_slug === zone.slug));
+
+  // Zona (o todo Querétaro en /renta/queretaro): listado, texto propio de la zona y páginas por búsqueda.
   app.get('/renta/:zona', (req, res) => {
-    const zone = db.prepare('SELECT * FROM zones WHERE slug = ? AND active = 1').get(req.params.zona);
+    const zone = zoneBySlug(req.params.zona);
     if (!zone) return html(res, V.notFound(ctxOf(req)), 404);
-    const list = visible().filter((p) => p.zone_slug === zone.slug);
-    html(res, V.zonePage(ctxOf(req), { zone, list, zones: zones() }));
+    const list = inZone(zone, visible());
+    html(res, V.zonePage(ctxOf(req), { zone, list, zones: zones(), landings: landingsFor(zone, list) }));
   });
 
-  // Ficha: /renta/<zona>/<titulo>-<codigo>. Si la URL cambió (título o zona editados), redirige a la nueva.
+  // /renta/<zona>/<algo>: si termina en el código (rp-0001) es una ficha; si no, una página por búsqueda.
   app.get('/renta/:zona/:slug', (req, res) => {
+    if (!/rp-\d+$/i.test(req.params.slug)) {
+      const zone = zoneBySlug(req.params.zona);
+      const all = visible();
+      const lg = zone && landing(req.params.slug, zone, inZone(zone, all));
+      if (!lg) return html(res, V.notFound(ctxOf(req)), 404);
+      // Sin propiedades por ahora: a la zona (temporal, para que la página regrese cuando haya).
+      if (!lg.n) return res.redirect(302, `/renta/${zone.slug}`);
+      const related = landingsFor(zone, inZone(zone, all)).filter((x) => x.key !== lg.key);
+      const sameInZones = zone.slug === CITY.slug ? zones().map((z) => landing(lg.key, z, inZone(z, all))).filter((x) => x && x.n) : [];
+      return html(res, V.landingPage(ctxOf(req), { lg, related, sameInZones }));
+    }
     const want = `renta/${req.params.zona}/${req.params.slug}`;
     let row = db.prepare(`${PROP_SQL} WHERE p.seo_slug = ?`).get(want);
     if (!row) {
@@ -77,6 +95,8 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
       return html(res, V.notFound(ctxOf(req)), 404);
     }
     if (row.status === 'borrador') return html(res, V.notFound(ctxOf(req)), 404);
+    // Rentada hace más de 30 días: su dirección manda a la página de su zona, así no se pierde lo que ganó en Google.
+    if (row.status === 'rentada' && row.rented_at && Date.now() - new Date(row.rented_at).getTime() > 30 * 86400e3) return res.redirect(301, `/renta/${row.zone_slug}`);
     const full = shapeProp(db, row);
     const gone = !VISIBLE.includes(full.status);
     if (!gone && !BOT.test(req.get('user-agent') || '')) {
@@ -86,20 +106,34 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
     const p = { ...publicProp(full), photos: full.photos, seo_title: full.seo_title, seo_desc: full.seo_desc, published_at: full.published_at, created_at: full.created_at, h1: `${full.title} en renta en ${full.zone}` };
     const ctx = ctxOf(req);
     const s = ctx.settings;
-    const sim = similar(visible(), { ...p, zone_id: full.zone_id });
-    // Rentada o pausada: la página sigue (con similares) pero avisa a Google que ya no está (410) y no se indexa.
-    html(res, V.ficha(ctx, { p, sim, op: opinionStats(db, full.id), slots: gone ? [] : slotsFor(db, full.id, s.visit_hours, s.visit_days) }), gone ? 410 : 200);
+    const all = visible();
+    const sim = similar(all, { ...p, zone_id: full.zone_id });
+    // "Ideal para estudiantes" enlaza a la página de estudiantes de su zona; abajo, más búsquedas de la zona.
+    const zone = { id: full.zone_id, slug: full.zone_slug, name: full.zone };
+    const zl = landingsFor(zone, inZone(zone, all));
+    const idealLinks = Object.fromEntries(Object.entries(IDEAL_LINK).map(([who, key]) => [who, zl.some((l) => l.key === key) ? `/renta/${zone.slug}/${key}` : `/renta/${CITY.slug}/${key}`]));
+    // Rentada (menos de 30 días) o pausada: se ve con similares, pero no se indexa.
+    html(res, V.ficha(ctx, { p, sim, op: opinionStats(db, full.id), idealLinks, zoneLandings: zl, slots: gone ? [] : slotsFor(db, full.id, s.visit_hours, s.visit_days) }));
   });
 
   app.get('/robots.txt', (req, res) => {
     const base = config.siteUrl || `${req.protocol}://${req.get('host')}`;
-    res.type('text').send(`User-agent: *\nDisallow: /api/\nAllow: /\n\nSitemap: ${base}/sitemap.xml\n`);
+    res.type('text').send(`User-agent: *\nDisallow: /api/\nDisallow: /expediente/\nDisallow: /portal/\nDisallow: /opinion/\nAllow: /\n\nSitemap: ${base}/sitemap.xml\n`);
   });
-  // El mapa del sitio solo lleva lo publicado: sin rentadas, pausadas ni borradores.
+  // Llave de IndexNow (Bing y otros buscadores la piden para aceptar los avisos de páginas nuevas).
+  app.get('/:key.txt', (req, res, next) => {
+    const key = indexNowKey(db);
+    if (req.params.key !== key) return next();
+    res.type('text').send(key);
+  });
+  // El mapa del sitio solo lleva lo publicado: sin rentadas, pausadas ni borradores. Las páginas por búsqueda, solo si tienen 2 o más.
   app.get('/sitemap.xml', (req, res) => {
-    const props = db.prepare(`SELECT seo_slug, updated_at, zone_id FROM properties WHERE status IN (${VISIBLE.map(() => '?').join(',')})`).all(...VISIBLE);
-    const withProps = new Set(props.map((p) => p.zone_id));
-    res.type('application/xml').send(V.sitemap(ctxOf(req), { props, zones: zones().filter((z) => withProps.has(z.id)) }));
+    const all = visible().map((p) => ({ ...p, updated_at: db.prepare('SELECT updated_at FROM properties WHERE id = ?').get(p.id).updated_at }));
+    const latest = (L) => L.reduce((m, p) => (p.updated_at > m ? p.updated_at : m), '');
+    const zs = zones().filter((z) => all.some((p) => p.zone_slug === z.slug)).map((z) => ({ ...z, lastmod: [latest(all.filter((p) => p.zone_slug === z.slug)), z.updated_at || ''].sort().pop() }));
+    const lgs = [CITY_ZONE, ...zs].flatMap((z) => landingsFor(z, inZone(z, all)).filter((l) => l.indexable).map((l) => ({ ...l, lastmod: latest(l.list) })));
+    const props = all.map((p) => ({ seo_slug: p.slug, updated_at: p.updated_at, photos: p.photos_all }));
+    res.type('application/xml').send(V.sitemap(ctxOf(req), { props, zones: zs, landings: lgs, lastmod: latest(all) }));
   });
 
   // ---------- Formularios (JSON) ----------

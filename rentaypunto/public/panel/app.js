@@ -132,7 +132,7 @@
   }
 
   // ---------- Pestañas por perfil ----------
-  const TABS = [['hoy', 'Hoy', 'vgd'], ['leads', 'Leads', 'vgd'], ['citas', 'Citas', 'vgd'], ['props', 'Propiedades', 'vgd'], ['res', 'Resumen', 'gd'], ['rep', 'Reportes', 'gd'], ['seg', 'Seguimiento', 'gd'], ['equipo', 'Equipo', 'd']];
+  const TABS = [['hoy', 'Hoy', 'vgd'], ['leads', 'Leads', 'vgd'], ['citas', 'Citas', 'vgd'], ['props', 'Propiedades', 'vgd'], ['res', 'Resumen', 'gd'], ['rep', 'Reportes', 'gd'], ['seo', 'SEO', 'gd'], ['seg', 'Seguimiento', 'gd'], ['equipo', 'Equipo', 'd']];
   const roleKey = () => ({ vendedor: 'v', gerente: 'g', dueno: 'd' }[S.me.role]);
   function render() {
     const mine = TABS.filter((t) => t[2].includes(roleKey()));
@@ -143,7 +143,7 @@
     $('#who').innerHTML = esc(S.me.name) + ' · ' + ROLE[S.me.role] + ' · <a href="#" id="pw">Contraseña</a> · <a href="#" id="out">Salir</a>';
     $('#out').onclick = async (e) => { e.preventDefault(); await api('logout', { method: 'POST', body: {} }).catch(() => {}); S.me = null; loginScreen(); };
     $('#pw').onclick = (e) => { e.preventDefault(); S.tab = 'pw'; renderPw(); };
-    ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, res: renderRes, rep: renderRep, seg: renderSeg, equipo: renderEquipo })[S.tab]();
+    ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, res: renderRes, rep: renderRep, seo: renderSeoTab, seg: renderSeg, equipo: renderEquipo })[S.tab]();
   }
   function renderPw() {
     $('#app').innerHTML = '<div class="card center"><h2>Cambiar mi contraseña</h2><label for="pc">Contraseña actual</label><input id="pc" type="password" autocomplete="current-password"><label for="pn">Nueva (10 caracteres o más)</label><input id="pn" type="password" autocomplete="new-password"><p class="err" id="perr"></p><p><button class="b" id="pgo">Guardar</button> <button class="b s" id="pback">Volver</button></p><p class="note">Se cierra tu sesión en los demás dispositivos.</p></div>';
@@ -446,7 +446,7 @@
       + '<p class="fu"><label>Extras</label>' + chk(S.cfg.lists.extras, p.extras, 'ex') + '</p>'
       + '<p class="fu"><label>Servicios incluidos en la renta</label>' + chk(S.cfg.lists.includes, p.includes, 'inc') + '</p>'
       + '<div class="fu">' + field('near', 'Cerca de (lo que ayuda a decidir)', p.near, ' placeholder="Escuela a 5 min, parque, clínica"') + field('consider_note', 'Nota "Considera" (la ve el cliente)', p.consider_note, ' placeholder="Privada con reglamento: pedir copia"') + '</div>'
-      + '<p class="fu"><label for="a_desc">Descripción</label><textarea id="a_desc" rows="4"' + ro + '>' + esc(p.description || '') + '</textarea></p>'
+      + '<p class="fu"><label for="a_desc">Descripción</label><textarea id="a_desc" rows="5"' + ro + '>' + esc(p.description || '') + '</textarea>' + (p.can_edit ? '<button type="button" class="b s sm" id="dsug">Sugerir descripción</button> <span class="note">Con las frases que usa la gente al buscar; ajústala con lo que viste.</span>' : '') + '</p>'
       + '<p><label for="a_addr">Dirección exacta (privada: no sale en el sitio)</label><input id="a_addr" value="' + esc(p.address_private || '') + '"' + ro + '></p>'
       + (mgr() ? '<p class="fu"><label for="a_owner">Propietario registrado</label><select id="a_owner"' + ro + '><option value="">—</option>' + opts(owners.map((o) => [o.id, 'P-' + o.id + ' · ' + o.name])) + '</select></p>' : '')
       + '<h3>Fotos</h3><div class="thumbs" id="thumbs"></div>' + (p.can_edit ? '<input type="file" id="a_files" accept="image/*" multiple><p class="note">La primera foto es la portada. Se achican solas antes de subirse.</p>' : '')
@@ -556,6 +556,13 @@
     $$('#propform input, #propform select, #propform textarea').forEach((e) => { if (!/^seo_|a_files/.test(e.id)) e.addEventListener('input', updateSeo); });
     [['slug', 'seo_slug'], ['title', 'seo_title'], ['desc', 'seo_desc']].forEach((x) => { $('#' + x[1]).addEventListener('input', () => { S.touched[x[0]] = true; updateSeo(); }); });
     $('#seoreset').onclick = () => { S.touched = {}; updateSeo(); };
+    if ($('#dsug')) $('#dsug').onclick = () => {
+      const d = formData(); const z = zoneById(d.zone_id);
+      const o = { ...d, zone: z ? z.name : '', rent: Number(d.rent) };
+      const txt = SEO.suggestDescription(o, window.MATCH ? MATCH.ideal({ ...o, bedrooms: Number(d.bedrooms), m2: Number(d.m2), max_occupants: Number(d.max_occupants), parking: d.parking }) : []);
+      if ($('#a_desc').value.trim() && !confirm('¿Reemplazar la descripción actual por la sugerida?')) return;
+      $('#a_desc').value = txt; updateSeo();
+    };
     $('#a_files').onchange = async function () {
       for (const f of this.files) { try { S.pending.push(await shrink(f)); } catch (e) { toast(e.message); } }
       this.value = ''; paintThumbs(); updateSeo();
@@ -644,6 +651,24 @@
     $$('[data-sent]').forEach((b) => { b.addEventListener('click', () => { setTimeout(() => act(async () => { await api('properties/' + b.dataset.sent + '/report-sent', { method: 'POST', body: {} }); renderRep(); }, 'Marcado como enviado.'), 300); }); });
   }
 
+  // ---------- SEO del sitio ----------
+  async function renderSeoTab() {
+    $('#app').innerHTML = '<p class="note">Cargando…</p>';
+    const r = await act(() => api('seo'));
+    if (!r || S.tab !== 'seo') return;
+    const site = r.siteUrl || location.origin;
+    $('#app').innerHTML = '<div class="card"><h2>Cómo va el SEO</h2>'
+      + fi('Dirección del sitio (SITE_URL)', r.siteUrl ? esc(r.siteUrl) : '<span class="tag no">Falta en Railway</span>')
+      + fi('Mapa del sitio', '<a target="_blank" rel="noopener" href="' + esc(site) + '/sitemap.xml">' + esc(site) + '/sitemap.xml</a>')
+      + fi('Aviso automático a Bing (IndexNow)', r.indexnow ? 'Activo' + (r.indexnowLast ? ' · último ' + fdt(r.indexnowLast.at) + ' (' + r.indexnowLast.n + ' página(s))' : '') : '<span class="note">Se activa solo cuando hay SITE_URL</span>')
+      + '<details><summary>Lo que hay que hacer una sola vez fuera del panel</summary><ol class="note"><li>Google Search Console: agregar el dominio, verificarlo en Cloudflare y enviar el mapa del sitio.</li><li>Bing Webmaster Tools: importar desde Search Console.</li><li>Perfil de Google Business de Rentaypunto con dirección, horario, fotos y el enlace al sitio; pedir reseñas a quien ya rentó.</li><li>Poner las redes sociales en Equipo → Configuración, para que Google ligue la marca.</li><li>Conseguir enlaces de sitios de Querétaro (directorios, blogs de la zona, universidades, alianzas).</li></ol></details></div>'
+      + '<div class="card"><h2>Texto de cada zona</h2><p class="note">Sale arriba de la página de la zona. Escríbelo como se lo contarías a alguien que no conoce Querétaro: cómo es la zona, para quién es buena opción y qué hay cerca (universidades, hospitales, parques industriales, plazas). Que sea propio: no lo copies de otros sitios.</p>'
+      + r.zones.map((z) => '<div class="card" style="background:var(--bg)"><h3>' + esc(z.name) + ' <a class="note" target="_blank" rel="noopener" href="' + esc(site) + '/renta/' + esc(z.slug) + '">ver página</a></h3><label for="zi_' + z.id + '">Cómo es la zona</label><textarea id="zi_' + z.id + '" rows="3">' + esc(z.intro || '') + '</textarea><label for="zn_' + z.id + '">Qué hay cerca</label><input id="zn_' + z.id + '" value="' + esc(z.near || '') + '" placeholder="Ej. UAQ campus Juriquilla, Antea, Hospital…"><p><button class="b s sm" data-zsave="' + z.id + '">Guardar</button></p></div>').join('') + '</div>'
+      + '<div class="card"><h2>Páginas que genera el sitio</h2><p class="note">Se crean y se quitan solas según las propiedades publicadas. Con 2 o más propiedades van al mapa del sitio para Google.</p>'
+      + r.pages.filter((p) => p.n).map((p) => '<h3>' + esc(p.zone) + ' <span class="note">(' + p.n + ' propiedad(es))</span></h3>' + p.landings.map((l) => '<div class="fi"><a target="_blank" rel="noopener" href="' + esc(site + l.path) + '">' + esc(l.h1) + '</a><span class="tag ' + (l.indexable ? 'ok' : '') + '">' + l.n + ' · ' + (l.indexable ? 'en Google' : 'falta 1 más') + '</span></div>').join('')).join('') + '</div>';
+    $$('[data-zsave]').forEach((b) => { b.onclick = () => { const id = b.dataset.zsave; act(() => api('zones/' + id, { method: 'PATCH', body: { intro: $('#zi_' + id).value, near: $('#zn_' + id).value } }), 'Texto de la zona guardado.'); }; });
+  }
+
   // ---------- Seguimiento ----------
   const stSel = (kind, id, list, cur, labels) => '<select data-fs="' + kind + ':' + id + '" aria-label="Estado">' + opts(list, cur, (s) => (labels || {})[s] || s.charAt(0).toUpperCase() + s.slice(1)) + '</select>';
   function renderSeg() {
@@ -702,6 +727,7 @@
       + '<div><label for="c_q">Plazo de respuesta a quejas</label><input id="c_q" value="' + esc(st.complaints_promise) + '" placeholder="Ej. 48 horas hábiles"></div>'
       + '<div><label for="c_n">Razón social</label><input id="c_n" value="' + esc(st.company_legal_name) + '"></div>'
       + '<div><label for="c_m">Correo que recibe copia de cada lead</label><input id="c_m" type="email" value="' + esc(st.notify_email) + '"></div>'
+      + '<div><label for="c_sl">Redes sociales y Google Business (enlaces)</label><input id="c_sl" value="' + esc((st.social_links || []).join(' ')) + '" placeholder="https://facebook.com/… https://instagram.com/…"></div>'
       + '<div><label for="c_px">ID del píxel de Meta</label><input id="c_px" inputmode="numeric" value="' + esc(st.meta_pixel_id) + '" placeholder="Solo números"></div>'
       + '<div><label for="c_cm">Cobro al propietario (meses de renta)</label><input id="c_cm" type="number" step="0.5" min="0" value="' + esc(st.commission_months) + '"></div>'
       + '<div><label for="c_cp">% de ese cobro para el asesor</label><input id="c_cp" type="number" min="0" max="100" value="' + esc(st.commission_pct) + '"></div></div>'
@@ -728,7 +754,7 @@
     $$('[data-upub]').forEach((c) => { c.onchange = () => upd(Number(c.dataset.upub), { publish_direct: c.checked }, c.checked ? 'Ahora publica sin aprobación.' : 'Ahora deja borrador y el Gerente publica.'); });
     $$('[data-uact]').forEach((b) => { b.onclick = () => { const x = b.dataset.uact.split(':'); if (x[1] === '0' && !confirm('Se cierra su sesión y sus leads abiertos quedan sin asesor para repartirlos. ¿Desactivar?')) return; upd(Number(x[0]), { active: x[1] === '1' }, 'Listo.'); }; });
     $('#csave').onclick = async () => {
-      const r = await act(() => api('settings', { method: 'PATCH', body: { whatsapp: $('#c_wa').value, visit_hours: $('#c_h').value, visit_days: $('#c_d').value, complaints_promise: $('#c_q').value, company_legal_name: $('#c_n').value, notify_email: $('#c_m').value, meta_pixel_id: $('#c_px').value, commission_months: $('#c_cm').value, commission_pct: $('#c_cp').value, fees_text: $('#c_f').value, legal_text: $('#c_l').value } }), 'Configuración guardada.');
+      const r = await act(() => api('settings', { method: 'PATCH', body: { whatsapp: $('#c_wa').value, visit_hours: $('#c_h').value, visit_days: $('#c_d').value, complaints_promise: $('#c_q').value, company_legal_name: $('#c_n').value, notify_email: $('#c_m').value, meta_pixel_id: $('#c_px').value, social_links: $('#c_sl').value, commission_months: $('#c_cm').value, commission_pct: $('#c_cp').value, fees_text: $('#c_f').value, legal_text: $('#c_l').value } }), 'Configuración guardada.');
       if (r) { await reload(['cfg']); renderEquipo(); }
     };
     $$('[data-zone]').forEach((c) => { c.onchange = () => act(async () => { await api('zones/' + c.dataset.zone, { method: 'PATCH', body: { active: c.checked } }); await reload(['cfg']); }, 'Zona actualizada.'); });

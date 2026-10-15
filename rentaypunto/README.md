@@ -10,6 +10,8 @@ Sitio público de rentas en Querétaro y panel interno del equipo. Fases 1 a 4.
 - **Fase 3:** expediente del inquilino y documentos del propietario con enlace privado (se cierra al enviarlo; uno nuevo invalida el anterior). Archivos cifrados (AES-256-GCM, llave `DOCS_KEY` solo en Railway), revisión por documento, aprobación del expediente por Gerente o Dueño, bitácora de quién abrió cada archivo y borrado definitivo.
 - **Fase 4:** WhatsApp oficial con mensajes automáticos (ver `WHATSAPP.md`) y administración de propiedades rentadas: portal privado del inquilino para subir comprobantes y cuadro de pagos por mes y concepto.
 
+- **SEO:** páginas que se arman solas por intención de búsqueda, para todo Querétaro y por zona (`/renta/<zona>/departamentos-para-estudiantes`, `para-familias`, `que-aceptan-mascotas`, `amueblados`, `economicas`, `casas`, `1-recamara`…). Escritas con las frases de quien busca: el estudiante foráneo, el papá que busca para su hijo, quien renta solo o en pareja, la familia y quien llega por trabajo. Solo existen si tienen propiedades y se indexan con 2 o más. Además: texto propio por zona, preguntas frecuentes con marcado, enlaces internos desde "Ideal para", mapa del sitio con imágenes, aviso automático a Bing (IndexNow) al publicar o cambiar, rentadas que a los 30 días redirigen a su zona y "Sugerir descripción" en el panel.
+
 Cómo publicarlo: `PUBLICAR.md`. Lo que falta definir con el cliente: `PENDIENTES_CLIENTE.md`.
 
 ```bash

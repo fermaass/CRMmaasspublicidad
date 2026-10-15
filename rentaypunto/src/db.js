@@ -313,6 +313,10 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS meta_spend (month TEXT PRIMARY KEY, amount INTEGER NOT NULL);
   `);
   // Fase 3: expedientes con documentos cifrados. Fase 4: administración (pagos) y WhatsApp oficial.
+  // SEO: texto propio de cada zona (cómo es, qué hay cerca) y fecha de cambio para el mapa del sitio.
+  addColumn(db, 'zones', 'intro', 'TEXT');
+  addColumn(db, 'zones', 'near', 'TEXT');
+  addColumn(db, 'zones', 'updated_at', 'TEXT');
   addColumn(db, 'leads', 'tenant_profile', 'TEXT'); // lo que el inquilino llena en su expediente (JSON)
   addColumn(db, 'leads', 'file_status', "TEXT NOT NULL DEFAULT 'sin_iniciar'"); // sin_iniciar, enviado, recibido, aprobado, rechazado
   addColumn(db, 'owners', 'file_status', "TEXT NOT NULL DEFAULT 'sin_iniciar'");
@@ -414,6 +418,8 @@ function siteSettings(db) {
     commission_months: Number(getSetting(db, 'commission_months', '1')), // supuesto: Rentaypunto cobra 1 mes de renta al cerrar
     commission_pct: Number(getSetting(db, 'commission_pct', '20')), // supuesto: 20% de ese cobro para el asesor
     // WhatsApp oficial: qué mensajes salen solos (todo apagado hasta que el Dueño lo encienda).
+    indexnow_last: getSetting(db, 'indexnow_last', '') || '',
+    social_links: getJsonSetting(db, 'social_links', []), // Facebook, Instagram, Google Business… (para que Google ligue la marca)
     wa_auto: getJsonSetting(db, 'wa_auto', { prospect: false, advisor: false, reminder: false, weekly: false, file: false }),
   };
 }

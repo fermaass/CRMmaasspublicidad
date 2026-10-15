@@ -46,5 +46,37 @@
     return 'renta/' + zoneSlug + '/' + (tail || 'propiedad') + '-' + c;
   }
 
-  return { slugify, money, seoAuto, seoChecks, cleanSlug };
+  // Descripción sugerida, en frases como las buscaría la gente ("para estudiante", "acepta mascotas", "para familia").
+  // ideal = lista de "Ideal para" (match.js). Es un punto de partida: el asesor la ajusta con lo que vio en la propiedad.
+  function suggestDescription(o, ideal) {
+    const n = (v) => Number(v) || 0;
+    const tipo = o.prop_type === 'Casa' ? 'Casa' : o.prop_type === 'Estudio' ? 'Estudio' : 'Departamento';
+    const ex = o.extras || []; const inc = (o.includes || []).filter((x) => x !== 'Mantenimiento');
+    const out = [];
+    const join = (a) => (a.length > 1 ? a.slice(0, -1).join(', ') + ' y ' + a[a.length - 1] : a[0] || '');
+    // "Colonia o referencia": si es una referencia ("cerca de…", "frente al club") va entre paréntesis.
+    const col = String(o.colonia || '').trim();
+    const isRef = /^(cerca|a |frente|junto|torre|privada|acceso|en )/i.test(col);
+    const place = (col && !isRef ? col + ', ' : '') + (o.zone || 'Querétaro') + ', Querétaro' + (col && isRef ? ' (' + col.charAt(0).toLowerCase() + col.slice(1) + ')' : '');
+    out.push(tipo + ' en renta en ' + place + ', con ' + n(o.bedrooms) + ' recámara' + (n(o.bedrooms) === 1 ? '' : 's') + ' y ' + n(o.bathrooms) + ' baño' + (n(o.bathrooms) === 1 ? '' : 's') + (n(o.m2) ? ' en ' + n(o.m2) + ' m²' : '') + '.');
+    const feats = [];
+    if (ex.indexOf('Amueblado') >= 0) feats.push('viene amueblado');
+    if (ex.indexOf('Mascotas') >= 0) feats.push('acepta mascotas');
+    if (n(o.parking)) feats.push('tiene estacionamiento para ' + n(o.parking) + ' auto' + (n(o.parking) === 1 ? '' : 's'));
+    else if (ex.indexOf('Estacionamiento') >= 0) feats.push('tiene estacionamiento');
+    if (ex.indexOf('Seguridad 24h') >= 0) feats.push('cuenta con seguridad 24 horas');
+    if (feats.length) { const t = join(feats); out.push(t.charAt(0).toUpperCase() + t.slice(1) + '.'); }
+    if (inc.length) out.push('La renta incluye ' + join(inc).toLowerCase() + (o.includes.indexOf('Mantenimiento') >= 0 ? ', además del mantenimiento' : '') + '.');
+    else if ((o.includes || []).indexOf('Mantenimiento') >= 0) out.push('El mantenimiento va incluido en la renta.');
+    if (o.near) out.push('Cerca de ' + o.near.replace(/\.$/, '') + '.');
+    const who = ideal || [];
+    if (who.indexOf('Estudiante o joven') >= 0) out.push('Ideal si vienes a estudiar a Querétaro o buscas departamento para tu hijo o hija: espacio práctico y fácil de mantener.');
+    else if (who.indexOf('Una persona o pareja') >= 0) out.push('Ideal para vivir solo o en pareja.');
+    if (who.indexOf('Familia grande') >= 0 || who.indexOf('Familia pequeña') >= 0) out.push('Pensada para familia: espacio para todos' + (n(o.parking) >= 2 ? ' y cochera para dos autos' : '') + '.');
+    if (n(o.min_term)) out.push('Contrato mínimo de ' + n(o.min_term) + ' meses.');
+    out.push('Agenda tu visita en línea y un asesor te confirma por WhatsApp.');
+    return out.join(' ');
+  }
+
+  return { slugify, money, seoAuto, seoChecks, cleanSlug, suggestDescription };
 }));

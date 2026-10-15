@@ -42,3 +42,12 @@ La plataforma ya está construida. Para encenderla necesitamos estas respuestas.
 
 22. **Fotos reales** y datos completos de las primeras propiedades. Cada propiedad debe tener al menos 3 fotos para salir bien en Google.
 23. **¿Quiénes son los propietarios** de cada una? Se ligan en el panel para mandarles el reporte semanal.
+
+## 6. Para salir bien en Google
+
+24. **Texto de cada zona,** 3 o 4 líneas propias (no copiadas): cómo es, para quién es buena opción y qué hay cerca (universidades, hospitales, parques industriales, plazas). Se captura en el panel, pestaña **SEO**.
+25. **Perfil de Google Business** de Rentaypunto, con dirección, horario, fotos y el enlace al sitio. Pidan reseñas a cada persona que rente.
+26. **Enlaces a sus redes sociales** (Facebook, Instagram, Google Business), para ligar la marca.
+27. **Acceso para dar de alta el sitio en Google Search Console,** mediante el dominio en Cloudflare.
+28. **Revisar las preguntas frecuentes** que aparecen en el sitio (para estudiantes, familias, mascotas, etc.) y confirmar que sus respuestas describen cómo trabajan.
+29. **Alianzas o directorios de Querétaro** que puedan enlazar al sitio: universidades, empresas que traen personal de fuera, blogs de la zona.

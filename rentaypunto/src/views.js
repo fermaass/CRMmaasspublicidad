@@ -78,10 +78,33 @@ function filtersText(f, zones) {
   return a.join(' · ') || 'Cualquier propiedad';
 }
 
-function home(ctx, { list, all, zones, f }) {
+// Preguntas frecuentes visibles y su marcado para Google.
+function faqBlock(faq, title = 'Preguntas frecuentes') {
+  if (!faq || !faq.length) return { html: '', ld: null };
+  return {
+    html: `<div class="card"><h2>${esc(title)}</h2>${faq.map(([q, a]) => `<details><summary>${esc(q)}</summary><p>${esc(a)}</p></details>`).join('')}</div>`,
+    ld: { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })) },
+  };
+}
+const crumbs = (ctx, items) => ({ '@context': 'https://schema.org', '@type': 'BreadcrumbList',
+  itemListElement: items.map(([name, path], i) => ({ '@type': 'ListItem', position: i + 1, name, item: `${ctx.siteUrl}${path}` })) });
+const landingChips = (L) => (L.length ? `<div class="chips">${L.map((l) => `<a class="chip" href="${l.path}">${esc(l.short)} (${l.n})</a>`).join('')}</div>` : '');
+let HOME_FAQ_HTML = ''; let HOME_FAQ_LD = null;
+const HOME_FAQ = [
+  ['¿Cómo agendo una visita?', 'Entra a la ficha de la propiedad, elige día y hora y deja tu nombre y WhatsApp. Tu asesor te confirma por ese medio.'],
+  ['¿Cuánto necesito para entrar a rentar en Querétaro?', 'Depende de cada propiedad: el primer mes, el depósito y, si aplica, el mantenimiento. Cada ficha lo calcula en "Cuánto necesitas".'],
+  ['¿Qué documentos piden para rentar?', 'INE, Constancia de Situación Fiscal y comprobante de ingresos. Algunas propiedades piden además aval, fiador o póliza jurídica; lo dice cada ficha.'],
+  ['Busco departamento para mi hijo que viene a estudiar, ¿cómo le hago?', 'Usa "Encuentra tu renta" eligiendo "Estudiante o joven", o entra a la sección de departamentos para estudiantes. Puedes agendar la visita y compartir la ficha por WhatsApp aunque estés en otra ciudad.'],
+  ['¿Hay rentas que acepten mascotas?', 'Sí: usa el filtro Extras → Mascotas o entra a la sección de rentas que aceptan mascotas.'],
+  ['¿Tengo una propiedad, ustedes me la rentan?', 'Sí. Regístrala en "Renta tu propiedad": un asesor te contacta, la publicamos, agendamos las visitas y filtramos a los prospectos.'],
+];
+
+({ html: HOME_FAQ_HTML, ld: HOME_FAQ_LD } = faqBlock(HOME_FAQ));
+
+function home(ctx, { list, all, zones, f, cityLandings = [] }) {
   const sel = (v, cur) => (String(v) === String(cur || '') ? ' selected' : '');
   const zoneCounts = zones.map((z) => ({ ...z, n: all.filter((p) => p.zone_slug === z.slug).length })).filter((z) => z.n > 0);
-  const finderData = all.map((p) => ({ ...p, description: undefined, near: undefined }));
+  const finderData = all.map((p) => ({ ...p, description: undefined, near: undefined, photos_all: undefined }));
   const body = `<div class="hero2"><h1>Renta en Querétaro y agenda tu visita en minutos</h1>
 <p>Fichas completas, costo de entrada claro y un asesor que te confirma la cita por WhatsApp.</p>
 <div class="cta"><a class="b" href="#finder">Encuentra tu renta</a><a class="b s" href="#listado">Ver todas las propiedades</a>${ctx.settings.whatsapp ? `<a class="b s" target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(ctx.settings.whatsapp, 'Hola, quiero rentar una propiedad en Querétaro.'))}">Escríbenos por WhatsApp</a>` : ''}</div>
@@ -112,44 +135,77 @@ ${zoneCounts.length ? `<div class="chips" aria-label="Explora por zona">${zoneCo
 <p class="note" id="cnt">${list.length} propiedad(es) encontrada(s)</p>
 <div class="grid" id="track">${list.map(card).join('') || `<div class="card empty"><b>No hay propiedades con esos filtros.</b><p class="note">Prueba quitar algún filtro o deja tu WhatsApp abajo y te avisamos cuando entre una parecida.</p><a class="b s" href="/#listado">Limpiar filtros</a> <a class="b" href="#avisame">Avísame</a></div>`}</div></div>
 ${alertForm(filtersText(f, zones), f)}
+${cityLandings.length ? `<h2 class="h2">Busca según quién va a vivir y lo que necesitas</h2>${landingChips(cityLandings)}` : ''}
 <div id="como-funciona"><h2 class="h2">Cómo funciona</h2><ol class="steps">
 <li><b>Elige</b><span class="note">Filtra por zona, precio y lo que necesitas, y revisa la ficha completa.</span></li>
 <li><b>Agenda</b><span class="note">Escoge día y hora. Tu asesor confirma por WhatsApp.</span></li>
 <li><b>Arma tu expediente</b><span class="note">INE, constancia fiscal y comprobante de ingresos.</span></li>
 <li><b>Firma y múdate</b><span class="note">Contrato de arrendamiento, con póliza jurídica si la eliges.</span></li></ol></div>
+${HOME_FAQ_HTML}
 <div class="banner"><span>¿Tienes una propiedad para rentar?</span><a class="b s sm" href="/renta-tu-propiedad">Regístrala con nosotros</a></div>`;
+  const st = ctx.settings;
+  const org = { '@context': 'https://schema.org', '@type': 'RealEstateAgent', name: 'Rentaypunto', url: `${ctx.siteUrl}/`, logo: `${ctx.siteUrl}/sitio/icon.svg`,
+    areaServed: { '@type': 'City', name: 'Querétaro' }, address: { '@type': 'PostalAddress', addressLocality: 'Querétaro', addressRegion: 'Querétaro', addressCountry: 'MX' },
+    ...(st.whatsapp ? { telephone: `+52${st.whatsapp}` } : {}), ...(st.social_links && st.social_links.length ? { sameAs: st.social_links } : {}) };
   return layout({
     ctx, path: '/', active: 'home', body,
     title: 'Casas y departamentos en renta en Querétaro | Rentaypunto',
-    desc: 'Casas y departamentos en renta en Querétaro con ficha completa, costo de entrada claro y visita agendada en minutos. Un asesor te confirma por WhatsApp.',
-    ld: { '@context': 'https://schema.org', '@type': 'RealEstateAgent', name: 'Rentaypunto', url: ctx.siteUrl, areaServed: 'Querétaro, México' },
+    desc: 'Casas y departamentos en renta en Querétaro para estudiantes, familias, con mascotas o amueblados. Costo de entrada claro y visita agendada en minutos.',
+    ld: [org, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'Rentaypunto', url: `${ctx.siteUrl}/` }, HOME_FAQ_LD],
     noindex: Object.values(f).some(Boolean), // los listados filtrados no se indexan (evita páginas duplicadas)
     scripts: [`window.FINDER=${json(finderData)}`],
   });
 }
 
-function zonePage(ctx, { zone, list, zones }) {
+function zonePage(ctx, { zone, list, zones, landings = [] }) {
   const pr = list.map((p) => p.rent);
+  const city = zone.slug === 'queretaro';
+  const place = city ? 'Querétaro' : `${zone.name}, Querétaro`;
   const intro = list.length
-    ? `Hay ${list.length} propiedad(es) disponible(s) en renta en ${zone.name}, desde ${money(Math.min(...pr))} hasta ${money(Math.max(...pr))} al mes. Revisa cada ficha para ver el costo de entrada y agenda tu visita.`
-    : `Por ahora no hay propiedades disponibles en ${zone.name}. Déjanos tu WhatsApp y te avisamos cuando entre una.`;
-  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <span>${esc(zone.name)}</span></nav>
-<h1 class="zt">Rentas en ${esc(zone.name)}, Querétaro</h1><p class="lead">${esc(intro)}</p>
-<div class="grid">${list.map(card).join('')}</div>
-${list.length ? '' : alertForm(zone.name, { zona: zone.slug })}
-<h2 class="h2">Otras zonas</h2><div class="chips">${zones.filter((z) => z.id !== zone.id).map((z) => `<a class="chip" href="/renta/${z.slug}">${esc(z.name)}</a>`).join('')}</div>`;
+    ? `Hay ${list.length} casa(s) y departamento(s) en renta en ${place}, desde ${money(Math.min(...pr))} hasta ${money(Math.max(...pr))} al mes. Cada ficha tiene el costo de entrada completo, lo que incluye la renta y lo que hay cerca; agenda tu visita en minutos.`
+    : `Por ahora no hay propiedades disponibles en ${place}. Déjanos tu WhatsApp y te avisamos cuando entre una.`;
+  const faq = faqBlock(city ? [] : [
+    [`¿Cuánto cuesta rentar en ${zone.name}?`, list.length ? `Hoy, las rentas publicadas en ${zone.name} van de ${money(Math.min(...pr))} a ${money(Math.max(...pr))} al mes. A eso se suma el depósito y, si aplica, el mantenimiento: cada ficha lo calcula.` : `Por ahora no tenemos propiedades publicadas en ${zone.name}; deja tu WhatsApp y te avisamos.`],
+    [`¿Hay rentas para estudiantes o con mascotas en ${zone.name}?`, 'Revisa las secciones de abajo: solo aparecen las que hoy tienen propiedades disponibles.'],
+  ], `Preguntas sobre rentar en ${zone.name}`);
+  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <span>${esc(city ? 'Querétaro' : zone.name)}</span></nav>
+<h1 class="zt">Casas y departamentos en renta en ${esc(place)}</h1><p class="lead">${esc(intro)}</p>
+${zone.intro ? `<div class="card"><p>${esc(zone.intro).replace(/\n/g, '<br>')}</p>${zone.near ? `<p class="note"><b>Cerca:</b> ${esc(zone.near)}</p>` : ''}</div>` : ''}
+${landings.length ? `<h2 class="h2">Busca en ${esc(city ? 'Querétaro' : zone.name)} según lo que necesitas</h2>${landingChips(landings)}` : ''}
+<div class="grid" style="margin-top:14px">${list.map(card).join('')}</div>
+${list.length ? '' : alertForm(zone.name, { zona: city ? '' : zone.slug })}
+${faq.html}
+<h2 class="h2">${city ? 'Rentas por zona' : 'Otras zonas'}</h2><div class="chips">${zones.filter((z) => z.id !== zone.id).map((z) => `<a class="chip" href="/renta/${z.slug}">${esc(z.name)}</a>`).join('')}</div>`;
+  const t = `Casas y departamentos en renta en ${city ? 'Querétaro' : zone.name}`;
   return layout({
     ctx, path: `/renta/${zone.slug}`, active: 'home', body,
-    title: `Casas y departamentos en renta en ${zone.name}, Querétaro | Rentaypunto`.length <= 60
-      ? `Casas y departamentos en renta en ${zone.name}, Querétaro | Rentaypunto` : `Rentas en ${zone.name}, Querétaro | Rentaypunto`,
+    title: `${t}${t.length <= 46 ? ' | Rentaypunto' : ''}`.slice(0, 60),
     desc: intro.slice(0, 155),
-    ld: { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
-      { '@type': 'ListItem', position: 1, name: 'Propiedades', item: `${ctx.siteUrl}/` },
-      { '@type': 'ListItem', position: 2, name: zone.name, item: `${ctx.siteUrl}/renta/${zone.slug}` }] },
+    noindex: !list.length,
+    ld: [crumbs(ctx, [['Propiedades', '/'], [city ? 'Querétaro' : zone.name, `/renta/${zone.slug}`]]), faq.ld].filter(Boolean),
   });
 }
 
-function ficha(ctx, { p, sim, slots, op }) {
+// Página por intención: "departamentos para estudiantes en Juriquilla", "rentas que aceptan mascotas en Querétaro"...
+function landingPage(ctx, { lg, related, sameInZones }) {
+  const city = lg.zone.slug === 'queretaro';
+  const faq = faqBlock(lg.faq);
+  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <a href="/renta/${lg.zone.slug}">${esc(city ? 'Querétaro' : lg.zone.name)}</a> › <span>${esc(lg.short)}</span></nav>
+<h1 class="zt">${esc(lg.h1)}</h1><p class="lead">${esc(lg.intro)}</p>
+<div class="grid" style="margin-top:14px">${lg.list.map(card).join('')}</div>
+${lg.n < 3 ? alertForm(`${lg.short} en ${city ? 'Querétaro' : lg.zone.name}`, { zona: city ? '' : lg.zone.slug }) : ''}
+${faq.html}
+${related.length ? `<h2 class="h2">También te puede servir</h2>${landingChips(related)}` : ''}
+${sameInZones.length ? `<h2 class="h2">${esc(lg.short)} en otras zonas</h2>${landingChips(sameInZones.map((x) => ({ ...x, short: x.zone.name })))}` : ''}`;
+  return layout({
+    ctx, path: lg.path, active: 'home', body, title: lg.title, desc: lg.intro.slice(0, 152).replace(/\s+\S*$/, '') + '…',
+    noindex: !lg.indexable,
+    ld: [crumbs(ctx, [['Propiedades', '/'], [city ? 'Querétaro' : lg.zone.name, `/renta/${lg.zone.slug}`], [lg.short, lg.path]]), faq.ld,
+      { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: lg.list.map((p, i) => ({ '@type': 'ListItem', position: i + 1, url: `${ctx.siteUrl}/${p.slug}` })) }].filter(Boolean),
+  });
+}
+
+function ficha(ctx, { p, sim, slots, op, idealLinks = {}, zoneLandings = [] }) {
   const inc = p.includes;
   const mi = inc.includes('Mantenimiento');
   const mv = mi ? 0 : (p.maintenance || 0);
@@ -161,18 +217,26 @@ function ficha(ctx, { p, sim, slots, op }) {
   const url = `${ctx.siteUrl}/${p.slug}`;
   const photos = p.photos.map((x) => photoUrl(x.file));
   const imgs = photos.length
-    ? `<div class="gal">${photos.slice(0, 5).map((src, i) => `<img src="${src}" alt="${esc(p.title)} en ${esc(p.zone)}, Querétaro - foto ${i + 1}" data-lb="${i}" tabindex="0"${i ? ' loading="lazy"' : ''}>`).join('')}</div>${photos.length > 5 ? `<p class="note"><button type="button" class="b s sm" data-lb="0">Ver las ${photos.length} fotos</button></p>` : ''}`
+    ? `<div class="gal">${photos.slice(0, 5).map((src, i) => `<img src="${src}" alt="${esc(p.title)} en ${esc(p.zone)}, Querétaro - foto ${i + 1}" data-lb="${i}" tabindex="0"${i ? ' loading="lazy"' : ' fetchpriority="high"'}>`).join('')}</div>${photos.length > 5 ? `<p class="note"><button type="button" class="b s sm" data-lb="0">Ver las ${photos.length} fotos</button></p>` : ''}`
     : '<div class="ph big">Fotos próximamente</div>';
   const share = `https://wa.me/?text=${encodeURIComponent(`Mira esta renta: ${p.title} en ${p.zone}, ${money(p.rent)}/mes. ${url}`)}`;
   const map = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.colonia || ''} ${p.zone} Querétaro`)}`;
   const waText = `Hola, me interesa ${p.title} (${p.code}) en ${p.zone}, ${money(p.rent)}/mes. Ficha: ${url}`;
   const gone = !['disponible', 'apartada'].includes(p.status);
+  // Preguntas que se hace quien la ve (las respuestas salen de los datos de la propiedad).
+  const pfaq = faqBlock([
+    [`¿Cuánto necesito para entrar a ${p.title.toLowerCase()}?`, `${money(entry)} en total: primer mes de renta (${money(p.rent)}), depósito de ${p.deposit_months} mes(es) (${money(deposit)})${mv ? ` y el primer mes de mantenimiento (${money(mv)})` : ''}. Después pagas ${money(monthly)} al mes.`],
+    ['¿Aceptan mascotas?', p.extras.includes('Mascotas') ? 'Sí, se indican mascotas como permitidas. Confirma con tu asesor las condiciones.' : 'No está indicado como permitido. Pregúntale a tu asesor antes de agendar.'],
+    ['¿Qué incluye la renta?', inc.length ? `Incluye ${inc.join(', ').toLowerCase()}.${apart.length ? ` Por tu cuenta: ${apart.join(', ').toLowerCase()}.` : ''}` : 'Los servicios (agua, luz, gas e internet) van por tu cuenta.'],
+    ...(p.min_term ? [['¿Cuál es el plazo mínimo del contrato?', `${p.min_term} meses.`]] : []),
+    ...(p.requirements ? [['¿Qué piden para rentarla?', `${p.requirements}, además de INE, Constancia de Situación Fiscal y comprobante de ingresos.`]] : []),
+  ], 'Preguntas sobre esta propiedad');
   const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <a href="/renta/${p.zone_slug}">${esc(p.zone)}</a> › <span>${esc(p.title)}</span></nav>
 <div class="fgrid"><div>${imgs}
 <h1 class="zt">${esc(p.h1)}</h1><div class="pr">${money(p.rent)}/mes</div>
 <div class="ch">${p.m2 ? `<span>📐 ${p.m2} m²</span>` : ''}<span>🛏 ${p.bedrooms || 0} rec.</span><span>🛁 ${p.bathrooms || 0} baños</span></div>
 <div>${p.extras.map((x) => `<span class="tag">${esc(x)}</span>`).join(' ')}${p.status === 'apartada' ? ' <span class="tag wa">Apartada</span>' : ''}</div>
-${idl.length ? `<p><b>Ideal para:</b> ${idl.map((x) => `<span class="tag ok">${esc(x)}</span>`).join(' ')} <span class="note">Sugerido según sus características</span></p>` : ''}
+${idl.length ? `<p><b>Ideal para:</b> ${idl.map((x) => (idealLinks[x] ? `<a class="tag ok" href="${idealLinks[x]}">${esc(x)}</a>` : `<span class="tag ok">${esc(x)}</span>`)).join(' ')} <span class="note">Sugerido según sus características</span></p>` : ''}
 <div class="acts"><button type="button" class="b s sm" data-fav="${p.id}" aria-pressed="false">♡ Guardar</button>
 <a class="b s sm" target="_blank" rel="noopener" href="${esc(share)}">Compartir por WhatsApp</a>
 <a class="b s sm" target="_blank" rel="noopener" href="${esc(map)}">Ver zona en el mapa</a></div>
@@ -197,14 +261,16 @@ ${p.requirements ? `<div class="fi"><span>Requisitos</span><b>${esc(p.requiremen
 <div class="fi tot"><span>Total estimado</span><b>${money(entry)}</b></div>
 <h4>Cada mes</h4><div class="fi tot"><span>Pago mensual fijo</span><b>${money(monthly)}</b></div>
 <p class="note">${apart.length ? `Aparte, según tu consumo: ${apart.join(', ').toLowerCase()}.` : 'Agua, luz, gas e internet incluidos.'} La póliza jurídica y otros costos se definen con tu asesor.</p></div>
+${pfaq.html}
 ${sim.length ? `<h2 class="h2">Propiedades similares</h2><div class="grid">${sim.map(card).join('')}</div>` : ''}
+${zoneLandings.length ? `<h2 class="h2">Más rentas en ${esc(p.zone)}</h2>${landingChips(zoneLandings)}` : ''}
 </div><div class="card stick" id="bkbox">${gone ? '<h2>Esta propiedad ya no está disponible</h2><p class="note">Revisa las similares o vuelve al listado.</p><a class="b" href="/">Ver propiedades</a>' : '<p class="note">Cargando horarios…</p>'}</div></div>
 ${gone ? '' : `<div class="sbar"><a class="b" href="#bkbox">Agendar visita</a>${ctx.settings.whatsapp ? `<a class="b s" target="_blank" rel="noopener" data-wa="${p.id}" href="${esc(waHref(ctx.settings.whatsapp, waText))}">WhatsApp</a>` : ''}</div>`}`;
   const ld = jsonLd({ ...p, seo_title: p.seo_title, seo_desc: p.seo_desc }, url, photos.map((s) => ctx.siteUrl + s));
   return layout({
     ctx, path: `/${p.slug}`, active: 'home', body, bodyClass: 'ficha', title: p.seo_title, desc: p.seo_desc,
     og: { title: `${p.title} · ${money(p.rent)}/mes`, image: photos[0] ? ctx.siteUrl + photos[0] : '' },
-    ld: gone ? null : [ld, { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
+    ld: gone ? null : [ld, pfaq.ld, { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Propiedades', item: `${ctx.siteUrl}/` },
       { '@type': 'ListItem', position: 2, name: p.zone, item: `${ctx.siteUrl}/renta/${p.zone_slug}` },
       { '@type': 'ListItem', position: 3, name: p.title, item: url }] }],
@@ -388,13 +454,15 @@ function notFound(ctx, msg) {
   return simplePage(ctx, { path: '/404', noindex: true, title: 'No encontramos esta página | Rentaypunto', desc: 'Página no encontrada.', h1: 'No encontramos esta página', lead: msg || 'Puede que la dirección esté mal escrita o que la propiedad ya no esté publicada.', inner: '<p><a class="b" href="/">Ver propiedades disponibles</a></p>' });
 }
 
-function sitemap(ctx, { props, zones }) {
-  const u = (loc, lastmod) => `<url><loc>${esc(ctx.siteUrl + loc)}</loc>${lastmod ? `<lastmod>${String(lastmod).slice(0, 10)}</lastmod>` : ''}</url>`;
+// Mapa del sitio: portada, zonas y páginas por búsqueda con propiedades, fichas publicadas (con sus fotos) y páginas fijas.
+function sitemap(ctx, { props, zones, landings, lastmod }) {
+  const u = (loc, mod, imgs = []) => `<url><loc>${esc(ctx.siteUrl + loc)}</loc>${mod ? `<lastmod>${String(mod).slice(0, 10)}</lastmod>` : ''}${imgs.map((i) => `<image:image><image:loc>${esc(ctx.siteUrl + i)}</image:loc></image:image>`).join('')}</url>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${[u('/'), ...zones.map((z) => u(`/renta/${z.slug}`)), ...props.map((p) => u(`/${p.seo_slug}`, p.updated_at)),
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+${[u('/', lastmod), u('/renta/queretaro', lastmod), ...zones.map((z) => u(`/renta/${z.slug}`, z.lastmod)), ...landings.map((l) => u(l.path, l.lastmod)),
+    ...props.map((p) => u(`/${p.seo_slug}`, p.updated_at, p.photos.slice(0, 10).map((f) => photoUrl(f.file)))),
     u('/renta-tu-propiedad'), u('/ayuda'), u('/quejas'), u('/certeza-juridica')].join('\n')}
 </urlset>`;
 }
 
-module.exports = { esc, home, zonePage, ficha, owners, help, complaints, legal, privacy, opinion, fileGone, filePage, portalPage, notFound, sitemap, filtersText };
+module.exports = { esc, home, zonePage, landingPage, ficha, owners, help, complaints, legal, privacy, opinion, fileGone, filePage, portalPage, notFound, sitemap, filtersText };

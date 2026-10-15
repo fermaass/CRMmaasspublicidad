@@ -21,7 +21,9 @@ const isoNow = () => new Date().toISOString();
 const MANAGERS = ['gerente', 'dueno'];
 const isManager = (u) => MANAGERS.includes(u.role);
 
-function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
+function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
+  // Cuando una propiedad publicada cambia, se avisa a los buscadores (después de guardar).
+  const changed = (res, id, oldSlug) => res.on('finish', () => { if (res.statusCode < 400) seo.propertyChanged(id, oldSlug); });
   const app = transactionalRoutes(express.Router(), db);
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3);
@@ -32,6 +34,8 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
   app.use((req, res, next) => { res.set('X-Robots-Tag', 'noindex, nofollow'); next(); });
   app.get('/robots.txt', (req, res) => res.type('text').send('User-agent: *\nDisallow: /\n'));
   app.use(express.static(path.join(__dirname, '..', 'public', 'panel'), { index: 'index.html', maxAge: 0 }));
+  // El panel usa la misma regla de "Ideal para" que el sitio.
+  app.get('/match.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'sitio', 'match.js')));
   app.use(auth.authMiddleware(db));
   // Las fotos llegan en JSON más grande; todo lo demás, hasta 1 MB.
   app.use('/api/properties/:id/photos', express.json({ limit: '12mb' }));
@@ -243,6 +247,11 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
       if (b.meta_pixel_id && !/^\d{5,20}$/.test(id)) return res.status(400).json({ error: 'El ID del píxel son solo números (Administrador de eventos de Meta).' });
       setSetting(db, 'meta_pixel_id', id);
     }
+    if (b.social_links !== undefined) {
+      const links = String(b.social_links).split(/[\s,]+/).filter(Boolean);
+      if (links.some((u) => !/^https:\/\/[^\s]+$/.test(u))) return res.status(400).json({ error: 'Las redes van como enlaces completos que empiezan con https://' });
+      setSetting(db, 'social_links', JSON.stringify(links.slice(0, 8)));
+    }
     if (b.wa_auto !== undefined) {
       const cur = siteSettings(db).wa_auto;
       for (const k of Object.keys(cur)) if (b.wa_auto[k] !== undefined) cur[k] = Boolean(b.wa_auto[k]);
@@ -268,6 +277,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
   app.post('/api/zones', auth.requireRole(...MANAGERS), (req, res) => {
     const name = clip(req.body?.name, 60); const slug = slugify(name);
     if (!slug) return res.status(400).json({ error: 'Escribe el nombre de la zona.' });
+    if (slug === 'queretaro') return res.status(400).json({ error: '"Querétaro" ya es la página de toda la ciudad. Usa el nombre de la zona o colonia.' });
     if (db.prepare('SELECT 1 FROM zones WHERE slug = ? OR name = ?').get(slug, name)) return res.status(409).json({ error: 'Esa zona ya existe.' });
     res.status(201).json({ id: Number(db.prepare('INSERT INTO zones (name, slug) VALUES (?, ?)').run(name, slug).lastInsertRowid) });
   });
@@ -275,6 +285,10 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
     const z = db.prepare('SELECT * FROM zones WHERE id = ?').get(Number(req.params.id));
     if (!z) return res.status(404).json({ error: 'No existe' });
     if (req.body?.active !== undefined) db.prepare('UPDATE zones SET active = ? WHERE id = ?').run(req.body.active ? 1 : 0, z.id);
+    if (req.body?.intro !== undefined || req.body?.near !== undefined) {
+      db.prepare('UPDATE zones SET intro = ?, near = ?, updated_at = ? WHERE id = ?').run(
+        req.body.intro !== undefined ? clip(req.body.intro, 2000) || null : z.intro, req.body.near !== undefined ? clip(req.body.near, 300) || null : z.near, isoNow(), z.id);
+    }
     res.json({ ok: true });
   });
 
@@ -355,6 +369,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
     const d = { ...r.data, ...seo, code, status, advisor_id: advisor, created_by: u.id, published_by: pub ? u.id : null, published_at: pub ? isoNow() : null };
     const cols = Object.keys(d);
     const id = Number(db.prepare(`INSERT INTO properties (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((k) => d[k])).lastInsertRowid);
+    if (VISIBLE.includes(status)) changed(res, id);
     res.status(201).json({ ...propOut(u, getProp(db, id)), alert_matches: alertsFor(db, id) });
   });
 
@@ -376,6 +391,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
     }
     const cols = Object.keys(d);
     db.prepare(`UPDATE properties SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...cols.map((k) => d[k]), p.id);
+    if (p.status !== 'borrador' || (d.status && d.status !== 'borrador')) changed(res, p.id, p.seo_slug);
     res.json({ ...propOut(u, getProp(db, p.id)), alert_matches: d.status && VISIBLE.includes(d.status) && !VISIBLE.includes(p.status) ? alertsFor(db, p.id) : 0 });
   });
   function statusChange(u, p, status) {
@@ -392,6 +408,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
     if (!canPublish(u) || !canEdit(u, p)) return res.status(403).json({ error: 'No tienes permiso para cambiar el estado.' });
     const d = { ...statusChange(u, p, status), updated_at: isoNow() };
     db.prepare(`UPDATE properties SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), p.id);
+    if (p.status !== 'borrador' || status !== 'borrador') changed(res, p.id);
     res.json({ ...propOut(u, getProp(db, p.id)), alert_matches: VISIBLE.includes(status) && !VISIBLE.includes(p.status) ? alertsFor(db, p.id) : 0 });
   });
   // Eliminar: solo Gerente o Dueño, y solo si no tiene leads (si tiene, mejor pausarla para no perder el historial).
@@ -503,6 +520,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
         if (p && p.status !== 'rentada') {
           db.prepare("UPDATE properties SET status = 'rentada', rented_at = ?, updated_at = ? WHERE id = ?").run(now, now, l.property_id);
           event(l.id, u.id, 'propiedad', `${l.prop_code} pasó a Rentada y salió del sitio`);
+          changed(res, l.property_id);
         }
       }
     }
@@ -575,6 +593,20 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
   // ---------- Fase 3 y 4: expedientes, documentos cifrados, pagos y bitácora de WhatsApp ----------
   panelDocsRoutes(app, { db, vlt, config });
   app.get('/api/wa-log', auth.requireRole('dueno'), (req, res) => res.json(db.prepare('SELECT key, to_phone, template, status, error, at FROM wa_messages ORDER BY id DESC LIMIT 40').all()));
+
+  // ---------- SEO: páginas que genera el sitio, para que el equipo vea qué existe y qué le falta ----------
+  app.get('/api/seo', auth.requireRole(...MANAGERS), (req, res) => {
+    const { visibleProps, publicProp } = require('./data');
+    const { CITY, landingsFor } = require('./landings');
+    const all = visibleProps(db).map(publicProp);
+    const zs = db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY name').all();
+    const pages = [{ id: 0, slug: CITY.slug, name: CITY.name }, ...zs].map((z) => {
+      const list = z.slug === CITY.slug ? all : all.filter((p) => p.zone_slug === z.slug);
+      return { zone: z.name, slug: z.slug, n: list.length, landings: landingsFor(z, list).map((l) => ({ path: l.path, h1: l.h1, n: l.n, indexable: l.indexable })) };
+    });
+    const last = (() => { try { return JSON.parse(siteSettings(db).indexnow_last || 'null'); } catch { return null; } })();
+    res.json({ siteUrl: config.siteUrl || '', indexnow: seo.enabled, indexnowLast: last, zones: zs, pages });
+  });
 
   // ---------- Fase 2 ----------
   // Enlace de opinión para quien ya visitó (se manda por WhatsApp). Siempre el mismo para ese lead.
@@ -649,6 +681,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa }) {
         db.prepare('UPDATE properties SET rent = ?, seo_title = ?, seo_desc = ?, updated_at = ? WHERE id = ?').run(r.new_rent, a.title, a.desc, now, p.id);
       }
     }
+    if (req.params.action === 'aplicar' && ['pausar', 'reanudar', 'ya_rentada', 'precio'].includes(r.kind)) changed(res, r.property_id);
     db.prepare('UPDATE owner_requests SET status = ?, resolved_at = ? WHERE id = ?').run(req.params.action === 'aplicar' ? 'aplicada' : 'rechazada', now, r.id);
     res.json({ ok: true });
   });

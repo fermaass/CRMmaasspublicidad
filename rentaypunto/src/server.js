@@ -15,6 +15,7 @@ const { seedDemo } = require('./demo');
 const { metaCapi } = require('./meta');
 const { vault, parseKey } = require('./vault');
 const { whatsapp } = require('./whatsapp');
+const { indexNow } = require('./indexnow');
 
 function loadConfig(env = process.env) {
   const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
@@ -53,7 +54,7 @@ function logError(db, place, message) {
 
 function createApp({ db, config, mail = mailer(config), photos = photoStore(path.join(config.dataDir, 'fotos'), offsiteConfig()), meta = metaCapi(config),
   actas = photoStore(path.join(config.dataDir, 'actas'), offsiteConfig(), console, 'actas'),
-  vlt = vault(path.join(config.dataDir, 'docs'), config.docsKey, offsiteConfig()), wa = whatsapp(db, config) }) {
+  vlt = vault(path.join(config.dataDir, 'docs'), config.docsKey, offsiteConfig()), wa = whatsapp(db, config), seo = indexNow(db, config) }) {
   ensureSetupCode(db, config);
   const panelBase = () => (config.panelHost ? `https://${config.panelHost}` : `${config.siteUrl || ''}/panel`);
   const managers = () => db.prepare("SELECT email FROM users WHERE active = 1 AND role IN ('gerente','dueno')").all().map((u) => u.email);
@@ -95,7 +96,7 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
   });
   app.use('/fotos', express.static(photos.dir, { maxAge: '30d', immutable: true, fallthrough: false }));
 
-  const panel = panelRouter({ db, config, photos, actas, onLead, vlt, wa });
+  const panel = panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo });
   const site = siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived });
   if (config.panelHost) {
     // Cada dirección ve solo su aplicación: el panel no existe en rentaypunto.com y el sitio no existe en el panel.

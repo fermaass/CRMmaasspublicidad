@@ -11,7 +11,7 @@ async function start(extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-test-'));
   const db = openDb(':memory:');
   const sent = [];
-  const config = { dataDir: dir, siteUrl: 'https://www.rentaypunto.com', setupCode: 'ABCD-1234', version: 't', ...extra };
+  const config = { dataDir: dir, siteUrl: 'https://www.rentaypunto.com', setupCode: 'ABCD-1234', version: 't', indexNow: false, ...extra };
   const mail = { enabled: true, send: async (to, subject, text) => { sent.push({ to, subject, text }); return true; } };
   const metaEvents = [];
   const meta = { enabled: true, sendLead: async (e) => { metaEvents.push(e); return true; } };
