@@ -25,6 +25,9 @@ Variables del servicio:
 | `PANEL_HOST` | `panel.rentaypunto.com` (el panel ya no existe en `/panel/` del sitio público) |
 | `RESEND_API_KEY`, `MAIL_FROM` | Para avisar por correo a cada asesor cuando le llega un lead. Cuenta gratis en resend.com, verificando el dominio |
 | `BACKUP_S3_*` | Respaldo diario y copia de las fotos en Cloudflare R2 (igual que en Maass Leads) |
+| `META_CAPI_TOKEN` | Token de la API de Conversiones: Meta → Administrador de eventos → tu píxel → Configuración → "Generar token de acceso". El ID del píxel se pone en el panel (Equipo → Configuración) |
+| `META_TEST_EVENT_CODE` | Solo mientras pruebas: el código de "Probar eventos" del Administrador de eventos. Quítalo después |
+| `META_API_VERSION` | Opcional. De fábrica `v23.0`; cámbiala si Meta avisa que esa versión venció |
 | *(no poner `SEED_DEMO`)* | |
 
 Dominios: en Railway agrega `www.rentaypunto.com`, `rentaypunto.com` y `panel.rentaypunto.com` como Custom Domain; en Cloudflare, un CNAME por cada uno con el destino que da Railway y su TXT de verificación. Igual que en Maass Leads: nube gris hasta que Railway lo marque en verde, luego naranja, SSL en **Full**.

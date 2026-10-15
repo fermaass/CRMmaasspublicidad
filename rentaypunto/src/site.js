@@ -5,6 +5,8 @@ const V = require('./views');
 const { siteSettings, phone10, VISIBLE, EXTRAS } = require('./db');
 const { visibleProps, publicProp, similar, slotsFor, localNow, isDate, originOf, PROP_SQL, shapeProp } = require('./data');
 const { transactionalRoutes } = require('./tx');
+const { opinionStats } = require('./insights');
+const { parseCookies } = require('./auth');
 
 const BOT = /bot|crawl|spider|slurp|facebookexternalhit|preview|lighthouse/i;
 const clientIp = (req) => String(req.get('cf-connecting-ip') || req.ip || '');
@@ -21,7 +23,7 @@ function rateLimiter(max, ms) {
   };
 }
 
-function siteRouter({ db, config, notify, onLead }) {
+function siteRouter({ db, config, notify, onLead, meta }) {
   const app = transactionalRoutes(express.Router(), db);
   const forms = rateLimiter(20, 10 * 60e3); // 20 envíos por conexión cada 10 minutos
   const zones = () => db.prepare('SELECT * FROM zones WHERE active = 1 ORDER BY name').all();
@@ -76,13 +78,16 @@ function siteRouter({ db, config, notify, onLead }) {
     if (row.status === 'borrador') return html(res, V.notFound(ctxOf(req)), 404);
     const full = shapeProp(db, row);
     const gone = !VISIBLE.includes(full.status);
-    if (!gone && !BOT.test(req.get('user-agent') || '')) db.prepare('UPDATE properties SET views = views + 1 WHERE id = ?').run(full.id);
+    if (!gone && !BOT.test(req.get('user-agent') || '')) {
+      db.prepare('UPDATE properties SET views = views + 1 WHERE id = ?').run(full.id);
+      db.prepare('INSERT INTO property_days (property_id, day, views) VALUES (?, ?, 1) ON CONFLICT(property_id, day) DO UPDATE SET views = views + 1').run(full.id, localNow().date);
+    }
     const p = { ...publicProp(full), photos: full.photos, seo_title: full.seo_title, seo_desc: full.seo_desc, published_at: full.published_at, created_at: full.created_at, h1: `${full.title} en renta en ${full.zone}` };
     const ctx = ctxOf(req);
     const s = ctx.settings;
     const sim = similar(visible(), { ...p, zone_id: full.zone_id });
     // Rentada o pausada: la página sigue (con similares) pero avisa a Google que ya no está (410) y no se indexa.
-    html(res, V.ficha(ctx, { p, sim, slots: gone ? [] : slotsFor(db, full.id, s.visit_hours, s.visit_days) }), gone ? 410 : 200);
+    html(res, V.ficha(ctx, { p, sim, op: opinionStats(db, full.id), slots: gone ? [] : slotsFor(db, full.id, s.visit_hours, s.visit_days) }), gone ? 410 : 200);
   });
 
   app.get('/robots.txt', (req, res) => {
@@ -109,7 +114,7 @@ function siteRouter({ db, config, notify, onLead }) {
   // Agendar visita: crea el lead con la propiedad elegida y se lo asigna al asesor de esa propiedad.
   app.post('/api/visita', guard, (req, res) => {
     const b = req.body;
-    const p = db.prepare(`SELECT id, code, title, status, advisor_id FROM properties WHERE id = ?`).get(Number(b.property_id));
+    const p = db.prepare(`SELECT id, code, title, status, advisor_id, rent, seo_slug FROM properties WHERE id = ?`).get(Number(b.property_id));
     if (!p || !VISIBLE.includes(p.status)) return res.status(404).json({ error: 'Esta propiedad ya no está disponible.' });
     const name = clip(b.name, 80); const phone = phone10(b.phone);
     if (!name) return res.status(400).json({ error: 'Escribe tu nombre.' });
@@ -126,8 +131,12 @@ function siteRouter({ db, config, notify, onLead }) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, name, phone, b.date, b.time, p.advisor_id, originOf(u.source),
       clip(u.source, 80) || null, clip(u.medium, 80) || null, clip(u.campaign, 120) || null, clip(u.content, 120) || null, clip(b.busca, 300) || null).lastInsertRowid);
     db.prepare("INSERT INTO lead_events (lead_id, type, content) VALUES (?, 'creado', ?)").run(id, `Solicitó visita a ${p.code} el ${b.date} a las ${b.time}`);
-    res.on('finish', () => { if (res.statusCode < 400) onLead(id); });
-    res.status(201).json({ ok: true, folio: `C-${id}` });
+    const ck = parseCookies(req.headers.cookie);
+    const capi = { pixelId: s.meta_pixel_id, leadId: id, phone, firstName: name.split(' ')[0], url: `${config.siteUrl || `${req.protocol}://${req.get('host')}`}/${p.seo_slug}`,
+      ip: clientIp(req), ua: req.get('user-agent'), fbp: ck._fbp, fbc: ck._fbc, code: p.code, rent: p.rent };
+    res.on('finish', () => { if (res.statusCode < 400) { onLead(id); meta.sendLead(capi); } });
+    // event_id: el píxel del navegador manda el mismo, así Meta no la cuenta dos veces.
+    res.status(201).json({ ok: true, folio: `C-${id}`, event_id: `lead-${id}`, code: p.code, rent: p.rent });
   });
 
   app.post('/api/avisame', guard, (req, res) => {
@@ -176,10 +185,35 @@ function siteRouter({ db, config, notify, onLead }) {
   app.post('/api/wa-click', (req, res) => {
     const id = Number(req.body?.property_id) || 0;
     if (forms.hit(`wa:${clientIp(req)}`)) return res.status(204).end();
-    if (id) db.prepare('UPDATE properties SET wa_clicks = wa_clicks + 1 WHERE id = ?').run(id);
+    if (id && db.prepare('UPDATE properties SET wa_clicks = wa_clicks + 1 WHERE id = ?').run(id).changes) {
+      db.prepare('INSERT INTO property_days (property_id, day, wa_clicks) VALUES (?, ?, 1) ON CONFLICT(property_id, day) DO UPDATE SET wa_clicks = wa_clicks + 1').run(id, localNow().date);
+    }
     else db.prepare("INSERT INTO settings (key, value) VALUES ('wa_clicks_home', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1").run();
     res.status(204).end();
   });
+
+  // Opinión después de la visita: el asesor manda el enlace por WhatsApp; sirve una sola vez y no pide nombre.
+  const opinionLead = (token) => (/^[\w-]{16,64}$/.test(String(token || '')) ? db.prepare(`SELECT l.id, l.property_id, p.title, p.code FROM leads l
+    JOIN properties p ON p.id = l.property_id WHERE l.opinion_token = ?`).get(String(token)) : null);
+  app.get('/opinion/:token', (req, res) => {
+    const l = opinionLead(req.params.token);
+    const done = l && db.prepare('SELECT 1 FROM opinions WHERE lead_id = ?').get(l.id);
+    html(res, V.opinion(ctxOf(req), { l, done, token: req.params.token }), l ? 200 : 404);
+  });
+  app.post('/api/opinion', (req, res) => {
+    if (!req.is('application/json')) return res.status(415).json({ error: 'Se espera JSON' });
+    if (forms.hit(clientIp(req))) return res.status(429).json({ error: 'Demasiados envíos. Espera unos minutos.' });
+    const b = req.body || {};
+    const l = opinionLead(b.token);
+    if (!l) return res.status(404).json({ error: 'Este enlace ya no sirve.' });
+    if (db.prepare('SELECT 1 FROM opinions WHERE lead_id = ?').get(l.id)) return res.status(409).json({ error: 'Ya recibimos tu opinión. ¡Gracias!' });
+    if (!['si', 'mas_o_menos', 'no'].includes(b.liked) || !['justa', 'alta', 'baja'].includes(b.rent_opinion)) return res.status(400).json({ error: 'Contesta las dos preguntas.' });
+    const reasons = ['Precio', 'Ubicación', 'Tamaño', 'Estado de la propiedad', 'Encontré otra opción', 'Otro'];
+    db.prepare('INSERT INTO opinions (property_id, lead_id, liked, rent_opinion, reason) VALUES (?, ?, ?, ?, ?)').run(l.property_id, l.id, b.liked, b.rent_opinion, reasons.includes(b.reason) ? b.reason : null);
+    db.prepare("INSERT INTO lead_events (lead_id, type, content) VALUES (?, 'opinion', 'Dejó su opinión de la visita')").run(l.id);
+    res.status(201).json({ ok: true });
+  });
+
   app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
 
   app.use((req, res) => html(res, V.notFound(ctxOf(req)), 404));

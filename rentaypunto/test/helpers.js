@@ -13,10 +13,12 @@ async function start(extra = {}) {
   const sent = [];
   const config = { dataDir: dir, siteUrl: 'https://www.rentaypunto.com', setupCode: 'ABCD-1234', version: 't', ...extra };
   const mail = { enabled: true, send: async (to, subject, text) => { sent.push({ to, subject, text }); return true; } };
-  const app = createApp({ db, config, mail, photos: photoStore(path.join(dir, 'fotos'), null) });
+  const metaEvents = [];
+  const meta = { enabled: true, sendLead: async (e) => { metaEvents.push(e); return true; } };
+  const app = createApp({ db, config, mail, meta, photos: photoStore(path.join(dir, 'fotos'), null), actas: photoStore(path.join(dir, 'actas'), null) });
   const server = await new Promise((ok) => { const s = app.listen(0, () => ok(s)); });
   const base = `http://localhost:${server.address().port}`;
-  return { db, sent, config, base, close: () => new Promise((ok) => server.close(ok)) };
+  return { db, sent, metaEvents, config, base, close: () => new Promise((ok) => server.close(ok)) };
 }
 
 // Cliente con cookie propia (cada uno es "un navegador").

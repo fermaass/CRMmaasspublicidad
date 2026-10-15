@@ -10,6 +10,8 @@ const { getProp, PROP_SQL, shapeProp, isDate, localNow } = require('./data');
 const { seoAuto, cleanSlug } = require('./seo');
 const { transactionalRoutes } = require('./tx');
 const { rateLimiter, clientIp } = require('./site');
+const { alertMatches, alertsFor, ownerReport, reportMessage, summary, myNumbers, opinionStats } = require('./insights');
+const { ACTA_ITEMS, OWNER_REQUESTS } = require('./db');
 
 const LINK_HOURS = 72;
 const clip = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
@@ -18,7 +20,7 @@ const isoNow = () => new Date().toISOString();
 const MANAGERS = ['gerente', 'dueno'];
 const isManager = (u) => MANAGERS.includes(u.role);
 
-function panelRouter({ db, config, photos, onLead }) {
+function panelRouter({ db, config, photos, actas, onLead }) {
   const app = transactionalRoutes(express.Router(), db);
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3);
@@ -32,6 +34,7 @@ function panelRouter({ db, config, photos, onLead }) {
   app.use(auth.authMiddleware(db));
   // Las fotos llegan en JSON más grande; todo lo demás, hasta 1 MB.
   app.use('/api/properties/:id/photos', express.json({ limit: '12mb' }));
+  app.use('/api/properties/:id/acta/photos', express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use('/api', (req, res, next) => {
     if (['POST', 'PATCH', 'PUT'].includes(req.method) && !req.is('application/json')) return res.status(415).json({ error: 'Se espera JSON' });
@@ -211,7 +214,8 @@ function panelRouter({ db, config, photos, onLead }) {
     res.json({
       settings: siteSettings(db), zones: db.prepare('SELECT * FROM zones ORDER BY name').all(),
       lists: { roles: ROLES, propStatus: PROP_STATUS, stages: STAGES, lostReasons: LOST_REASONS, extras: EXTRAS, includes: INCLUDES, requirements: REQUIREMENTS, propTypes: PROP_TYPES },
-      siteUrl: config.siteUrl || '', today: localNow().date, mail: Boolean(config.resendKey && config.mailFrom),
+      siteUrl: config.siteUrl || '', today: localNow().date, mail: Boolean(config.resendKey && config.mailFrom), capi: Boolean(config.metaToken),
+      actaItems: ACTA_ITEMS, ownerRequests: OWNER_REQUESTS,
     });
   });
   app.patch('/api/settings', auth.requireRole('dueno'), (req, res) => {
@@ -232,6 +236,21 @@ function panelRouter({ db, config, photos, onLead }) {
       setSetting(db, 'visit_days', d);
     }
     for (const k of ['complaints_promise', 'fees_text', 'legal_text', 'company_legal_name']) if (b[k] !== undefined) setSetting(db, k, clip(b[k], 2000));
+    if (b.meta_pixel_id !== undefined) {
+      const id = String(b.meta_pixel_id).replace(/\D/g, '');
+      if (b.meta_pixel_id && !/^\d{5,20}$/.test(id)) return res.status(400).json({ error: 'El ID del píxel son solo números (Administrador de eventos de Meta).' });
+      setSetting(db, 'meta_pixel_id', id);
+    }
+    if (b.commission_months !== undefined) {
+      const n = Number(b.commission_months);
+      if (!(n >= 0 && n <= 12)) return res.status(400).json({ error: 'Meses de cobro: de 0 a 12.' });
+      setSetting(db, 'commission_months', n);
+    }
+    if (b.commission_pct !== undefined) {
+      const n = Number(b.commission_pct);
+      if (!(n >= 0 && n <= 100)) return res.status(400).json({ error: 'Porcentaje para el asesor: de 0 a 100.' });
+      setSetting(db, 'commission_pct', n);
+    }
     if (b.notify_email !== undefined) {
       const e = String(b.notify_email).trim();
       if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return res.status(400).json({ error: 'Correo inválido.' });
@@ -261,7 +280,7 @@ function panelRouter({ db, config, photos, onLead }) {
   const leadCount = db.prepare("SELECT COUNT(*) AS n FROM leads WHERE property_id = ?");
 
   function propOut(u, p) {
-    const out = { ...p, can_edit: canEdit(u, p), leads: leadCount.get(p.id).n };
+    const out = { ...p, can_edit: canEdit(u, p), sees_private: seesPrivate(u, p), leads: leadCount.get(p.id).n, acta_items: (() => { try { return JSON.parse(p.acta_items || '[]'); } catch { return []; } })() };
     if (!seesPrivate(u, p)) { out.address_private = null; out.owner_id = null; }
     return out;
   }
@@ -301,9 +320,12 @@ function panelRouter({ db, config, photos, onLead }) {
       description: pick('description', (v) => clip(v, 4000) || null),
       requirements: pick('requirements', (v) => clip(v, 80) || null),
       available_from: pick('available_from', (v) => (isDate(v) ? v : null)),
+      contract_start: pick('contract_start', (v) => (isDate(v) ? v : null)),
+      contract_end: pick('contract_end', (v) => (isDate(v) ? v : null)),
       owner_id: pick('owner_id', (v) => (num(v) && db.prepare('SELECT 1 FROM owners WHERE id = ?').get(num(v)) ? num(v) : null)),
     };
     for (const k of ['m2', 'bedrooms', 'bathrooms', 'parking', 'max_occupants', 'min_term']) if (data[k] != null && data[k] < 0) return { error: 'Los números no pueden ser negativos.' };
+    if (data.contract_start && data.contract_end && data.contract_end <= data.contract_start) return { error: 'El contrato debe terminar después de que empieza.' };
     return { data, zone };
   }
   // SEO: lo que mandaron (si lo editaron) o lo automático. La URL siempre se normaliza a renta/<zona>/<texto>-<código>.
@@ -326,7 +348,7 @@ function panelRouter({ db, config, photos, onLead }) {
     const d = { ...r.data, ...seo, code, status, advisor_id: advisor, created_by: u.id, published_by: pub ? u.id : null, published_at: pub ? isoNow() : null };
     const cols = Object.keys(d);
     const id = Number(db.prepare(`INSERT INTO properties (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((k) => d[k])).lastInsertRowid);
-    res.status(201).json(propOut(u, getProp(db, id)));
+    res.status(201).json({ ...propOut(u, getProp(db, id)), alert_matches: alertsFor(db, id) });
   });
 
   app.patch('/api/properties/:id', auth.requireUser, (req, res) => {
@@ -347,7 +369,7 @@ function panelRouter({ db, config, photos, onLead }) {
     }
     const cols = Object.keys(d);
     db.prepare(`UPDATE properties SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...cols.map((k) => d[k]), p.id);
-    res.json(propOut(u, getProp(db, p.id)));
+    res.json({ ...propOut(u, getProp(db, p.id)), alert_matches: d.status && VISIBLE.includes(d.status) && !VISIBLE.includes(p.status) ? alertsFor(db, p.id) : 0 });
   });
   function statusChange(u, p, status) {
     const d = { status };
@@ -363,7 +385,7 @@ function panelRouter({ db, config, photos, onLead }) {
     if (!canPublish(u) || !canEdit(u, p)) return res.status(403).json({ error: 'No tienes permiso para cambiar el estado.' });
     const d = { ...statusChange(u, p, status), updated_at: isoNow() };
     db.prepare(`UPDATE properties SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), p.id);
-    res.json(propOut(u, getProp(db, p.id)));
+    res.json({ ...propOut(u, getProp(db, p.id)), alert_matches: VISIBLE.includes(status) && !VISIBLE.includes(p.status) ? alertsFor(db, p.id) : 0 });
   });
   // Eliminar: solo Gerente o Dueño, y solo si no tiene leads (si tiene, mejor pausarla para no perder el historial).
   app.delete('/api/properties/:id', auth.requireRole(...MANAGERS), (req, res) => {
@@ -459,6 +481,13 @@ function panelRouter({ db, config, photos, onLead }) {
       if (b.stage === 'perdido' && !LOST_REASONS.includes(b.lost_reason)) return res.status(400).json({ error: 'Elige el motivo por el que se perdió.' });
       db.prepare('UPDATE leads SET stage = ?, lost_reason = ?, contacted_at = COALESCE(contacted_at, ?), updated_at = ? WHERE id = ?')
         .run(b.stage, b.stage === 'perdido' ? b.lost_reason : null, b.stage === 'nuevo' ? null : now, now, l.id);
+      // Hitos: la fecha en que llegó a cada paso no se borra aunque después se pierda (así el embudo es real).
+      const at = STAGES.indexOf(b.stage);
+      if (b.stage !== 'perdido') {
+        if (at >= STAGES.indexOf('cita')) db.prepare('UPDATE leads SET confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?').run(now, l.id);
+        if (at >= STAGES.indexOf('visito')) db.prepare('UPDATE leads SET visited_at = COALESCE(visited_at, ?) WHERE id = ?').run(now, l.id);
+        if (b.stage === 'firmado') db.prepare('UPDATE leads SET signed_at = COALESCE(signed_at, ?) WHERE id = ?').run(now, l.id);
+      }
       event(l.id, u.id, 'etapa', `${l.stage} → ${b.stage}${b.stage === 'perdido' ? ` (${b.lost_reason})` : ''}`);
       // Firmado: la propiedad pasa a Rentada y sale del sitio y del mapa del sitio.
       if (b.stage === 'firmado' && l.property_id) {
@@ -513,7 +542,12 @@ function panelRouter({ db, config, photos, onLead }) {
   app.get('/api/follow', auth.requireRole(...MANAGERS), (req, res) => {
     const out = {};
     for (const [k, v] of Object.entries(LISTS)) out[k] = db.prepare(`SELECT * FROM ${v.table} ORDER BY id DESC LIMIT 500`).all();
-    out.alerts = out.alerts.map((a) => ({ ...a, filters: (() => { try { return JSON.parse(a.filters); } catch { return {}; } })() }));
+    const matches = new Map(alertMatches(db).map((a) => [a.id, a.matches]));
+    out.alerts = out.alerts.map((a) => ({ ...a, filters: (() => { try { return JSON.parse(a.filters); } catch { return {}; } })(), matches: matches.get(a.id) || [] }));
+    out.requests = db.prepare(`SELECT r.*, p.code, p.title, p.rent, u.name AS by_name FROM owner_requests r JOIN properties p ON p.id = r.property_id
+      LEFT JOIN users u ON u.id = r.created_by ORDER BY CASE r.status WHEN 'nueva' THEN 0 ELSE 1 END, r.id DESC LIMIT 300`).all();
+    out.opinions = db.prepare(`SELECT p.id, p.code, p.title, COUNT(*) AS n, SUM(o.liked = 'si') AS liked, SUM(o.rent_opinion = 'alta') AS high
+      FROM opinions o JOIN properties p ON p.id = o.property_id GROUP BY p.id ORDER BY n DESC`).all();
     res.json(out);
   });
   app.patch('/api/follow/:kind/:id', auth.requireRole(...MANAGERS), (req, res) => {
@@ -527,6 +561,122 @@ function panelRouter({ db, config, photos, onLead }) {
     }
     if (req.body?.assigned_to !== undefined && req.params.kind === 'tickets') db.prepare('UPDATE tickets SET assigned_to = ? WHERE id = ?').run(num(req.body.assigned_to), row.id);
     if (req.body?.advisor_id !== undefined && req.params.kind === 'owners') db.prepare('UPDATE owners SET advisor_id = ? WHERE id = ?').run(num(req.body.advisor_id), row.id);
+    res.json({ ok: true });
+  });
+
+  // ---------- Fase 2 ----------
+  // Enlace de opinión para quien ya visitó (se manda por WhatsApp). Siempre el mismo para ese lead.
+  app.post('/api/leads/:id/opinion-link', auth.requireUser, (req, res) => {
+    const l = findLead(req, Number(req.params.id));
+    if (!l) return res.status(404).json({ error: 'No existe o no es tuyo' });
+    if (!l.visited_at || !l.property_id) return res.status(400).json({ error: 'Primero marca que visitó la propiedad.' });
+    let token = l.opinion_token;
+    if (!token) { token = crypto.randomBytes(16).toString('base64url'); db.prepare('UPDATE leads SET opinion_token = ? WHERE id = ?').run(token, l.id); }
+    res.json({ url: `${config.siteUrl || `${req.protocol}://${req.get('host')}`}/opinion/${token}`, done: Boolean(db.prepare('SELECT 1 FROM opinions WHERE lead_id = ?').get(l.id)) });
+  });
+
+  // "Mis números" del mes y comisión estimada (con los supuestos que pone el Dueño).
+  app.get('/api/my-numbers', auth.requireUser, (req, res) => res.json(myNumbers(db, req.user.id, siteSettings(db))));
+
+  // Resumen: Gerente y Dueño. El costo por cita (inversión en Meta) solo lo ve el Dueño.
+  app.get('/api/summary', auth.requireRole(...MANAGERS), (req, res) => res.json(summary(db, String(req.query.period || 'mes'), req.user.role === 'dueno')));
+  app.put('/api/meta-spend', auth.requireRole('dueno'), (req, res) => {
+    const month = String(req.body?.month || ''); const amount = Number(req.body?.amount);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: 'Mes inválido.' });
+    if (!(amount >= 0)) return res.status(400).json({ error: 'Escribe la inversión en pesos.' });
+    db.prepare('INSERT INTO meta_spend (month, amount) VALUES (?, ?) ON CONFLICT(month) DO UPDATE SET amount = excluded.amount').run(month, Math.round(amount));
+    res.json({ ok: true });
+  });
+
+  // Reportes semanales para cada propietario (se mandan por WhatsApp con un clic; el envío automático llega en la fase 4).
+  app.get('/api/reports', auth.requireRole(...MANAGERS), (req, res) => {
+    const rows = db.prepare(`${PROP_SQL} WHERE p.status != 'borrador' ORDER BY p.code`).all().map((r) => {
+      const p = shapeProp(db, r);
+      const owner = p.owner_id ? db.prepare('SELECT id, name, phone FROM owners WHERE id = ?').get(p.owner_id) : null;
+      const s = ownerReport(db, p);
+      return { id: p.id, code: p.code, title: p.title, status: p.status, owner, ...s, message: reportMessage(p, owner, s) };
+    });
+    res.json(rows);
+  });
+  app.post('/api/properties/:id/report-sent', auth.requireRole(...MANAGERS), (req, res) => {
+    const p = db.prepare('SELECT id FROM properties WHERE id = ?').get(Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'No existe' });
+    db.prepare('INSERT INTO owner_reports (property_id, sent_by) VALUES (?, ?)').run(p.id, req.user.id);
+    res.status(201).json({ ok: true });
+  });
+  app.get('/api/properties/:id/opinions', auth.requireUser, (req, res) => res.json(opinionStats(db, Number(req.params.id))));
+
+  // Solicitudes del propietario (llegan por WhatsApp al asesor; aquí se registran y se aplican).
+  app.post('/api/properties/:id/requests', auth.requireUser, (req, res) => {
+    const p = getProp(db, Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'No existe' });
+    if (!seesPrivate(req.user, p)) return res.status(403).json({ error: 'Solo el asesor de la propiedad, el Gerente o el Dueño.' });
+    const b = req.body || {};
+    if (!OWNER_REQUESTS[b.kind]) return res.status(400).json({ error: 'Elige qué pide el propietario.' });
+    const rent = num(b.new_rent);
+    if (b.kind === 'precio' && !(rent > 0)) return res.status(400).json({ error: 'Escribe la renta nueva.' });
+    const id = Number(db.prepare('INSERT INTO owner_requests (property_id, kind, new_rent, note, created_by) VALUES (?, ?, ?, ?, ?)')
+      .run(p.id, b.kind, b.kind === 'precio' ? Math.round(rent) : null, clip(b.note, 500) || null, req.user.id).lastInsertRowid);
+    res.status(201).json({ id });
+  });
+  app.post('/api/requests/:id/:action', auth.requireRole(...MANAGERS), (req, res) => {
+    const r = db.prepare('SELECT * FROM owner_requests WHERE id = ?').get(Number(req.params.id));
+    if (!r || !['aplicar', 'rechazar'].includes(req.params.action)) return res.status(404).json({ error: 'No existe' });
+    if (r.status !== 'nueva') return res.status(409).json({ error: 'Ya se resolvió.' });
+    const now = isoNow();
+    if (req.params.action === 'aplicar') {
+      const p = getProp(db, r.property_id);
+      const st = { pausar: 'pausada', reanudar: 'disponible', ya_rentada: 'rentada' }[r.kind];
+      if (st) {
+        const d = { ...statusChange(req.user, p, st), updated_at: now };
+        db.prepare(`UPDATE properties SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), p.id);
+      }
+      if (r.kind === 'precio') {
+        // El título y la descripción SEO llevan el precio: se regeneran con la renta nueva.
+        const a = seoAuto({ title: p.title, zone: p.zone, rent: r.new_rent, m2: p.m2, bedrooms: p.bedrooms, bathrooms: p.bathrooms, extras: p.extras, code: p.code });
+        db.prepare('UPDATE properties SET rent = ?, seo_title = ?, seo_desc = ?, updated_at = ? WHERE id = ?').run(r.new_rent, a.title, a.desc, now, p.id);
+      }
+    }
+    db.prepare('UPDATE owner_requests SET status = ?, resolved_at = ? WHERE id = ?').run(req.params.action === 'aplicar' ? 'aplicada' : 'rechazada', now, r.id);
+    res.json({ ok: true });
+  });
+
+  // Acta de entrega: lista de revisión y fotos privadas (no salen en el sitio).
+  app.put('/api/properties/:id/acta', auth.requireUser, (req, res) => {
+    const p = getProp(db, Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'No existe' });
+    if (!seesPrivate(req.user, p)) return res.status(403).json({ error: 'Solo el asesor de la propiedad, el Gerente o el Dueño.' });
+    const items = Array.isArray(req.body?.items) ? ACTA_ITEMS.map((_, i) => Boolean(req.body.items[i])) : [];
+    db.prepare('UPDATE properties SET acta_items = ? WHERE id = ?').run(JSON.stringify(items), p.id);
+    res.json({ ok: true });
+  });
+  app.get('/api/properties/:id/acta', auth.requireUser, (req, res) => {
+    const p = getProp(db, Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'No existe' });
+    if (!seesPrivate(req.user, p)) return res.status(403).json({ error: 'Solo el asesor de la propiedad, el Gerente o el Dueño.' });
+    res.json({ items: JSON.parse(p.acta_items || '[]'), photos: db.prepare('SELECT id FROM acta_photos WHERE property_id = ? ORDER BY id').all(p.id) });
+  });
+  app.post('/api/properties/:id/acta/photos', auth.requireUser, (req, res) => {
+    const p = getProp(db, Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'No existe' });
+    if (!seesPrivate(req.user, p)) return res.status(403).json({ error: 'Solo el asesor de la propiedad, el Gerente o el Dueño.' });
+    const name = actas.save(p.id, req.body?.big, req.body?.small);
+    if (!name) return res.status(400).json({ error: 'La foto no es válida. Usa JPG o PNG.' });
+    const id = Number(db.prepare('INSERT INTO acta_photos (property_id, file) VALUES (?, ?)').run(p.id, name).lastInsertRowid);
+    res.on('finish', () => { if (res.statusCode >= 400) actas.remove(name); });
+    res.status(201).json({ id });
+  });
+  app.get('/api/acta-photo/:id', auth.requireUser, (req, res) => {
+    const f = db.prepare('SELECT * FROM acta_photos WHERE id = ?').get(Number(req.params.id));
+    const p = f && getProp(db, f.property_id);
+    if (!f || !seesPrivate(req.user, p)) return res.status(404).json({ error: 'No existe' });
+    res.set('Cache-Control', 'private, max-age=3600').sendFile(actas.path(f.file, req.query.sm === '1'));
+  });
+
+  app.post('/api/follow/alerts/:id/notified', auth.requireRole(...MANAGERS), (req, res) => {
+    const a = db.prepare('SELECT id FROM alerts WHERE id = ?').get(Number(req.params.id));
+    if (!a) return res.status(404).json({ error: 'No existe' });
+    db.prepare("UPDATE alerts SET notified_at = ?, status = 'contactado' WHERE id = ?").run(isoNow(), a.id);
     res.json({ ok: true });
   });
 

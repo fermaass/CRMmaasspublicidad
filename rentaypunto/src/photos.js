@@ -16,7 +16,7 @@ function fromDataUrl(v) {
   return buf;
 }
 
-function photoStore(dir, offsite, log = console) {
+function photoStore(dir, offsite, log = console, folder = 'fotos') {
   fs.mkdirSync(dir, { recursive: true });
   return {
     dir,
@@ -29,12 +29,13 @@ function photoStore(dir, offsite, log = console) {
       fs.writeFileSync(path.join(dir, `${name}-sm.jpg`), small);
       if (offsite) {
         for (const [suffix, buf] of [['', big], ['-sm', small]]) {
-          putObject(`${offsite.prefix}/fotos/${name}${suffix}.jpg`, buf, 'image/jpeg', offsite)
+          putObject(`${offsite.prefix}/${folder}/${name}${suffix}.jpg`, buf, 'image/jpeg', offsite)
             .catch((err) => log.error('No se pudo copiar la foto al almacenamiento externo:', err.message));
         }
       }
       return name;
     },
+    path(name, small) { return path.join(dir, `${name}${small ? '-sm' : ''}.jpg`); },
     remove(name) {
       for (const f of [`${name}.jpg`, `${name}-sm.jpg`]) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* ya no existe */ } }
     },

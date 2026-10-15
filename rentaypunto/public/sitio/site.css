@@ -20,7 +20,7 @@ main{padding-bottom:40px}
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 label{font-size:.85rem;color:var(--mu);display:block;margin-top:4px}
 input,select,textarea{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
-input[type=checkbox]{width:auto;margin:0}
+input[type=checkbox],input[type=radio]{width:auto;margin:0}
 label.chk{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--tx);font-size:.9rem}
 .b{display:inline-block;background:var(--pr);color:var(--onpr);border:0;cursor:pointer;font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;text-decoration:none;text-align:center}
 .b.s{background:var(--bd);color:var(--tx)}.b.sm{padding:6px 10px;font-size:.85rem}

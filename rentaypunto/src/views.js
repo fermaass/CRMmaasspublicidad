@@ -25,6 +25,7 @@ ${og.image ? `<meta property="og:image" content="${esc(og.image)}"><meta name="t
 <link rel="icon" href="/sitio/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/sitio/site.css?v=${ctx.version}">
 ${ld ? `<script type="application/ld+json">${json(ld)}</script>` : ''}
+${pixel(ctx.settings.meta_pixel_id)}
 </head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
 <header><div class="w nav"><a class="logo" href="/">Renta<b>y</b>punto</a>
 <nav>${nav.map(([h, t, k]) => `<a href="${h}"${active === k ? ' class="on" aria-current="page"' : ''}>${t}</a>`).join('')}</nav></div></header>
@@ -35,6 +36,12 @@ ${scripts.map((s) => `<script>${s}</script>`).join('')}
 <script src="/sitio/match.js?v=${ctx.version}"></script>
 <script src="/sitio/site.js?v=${ctx.version}"></script>
 </body></html>`;
+}
+
+// Píxel de Meta (código estándar de Meta). Solo si el Dueño configuró el ID en el panel.
+function pixel(id) {
+  if (!/^\d{5,20}$/.test(String(id || ''))) return '';
+  return `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${id}');fbq('track','PageView');</script>`;
 }
 
 function card(p) {
@@ -142,7 +149,7 @@ ${list.length ? '' : alertForm(zone.name, { zona: zone.slug })}
   });
 }
 
-function ficha(ctx, { p, sim, slots }) {
+function ficha(ctx, { p, sim, slots, op }) {
   const inc = p.includes;
   const mi = inc.includes('Mantenimiento');
   const mv = mi ? 0 : (p.maintenance || 0);
@@ -171,6 +178,7 @@ ${idl.length ? `<p><b>Ideal para:</b> ${idl.map((x) => `<span class="tag ok">${e
 <a class="b s sm" target="_blank" rel="noopener" href="${esc(map)}">Ver zona en el mapa</a></div>
 ${p.description ? `<p>${esc(p.description).replace(/\n/g, '<br>')}</p>` : ''}
 <div class="card" id="parati" hidden></div>
+${op && op.n >= 3 ? `<div class="card"><h2>Opiniones de quienes la visitaron</h2><p>A <b>${op.liked} de ${op.n}</b> personas que la visitaron les gustó.</p><p class="note">Opiniones anónimas que recibimos después de cada visita.</p></div>` : ''}
 <div class="card"><h2>Qué incluye</h2><div class="svc">${['Agua', 'Luz', 'Gas', 'Internet', 'Mantenimiento'].map((k) => `<div><b>${k}</b><br>${inc.includes(k) ? '<span class="cok">✓ Incluido</span>' : '<span class="note">Por tu cuenta</span>'}</div>`).join('')}</div>
 <div class="fi"><span>Plazo mínimo del contrato</span><b>${p.min_term ? `${p.min_term} meses` : '—'}</b></div>
 <div class="fi"><span>Ocupantes máximos</span><b>${p.max_occupants || '—'}</b></div>
@@ -307,9 +315,23 @@ function privacy(ctx) {
 <p><b>Responsable:</b> ${esc(name)}, Querétaro, México.</p>
 <p><b>Datos que recabamos:</b> nombre y WhatsApp; si registras una propiedad, sus características; si armas tu expediente de inquilino, INE, Constancia de Situación Fiscal y comprobante de ingresos.</p>
 <p><b>Para qué los usamos:</b> agendar y confirmar visitas, contactarte, avisarte de propiedades que coincidan con tu búsqueda, validar tu solicitud de renta y dar seguimiento a quejas.</p>
+<p><b>Medición:</b> usamos el píxel de Meta y sus herramientas de medición para saber qué anuncios traen visitas. Cuando agendas una visita, a Meta le llega tu teléfono cifrado (no legible) para medir el anuncio.</p>
 <p><b>Quién los ve:</b> solo el personal de Rentaypunto que los necesita para atenderte.</p>
 <p><b>Tus derechos ARCO</b> (acceso, rectificación, cancelación y oposición): medio de contacto por definir.</p></div>`;
   return simplePage(ctx, { path: '/aviso-de-privacidad', title: 'Aviso de privacidad | Rentaypunto', desc: 'Aviso de privacidad de Rentaypunto: qué datos recabamos y para qué los usamos.', h1: 'Aviso de privacidad', inner, noindex: true });
+}
+
+function opinion(ctx, { l, done, token }) {
+  if (!l) return notFound(ctx, 'Este enlace de opinión no existe o ya no sirve.');
+  const radio = (name, list) => list.map(([v, t]) => `<label class="chk"><input type="radio" name="${name}" value="${v}" required> ${t}</label>`).join('');
+  const inner = done ? '<div class="card"><p><b>Ya recibimos tu opinión.</b> ¡Gracias!</p><p><a class="b" href="/">Ver más propiedades</a></div>'
+    : `<div class="card"><form data-form="opinion" novalidate><input type="hidden" name="token" value="${esc(token)}">
+<p><b>¿Te gustó la propiedad?</b></p>${radio('liked', [['si', 'Sí'], ['mas_o_menos', 'Más o menos'], ['no', 'No']])}
+<p><b>La renta te parece…</b></p>${radio('rent_opinion', [['justa', 'Justa'], ['alta', 'Alta'], ['baja', 'Baja']])}
+<p><label for="op_r">Si no te convenció, ¿por qué?</label><select id="op_r" name="reason"><option value="">No aplica</option>${['Precio', 'Ubicación', 'Tamaño', 'Estado de la propiedad', 'Encontré otra opción', 'Otro'].map((x) => `<option>${x}</option>`).join('')}</select></p>
+<p class="err" data-err></p><p><button class="b">Enviar opinión</button></p></form>
+<div data-done hidden><p><b>¡Gracias!</b> Tu opinión le llega al propietario sin tu nombre.</p><p><a class="b s" href="/">Ver más propiedades</a></p></div></div>`;
+  return simplePage(ctx, { path: '/opinion', noindex: true, title: 'Tu opinión de la visita | Rentaypunto', desc: 'Cuéntanos qué te pareció la propiedad que visitaste.', h1: '¿Qué te pareció la visita?', lead: `${l.code} · ${l.title}. Es anónima y toma 20 segundos.`, inner });
 }
 
 function notFound(ctx, msg) {
@@ -325,4 +347,4 @@ ${[u('/'), ...zones.map((z) => u(`/renta/${z.slug}`)), ...props.map((p) => u(`/$
 </urlset>`;
 }
 
-module.exports = { esc, home, zonePage, ficha, owners, help, complaints, legal, privacy, notFound, sitemap, filtersText };
+module.exports = { esc, home, zonePage, ficha, owners, help, complaints, legal, privacy, opinion, notFound, sitemap, filtersText };

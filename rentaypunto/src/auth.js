@@ -103,6 +103,6 @@ function verifyTotp(secret, code, now = Date.now()) {
 const totpUri = (secret, email) => `otpauth://totp/${encodeURIComponent(`Rentaypunto:${email}`)}?secret=${secret}&issuer=Rentaypunto`;
 
 module.exports = {
-  COOKIE, MFA_ROLES, sha256, hashPassword, verifyPassword, createSession, sessionCookie, clearCookie,
+  COOKIE, MFA_ROLES, sha256, parseCookies, hashPassword, verifyPassword, createSession, sessionCookie, clearCookie,
   authMiddleware, requireUser, requireRole, newTotpSecret, totpCode, verifyTotp, totpUri,
 };

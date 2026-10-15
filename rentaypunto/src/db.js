@@ -22,6 +22,8 @@ const INCLUDES = ['Agua', 'Luz', 'Gas', 'Internet', 'Mantenimiento'];
 const REQUIREMENTS = ['Póliza jurídica', 'Aval', 'Fiador', 'Depósito y comprobante de ingresos'];
 const PROP_TYPES = ['Casa', 'Departamento', 'Estudio', 'Otro'];
 const DEFAULT_ZONES = ['Juriquilla', 'El Refugio', 'Centro Sur', 'Zibatá', 'Milenio III', 'Centro Histórico', 'Cumbres del Lago'];
+const ACTA_ITEMS = ['Llaves entregadas', 'Lecturas de luz, agua y gas anotadas', 'Estado de paredes, pisos y puertas revisado', 'Inventario de muebles y electrodomésticos', 'Fotos de cada espacio', 'Firma del inquilino y del propietario'];
+const OWNER_REQUESTS = { pausar: 'Pausar', reanudar: 'Reanudar', precio: 'Cambio de precio', ya_rentada: 'Ya la rentó por su cuenta', renovacion: 'Renovación', otro: 'Otro' };
 const DEFAULT_HOURS = ['10:00', '11:00', '12:00', '13:00', '16:00', '17:00', '18:00'];
 
 const { slugify } = require('../public/panel/seo-shared.js');
@@ -238,7 +240,76 @@ function openDb(dbPath) {
     const ins = db.prepare('INSERT INTO zones (name, slug) VALUES (?, ?)');
     for (const z of DEFAULT_ZONES) ins.run(z, slugify(z));
   }
+  migrate(db);
   return db;
+}
+
+// Cambios de la base de una fase a otra. Se aplican solos al arrancar y nunca borran datos.
+function addColumn(db, table, col, def) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+function migrate(db) {
+  // Fase 2: hitos del lead (no se pierden aunque después se marque Perdido), contrato y acta de entrega.
+  addColumn(db, 'leads', 'confirmed_at', 'TEXT');
+  addColumn(db, 'leads', 'visited_at', 'TEXT');
+  addColumn(db, 'leads', 'signed_at', 'TEXT');
+  addColumn(db, 'leads', 'opinion_token', 'TEXT');
+  addColumn(db, 'properties', 'contract_start', 'TEXT');
+  addColumn(db, 'properties', 'contract_end', 'TEXT');
+  addColumn(db, 'properties', 'acta_items', "TEXT NOT NULL DEFAULT '[]'");
+  addColumn(db, 'alerts', 'notified_at', 'TEXT');
+  db.exec(`
+    -- Visitas a la ficha y clics a WhatsApp por día (para reportes semanales y el Resumen por periodo).
+    CREATE TABLE IF NOT EXISTS property_days (
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      views INTEGER NOT NULL DEFAULT 0,
+      wa_clicks INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (property_id, day)
+    );
+    -- Opinión de quien visitó (llega por un enlace de un solo uso). No guarda nombre.
+    CREATE TABLE IF NOT EXISTS opinions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      lead_id INTEGER UNIQUE REFERENCES leads(id) ON DELETE SET NULL,
+      liked TEXT NOT NULL CHECK (liked IN ('si','mas_o_menos','no')),
+      rent_opinion TEXT NOT NULL CHECK (rent_opinion IN ('justa','alta','baja')),
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    -- Lo que pide el propietario por WhatsApp (pausar, cambiar precio, ya la rentó...). El asesor lo registra y se aplica.
+    CREATE TABLE IF NOT EXISTS owner_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('pausar','reanudar','precio','ya_rentada','renovacion','otro')),
+      new_rent INTEGER,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'nueva' CHECK (status IN ('nueva','aplicada','rechazada')),
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      resolved_at TEXT
+    );
+    -- Reportes semanales enviados al propietario.
+    CREATE TABLE IF NOT EXISTS owner_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      sent_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      sent_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    -- Fotos del acta de entrega: privadas (solo el panel las muestra).
+    CREATE TABLE IF NOT EXISTS acta_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      file TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    -- Inversión en Meta por mes (solo el Dueño la ve).
+    CREATE TABLE IF NOT EXISTS meta_spend (month TEXT PRIMARY KEY, amount INTEGER NOT NULL);
+  `);
+  // Leads de la fase 1: se calculan sus hitos con la etapa en la que van.
+  db.exec(`UPDATE leads SET confirmed_at = COALESCE(confirmed_at, updated_at) WHERE stage IN ('cita','visito','expediente','firmado') AND confirmed_at IS NULL;
+    UPDATE leads SET visited_at = COALESCE(visited_at, updated_at) WHERE stage IN ('visito','expediente','firmado') AND visited_at IS NULL;
+    UPDATE leads SET signed_at = COALESCE(signed_at, updated_at) WHERE stage = 'firmado' AND signed_at IS NULL;`);
 }
 
 function getSetting(db, key, fallback = null) {
@@ -263,11 +334,14 @@ function siteSettings(db) {
     legal_text: getSetting(db, 'legal_text', '') || '', // alcance y precio de la póliza; vacío = propuesta "por definir"
     company_legal_name: getSetting(db, 'company_legal_name', '') || '',
     notify_email: getSetting(db, 'notify_email', '') || '', // copia de cada lead (además del asesor)
+    meta_pixel_id: getSetting(db, 'meta_pixel_id', '') || '', // píxel de Meta (el token de la API de Conversiones va en Railway)
+    commission_months: Number(getSetting(db, 'commission_months', '1')), // supuesto: Rentaypunto cobra 1 mes de renta al cerrar
+    commission_pct: Number(getSetting(db, 'commission_pct', '20')), // supuesto: 20% de ese cobro para el asesor
   };
 }
 
 module.exports = {
   openDb, getSetting, setSetting, getJsonSetting, siteSettings, slugify, phone10,
   ROLES, ROLE_LABELS, PROP_STATUS, PROP_LABELS, VISIBLE, STAGES, STAGE_LABELS, LOST_REASONS,
-  EXTRAS, INCLUDES, REQUIREMENTS, PROP_TYPES, DEFAULT_HOURS,
+  EXTRAS, INCLUDES, REQUIREMENTS, PROP_TYPES, DEFAULT_HOURS, ACTA_ITEMS, OWNER_REQUESTS,
 };

@@ -118,6 +118,7 @@
     const [cfg, users, leads, props] = await Promise.all([api('config'), api('users'), api('leads'), api('properties')]);
     Object.assign(S, { cfg, users, leads, props });
     if (mgr()) S.follow = await api('follow');
+    S.mine = await api('my-numbers');
   }
   async function reload(which) {
     if (which.includes('leads')) S.leads = await api('leads');
@@ -125,10 +126,11 @@
     if (which.includes('users')) S.users = await api('users');
     if (which.includes('follow') && mgr()) S.follow = await api('follow');
     if (which.includes('cfg')) S.cfg = await api('config');
+    if (which.includes('leads')) S.mine = await api('my-numbers');
   }
 
   // ---------- Pestañas por perfil ----------
-  const TABS = [['hoy', 'Hoy', 'vgd'], ['leads', 'Leads', 'vgd'], ['citas', 'Citas', 'vgd'], ['props', 'Propiedades', 'vgd'], ['seg', 'Seguimiento', 'gd'], ['equipo', 'Equipo', 'd']];
+  const TABS = [['hoy', 'Hoy', 'vgd'], ['leads', 'Leads', 'vgd'], ['citas', 'Citas', 'vgd'], ['props', 'Propiedades', 'vgd'], ['res', 'Resumen', 'gd'], ['rep', 'Reportes', 'gd'], ['seg', 'Seguimiento', 'gd'], ['equipo', 'Equipo', 'd']];
   const roleKey = () => ({ vendedor: 'v', gerente: 'g', dueno: 'd' }[S.me.role]);
   function render() {
     const mine = TABS.filter((t) => t[2].includes(roleKey()));
@@ -139,7 +141,7 @@
     $('#who').innerHTML = esc(S.me.name) + ' · ' + ROLE[S.me.role] + ' · <a href="#" id="pw">Contraseña</a> · <a href="#" id="out">Salir</a>';
     $('#out').onclick = async (e) => { e.preventDefault(); await api('logout', { method: 'POST', body: {} }).catch(() => {}); S.me = null; loginScreen(); };
     $('#pw').onclick = (e) => { e.preventDefault(); S.tab = 'pw'; renderPw(); };
-    ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, seg: renderSeg, equipo: renderEquipo })[S.tab]();
+    ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, res: renderRes, rep: renderRep, seg: renderSeg, equipo: renderEquipo })[S.tab]();
   }
   function renderPw() {
     $('#app').innerHTML = '<div class="card center"><h2>Cambiar mi contraseña</h2><label for="pc">Contraseña actual</label><input id="pc" type="password" autocomplete="current-password"><label for="pn">Nueva (10 caracteres o más)</label><input id="pn" type="password" autocomplete="new-password"><p class="err" id="perr"></p><p><button class="b" id="pgo">Guardar</button> <button class="b s" id="pback">Volver</button></p><p class="note">Se cierra tu sesión en los demás dispositivos.</p></div>';
@@ -182,18 +184,48 @@
     o += box('Citas de hoy y mañana', ci.length, ci.map((l) => fi('<span class="tag ' + (l.stage === 'cita' ? 'ok' : 'wa') + '">' + (l.visit_date === t ? 'Hoy' : 'Mañana') + ' ' + l.visit_time + '</span> <b>' + esc(l.name) + '</b> · ' + esc(l.prop_code || '') + (l.stage === 'cita' ? '' : ' <span class="note">sin confirmar</span>') + (mgr() ? ' <span class="note">' + esc(l.advisor_name || 'Sin asesor') + '</span>' : ''),
       '<a class="b s sm" target="_blank" rel="noopener" href="' + esc(mapL(l)) + '">Mapa</a>' + waBtn(l, 'conf', 'Confirmar', true) + openBtn(l))).join(''));
     const sg = S.leads.filter((l) => l.stage === 'visito' && !l.followup_done);
-    o += box('Seguimiento después de la visita', sg.length, sg.map((l) => fi('<b>' + esc(l.name) + '</b> · ' + esc(l.prop_code || '') + ' <span class="note">visitó el ' + fdate(l.visit_date) + '</span>', waBtn(l, 'seg', 'Mensaje', true) + '<button class="b s sm" data-segok="' + l.id + '">Hecho</button>' + openBtn(l))).join(''));
+    o += box('Seguimiento después de la visita', sg.length, sg.map((l) => fi('<b>' + esc(l.name) + '</b> · ' + esc(l.prop_code || '') + ' <span class="note">visitó el ' + fdate(l.visit_date) + '</span>', waBtn(l, 'seg', 'Mensaje', true) + '<button class="b s sm" data-opinion="' + l.id + '">Pedir opinión</button><button class="b s sm" data-segok="' + l.id + '">Hecho</button>' + openBtn(l))).join(''));
+    const lim = addDays(t, 60);
+    const rn = S.props.filter((p) => p.status === 'rentada' && p.contract_end && p.contract_end <= lim && (mgr() || p.advisor_id === S.me.id)).sort((a, b) => (a.contract_end < b.contract_end ? -1 : 1));
+    o += box('Contratos por vencer (60 días)', rn.length, rn.map((p) => { const d = Math.round((new Date(p.contract_end + 'T12:00:00Z') - new Date(t + 'T12:00:00Z')) / 864e5);
+      return fi('<b>' + esc(p.code) + '</b> · ' + esc(p.title) + ' <span class="tag ' + (d < 0 ? 'no' : d <= 30 ? 'wa' : '') + '">' + (d < 0 ? 'vencido' : 'vence en ' + d + ' días') + '</span> <span class="note">' + fdate(p.contract_end) + '</span>', '<button class="b s sm" data-edit="' + p.id + '">Abrir</button>'); }).join(''), 'Ningún contrato vence en los próximos 60 días. Captura las fechas del contrato en la propiedad cuando se rente.');
     if (mgr()) {
+      const F = S.follow || {};
+      const al = (F.alerts || []).filter((a) => a.matches.length && a.status !== 'cerrado');
+      if (al.length) o += box('Alertas con propiedades nuevas que coinciden', al.length, al.map((a) => fi('<b>' + esc(a.name || tel(a.phone)) + '</b> · ' + esc(a.filters_text), '<span class="tag ok">' + a.matches.map((m) => esc(m.code)).join(' ') + '</span><button class="b s sm" data-goto="seg">Avisar</button>')).join(''));
+      const rq = (F.requests || []).filter((r) => r.status === 'nueva');
+      if (rq.length) o += box('Solicitudes de propietarios', rq.length, rq.map((r) => fi('<b>' + esc(r.code) + '</b> · ' + esc(S.cfg.ownerRequests[r.kind]) + (r.new_rent ? ' a ' + money(r.new_rent) : ''), '<button class="b s sm" data-goto="seg">Revisar</button>')).join(''));
       const bo = S.props.filter((p) => p.status === 'borrador');
       o += box('Propiedades por aprobar', bo.length, bo.map((p) => fi('<b>' + esc(p.code) + '</b> · ' + esc(p.title) + ' <span class="note">capturó ' + esc(userName(p.created_by)) + ' · SEO ' + seoScore(p) + '%</span>', '<button class="b s sm" data-edit="' + p.id + '">Revisar</button><button class="b sm" data-pub="' + p.id + '">Publicar</button>')).join(''));
       const sa = S.leads.filter((l) => !l.advisor_id && !['firmado', 'perdido'].includes(l.stage));
       o += box('Leads sin asesor', sa.length, sa.map((l) => fi('<b>' + esc(l.name) + '</b> · ' + esc(l.prop_code || 'Sin propiedad'), '<button class="b s sm" data-open="' + l.id + '">Asignar</button>')).join(''));
     }
+    if (!mgr()) o += myNumbersCard();
     $('#app').innerHTML = o;
     bindCommon();
+    bindOpinion();
     $$('[data-segok]').forEach((b) => { b.onclick = () => act(async () => { await api('leads/' + b.dataset.segok, { method: 'PATCH', body: { followup_done: true } }); await reload(['leads']); render(); }); });
   }
+  function myNumbersCard() {
+    const n = S.mine; if (!n) return '';
+    const st = S.cfg.settings;
+    return '<div class="card"><h2>Mis números del mes</h2><div class="kpis"><div class="kpi"><div class="kv">' + n.leads + '</div><div class="kl">Leads recibidos</div></div><div class="kpi"><div class="kv">' + n.visited + '</div><div class="kl">Visitaron</div></div><div class="kpi"><div class="kv">' + n.signed + '</div><div class="kl">Rentas firmadas</div></div><div class="kpi"><div class="kv">' + money(n.commission) + '</div><div class="kl">Comisión estimada</div></div></div>'
+      + '<p class="note">Supuesto por confirmar: Rentaypunto cobra ' + st.commission_months + ' mes(es) de renta al cerrar y el asesor recibe ' + st.commission_pct + '% de ese cobro. Lo ajusta el Dueño en Equipo.</p></div>';
+  }
+  // Pedir opinión: genera el enlace de un solo uso y abre WhatsApp con el mensaje.
+  function bindOpinion() {
+    $$('[data-opinion]').forEach((b) => { b.onclick = async () => {
+      const l = S.leads.find((x) => x.id === Number(b.dataset.opinion)) || S.lead;
+      const w = window.open('', '_blank');
+      const r = await act(() => api('leads/' + l.id + '/opinion-link', { method: 'POST', body: {} }));
+      if (!r) { if (w) w.close(); return; }
+      if (r.done) { if (w) w.close(); return toast('Ya dejó su opinión. ¡Gracias!'); }
+      const url = waL(l.phone, 'Hola ' + first(l.name) + ', gracias por visitar ' + (l.prop_title || 'la propiedad') + '. ¿Nos ayudas con tu opinión? Es anónima y toma 20 segundos: ' + r.url);
+      if (w) w.location = url; else location.href = url;
+    }; });
+  }
   function bindCommon() {
+    $$('[data-goto]').forEach((b) => { b.onclick = () => { S.tab = b.dataset.goto; render(); scrollTo(0, 0); }; });
     $$('[data-open]').forEach((b) => { b.onclick = () => { S.tab = 'leads'; openLead(Number(b.dataset.open)); }; });
     $$('[data-edit]').forEach((b) => { b.onclick = () => { S.tab = 'props'; editProp(Number(b.dataset.edit)); }; });
     $$('[data-pub]').forEach((b) => { b.onclick = () => setStatus(Number(b.dataset.pub), 'disponible'); });
@@ -227,7 +259,7 @@
       + '<div class="filters"><div><label for="lvd">Fecha de la cita</label><input id="lvd" type="date" value="' + esc(l.visit_date || '') + '"></div><div><label for="lvt">Hora</label><input id="lvt" type="time" step="900" value="' + esc(l.visit_time || '') + '"></div></div>'
       + '<p class="row"><button class="b s sm" id="lvgo">Cambiar cita</button>' + (['cita', 'nuevo', 'contactado'].includes(l.stage) && l.visit_date ? '<button class="b s sm" id="noshow">No asistió</button>' : '') + '</p>'
       + '<p class="note">Mensajes listos (abren WhatsApp con el texto escrito; revísalo antes de enviar):</p><p class="row">' + waBtn(l, 'nuevo', 'Primer contacto') + (l.visit_date ? waBtn(l, 'conf', 'Confirmar visita') : '')
-      + (l.address_private && l.stage === 'cita' ? waBtn(l, 'dir', 'Enviar dirección') : '') + waBtn(l, 'seg', 'Seguimiento') + waBtn(l, 'sim', 'Enviar similares') + '</p>'
+      + (l.address_private && l.stage === 'cita' ? waBtn(l, 'dir', 'Enviar dirección') : '') + waBtn(l, 'seg', 'Seguimiento') + waBtn(l, 'sim', 'Enviar similares') + (l.visited_at ? '<button class="b s sm" data-opinion="' + l.id + '">Pedir opinión</button>' : '') + '</p>'
       + '<p class="note">Similares disponibles: ' + (sim.map((x) => esc(x.code + ' ' + x.title + ' ' + money(x.rent))).join(' · ') || 'ninguna por ahora') + '</p>'
       + '</div></div><p><button class="b s sm" id="lclose">Cerrar ficha</button></p></div>';
   }
@@ -235,6 +267,7 @@
     const l = S.lead; if (!l || !$('#leadcard')) return;
     const patch = async (body, ok) => { const r = await act(() => api('leads/' + l.id, { method: 'PATCH', body: body }), ok); if (r) { await reload(['leads', 'props']); await openLead(l.id); } };
     $('#lclose').onclick = () => { S.lead = null; S.losing = false; render(); };
+    bindOpinion();
     $('#lst').onchange = function () {
       if (this.value === 'perdido') { S.losing = true; render(); return; }
       patch({ stage: this.value }, this.value === 'firmado' ? 'Firmado: la propiedad pasó a Rentada y salió del sitio.' : 'Etapa actualizada.');
@@ -307,8 +340,11 @@
   const zoneById = (id) => S.cfg.zones.find((z) => z.id === Number(id));
   function seoScore(p) { const c = SEO.seoChecks(p, { slug: p.seo_slug, title: p.seo_title, desc: p.seo_desc }, (p.photos || []).length); return Math.round(c.filter((x) => x[1]).length / c.length * 100); }
   async function setStatus(id, status) {
-    const r = await act(() => api('properties/' + id + '/status', { method: 'POST', body: { status: status } }), status === 'disponible' ? 'Publicada en el sitio.' : 'Estado: ' + PST[status] + '.');
-    if (r) { await reload(['props']); render(); }
+    const r = await act(() => api('properties/' + id + '/status', { method: 'POST', body: { status: status } }));
+    if (r) {
+      toast((status === 'disponible' ? 'Publicada en el sitio.' : 'Estado: ' + PST[status] + '.') + (r.alert_matches ? ' ' + r.alert_matches + ' alerta(s) de búsqueda coinciden: revisa Seguimiento.' : ''));
+      await reload(['props', 'follow']); render();
+    }
   }
   function editProp(id) { S.edit = id ? JSON.parse(JSON.stringify(S.props.find((p) => p.id === id))) : { status: 'borrador', extras: [], includes: [], photos: [], deposit_months: 1, can_edit: true }; S.pending = []; S.touched = id ? { slug: true, title: true, desc: true } : {}; render(); scrollTo(0, 0); }
   function propForm() {
@@ -337,6 +373,8 @@
       + field('max_occupants', 'Ocupantes máximos', p.max_occupants, ' type="number" inputmode="numeric"', true)
       + field('min_term', 'Plazo mínimo (meses)', p.min_term, ' type="number" inputmode="numeric"', true)
       + field('available_from', 'Disponible desde', p.available_from, ' type="date"', true)
+      + field('contract_start', 'Contrato desde', p.contract_start, ' type="date"', true)
+      + field('contract_end', 'Contrato hasta', p.contract_end, ' type="date"', true)
       + '<div class="fu"><label for="a_req">Requisitos</label><select id="a_req"' + ro + '><option value=""></option>' + opts(S.cfg.lists.requirements, p.requirements) + '</select></div>'
       + (mgr() ? '<div><label for="a_adv">Asesor</label><select id="a_adv"' + ro + '><option value="">Sin asignar</option>' + opts(advisors().map((u) => [u.id, u.name]), p.advisor_id) + '</select></div>' : '')
       + (canPub() ? '<div><label for="a_st">Estado</label><select id="a_st"' + ro + '>' + opts(S.cfg.lists.propStatus, p.status, (s) => PST[s]) + '</select></div>' : '')
@@ -354,13 +392,48 @@
       + '<label for="seo_desc">Meta descripción <span id="seo_cd" class="note"></span></label><textarea id="seo_desc" rows="3"' + ro + '></textarea>'
       + '<p class="note">H1 de la ficha: <b id="seo_h1"></b></p><div id="gp"></div><ul class="ck" id="ck"></ul>' + (p.can_edit ? '<p><button class="b s sm" id="seoreset">Restablecer SEO automático</button></p>' : '') + '</div></div>'
       + '<p class="row">' + (p.can_edit ? '<button class="b" id="psave">' + (canPub() ? 'Guardar' : 'Guardar borrador') + '</button>' : '') + '<button class="b s" id="pclose">Cerrar</button>'
-      + (p.id && ['disponible', 'apartada'].includes(p.status) ? '<a class="b s" target="_blank" rel="noopener" href="' + esc(propUrl(p.seo_slug)) + '">Ver en el sitio</a>' : '') + '</p><p class="err" id="perr"></p></div>';
+      + (p.id && ['disponible', 'apartada'].includes(p.status) ? '<a class="b s" target="_blank" rel="noopener" href="' + esc(propUrl(p.seo_slug)) + '">Ver en el sitio</a>' : '') + '</p><p class="err" id="perr"></p>'
+      + (p.id && p.sees_private ? extrasHtml(p) : '') + '</div>';
+  }
+  // Solicitud del propietario y acta de entrega (solo con la propiedad ya guardada).
+  function extrasHtml(p) {
+    let h = '<div class="g2"><div class="card"><h3>Lo que pide el propietario</h3><p class="note">Te escribió por WhatsApp: regístralo aquí y el Gerente lo aplica.</p>'
+      + '<label for="rq_k">Pide</label><select id="rq_k">' + opts(Object.entries(S.cfg.ownerRequests)) + '</select>'
+      + '<label for="rq_r">Renta nueva (si pide cambio de precio)</label><input id="rq_r" type="number" inputmode="numeric"><label for="rq_n">Nota</label><input id="rq_n">'
+      + '<p><button class="b s sm" id="rqgo">Registrar solicitud</button></p></div>';
+    if (p.status === 'rentada') {
+      h += '<div class="card"><h3>Acta de entrega</h3><div id="acta"><p class="note">Cargando…</p></div></div>';
+    }
+    return h + '</div>';
+  }
+  async function bindExtras(p) {
+    if (!$('#rqgo')) return;
+    $('#rqgo').onclick = async () => {
+      const r = await act(() => api('properties/' + p.id + '/requests', { method: 'POST', body: { kind: $('#rq_k').value, new_rent: $('#rq_r').value, note: $('#rq_n').value } }), mgr() ? 'Registrada. Aplícala en Seguimiento.' : 'Registrada. El Gerente la aplica.');
+      if (r) { $('#rq_r').value = ''; $('#rq_n').value = ''; reload(['follow']); }
+    };
+    if (!$('#acta')) return;
+    const a = await act(() => api('properties/' + p.id + '/acta'));
+    if (!a) return;
+    const paint = () => {
+      $('#acta').innerHTML = S.cfg.actaItems.map((t, i) => '<label class="chk" style="display:flex"><input type="checkbox" data-ai="' + i + '"' + (a.items[i] ? ' checked' : '') + '> ' + esc(t) + '</label>').join('')
+        + '<div class="thumbs">' + a.photos.map((f) => '<div class="thumb"><a target="_blank" href="api/acta-photo/' + f.id + '"><img src="api/acta-photo/' + f.id + '?sm=1" alt="Foto del acta"></a></div>').join('') + '</div>'
+        + '<input type="file" id="acta_f" accept="image/*" multiple aria-label="Fotos del acta"><p class="note">Las fotos del acta son privadas: no salen en el sitio. ' + a.items.filter(Boolean).length + '/' + S.cfg.actaItems.length + ' puntos revisados.</p>';
+      $$('[data-ai]').forEach((c) => { c.onchange = async () => { a.items[Number(c.dataset.ai)] = c.checked; const items = S.cfg.actaItems.map((_, i) => Boolean(a.items[i])); await act(() => api('properties/' + p.id + '/acta', { method: 'PUT', body: { items: items } })); paint(); }; });
+      $('#acta_f').onchange = async function () {
+        for (const f of this.files) {
+          try { const img = await shrink(f); const r = await api('properties/' + p.id + '/acta/photos', { method: 'POST', body: img }); a.photos.push({ id: r.id }); } catch (e) { toast(e.message); }
+        }
+        paint();
+      };
+    };
+    paint();
   }
   function formData() {
     const v = (id) => { const e = $('#a_' + id); return e ? e.value : undefined; };
     const d = { title: v('title'), zone_id: Number(v('zone')) || null, colonia: v('colonia'), rent: v('rent'), m2: v('m2'), bedrooms: v('bedrooms'), bathrooms: v('bathrooms'), prop_type: v('type'),
       deposit_months: v('deposit_months'), maintenance: v('maintenance'), parking: v('parking'), max_occupants: v('max_occupants'), min_term: v('min_term'), available_from: v('available_from'),
-      requirements: v('req'), near: v('near'), consider_note: v('consider_note'), description: $('#a_desc').value, address_private: v('addr'),
+      requirements: v('req'), near: v('near'), contract_start: v('contract_start') || null, contract_end: v('contract_end') || null, consider_note: v('consider_note'), description: $('#a_desc').value, address_private: v('addr'),
       extras: $$('[data-ex]').filter((x) => x.checked).map((x) => x.dataset.ex), includes: $$('[data-inc]').filter((x) => x.checked).map((x) => x.dataset.inc) };
     if ($('#a_adv')) d.advisor_id = v('adv') ? Number(v('adv')) : null;
     if ($('#a_st')) d.status = v('st');
@@ -410,7 +483,7 @@
   }
   function bindPropForm() {
     const p = S.edit; if (!p || !$('#propform')) return;
-    paintThumbs(); updateSeo();
+    paintThumbs(); updateSeo(); if (p.id) bindExtras(p);
     $('#qkbtn').onclick = () => { S.qk = !$('#propform').classList.contains('qk'); $('#propform').classList.toggle('qk', S.qk); $('#qkbtn').textContent = S.qk ? 'Mostrar todos los campos' : 'Captura rápida'; };
     $('#pclose').onclick = () => { if (S.pending.length && !confirm('Hay fotos sin subir. ¿Cerrar de todos modos?')) return; S.edit = null; S.pending = []; render(); };
     if (!p.can_edit) return;
@@ -432,7 +505,8 @@
         S.edit = { ...saved, photos: saved.photos || [] }; S.pending = keepPending;
         if (S.pending.length) await uploadPending(saved.id);
         await reload(['props', 'follow']);
-        toast(saved.status === 'borrador' ? 'Guardada como borrador.' + (canPub() ? '' : ' El Gerente la revisa y la publica.') : 'Guardada. Su ficha: ' + propUrl(saved.seo_slug));
+        toast(saved.status === 'borrador' ? 'Guardada como borrador.' + (canPub() ? '' : ' El Gerente la revisa y la publica.') : 'Guardada. Su ficha: ' + propUrl(saved.seo_slug)
+          + (saved.alert_matches ? ' · ' + saved.alert_matches + ' alerta(s) de búsqueda coinciden: revisa Seguimiento.' : ''));
         if (!S.pending.length) { S.edit = null; render(); }
       } catch (e) { $('#perr').textContent = e.message; } finally { if ($('#psave')) $('#psave').disabled = false; }
     };
@@ -459,21 +533,74 @@
     bindCommon(); bindPropForm();
   }
 
+  // ---------- Resumen (Gerente y Dueño; el costo solo el Dueño) ----------
+  const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 + '%' : '—');
+  async function renderRes() {
+    const per = S.period || 'mes';
+    $('#app').innerHTML = '<p class="note">Cargando…</p>';
+    const r = await act(() => api('summary?period=' + per));
+    if (!r || S.tab !== 'res') return;
+    const f = r.funnel;
+    const grp = (rows, h) => '<div class="tw"><table class="cards"><thead><tr><th>' + h + '</th><th>Citas</th><th>Confirmadas</th><th>Visitaron</th><th>Rentas</th><th>Cita → renta</th></tr></thead><tbody>'
+      + (rows.map((x) => '<tr><td><b>' + esc(x.key) + '</b></td><td data-l="Citas">' + x.leads + '</td><td data-l="Confirmadas">' + x.confirmed + '</td><td data-l="Visitaron">' + x.visited + '</td><td data-l="Rentas">' + x.signed + '</td><td data-l="Cita → renta">' + pct(x.signed, x.leads) + '</td></tr>').join('') || '<tr><td colspan="6" class="note">Sin datos en este periodo.</td></tr>') + '</tbody></table></div>';
+    const bar = (label, n) => '<div class="fi"><span>' + label + '</span><span class="row"><span style="display:inline-block;height:12px;width:' + Math.max(4, f.leads ? Math.round(n / f.leads * 160) : 4) + 'px;background:var(--pr);border-radius:6px"></span> <b>' + n + '</b> <span class="note">' + pct(n, f.leads) + '</span></span></div>';
+    let cost = '';
+    if (r.cost) {
+      const m = S.cfg.today.slice(0, 7);
+      cost = '<div class="card"><h2>Costo por cita (Meta Ads)</h2><div class="kpis"><div class="kpi"><div class="kv">' + money(r.cost.spend) + '</div><div class="kl">Inversión del periodo</div></div><div class="kpi"><div class="kv">' + (r.cost.perLead ? money(r.cost.perLead) : '—') + '</div><div class="kl">Por cita (' + r.cost.meta.leads + ')</div></div><div class="kpi"><div class="kv">' + (r.cost.perVisit ? money(r.cost.perVisit) : '—') + '</div><div class="kl">Por visita realizada (' + r.cost.meta.visited + ')</div></div><div class="kpi"><div class="kv">' + (r.cost.perSigned ? money(r.cost.perSigned) : '—') + '</div><div class="kl">Por renta (' + r.cost.meta.signed + ')</div></div></div>'
+        + '<div class="filters"><div><label for="ms_m">Mes</label><input id="ms_m" type="month" value="' + m + '"></div><div><label for="ms_a">Inversión en Meta (MXN)</label><input id="ms_a" type="number" inputmode="numeric"></div><div><label>&nbsp;</label><button class="b s" id="msgo">Guardar inversión</button></div></div>'
+        + '<p class="note">Meses capturados: ' + (r.spendMonths.map((x) => x.month + ' ' + money(x.amount)).join(' · ') || 'ninguno') + '. Solo cuentan las citas con origen Meta Ads (vienen del anuncio con utm_source=facebook o instagram).</p></div>';
+    }
+    $('#app').innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><h2>Resumen</h2><select id="per" style="width:auto">' + opts([['mes', 'Este mes'], ['mes_pasado', 'Mes pasado'], ['anio', 'Este año'], ['todo', 'Todo']], per) + '</select></div>'
+      + '<div class="kpis"><div class="kpi"><div class="kv">' + r.views + '</div><div class="kl">Visitas a fichas</div></div><div class="kpi"><div class="kv">' + r.wa + '</div><div class="kl">Clics a WhatsApp</div></div><div class="kpi"><div class="kv">' + f.leads + '</div><div class="kl">Citas solicitadas</div></div><div class="kpi"><div class="kv">' + f.visited + '</div><div class="kl">Visitas realizadas</div></div><div class="kpi"><div class="kv">' + f.signed + '</div><div class="kl">Rentas firmadas</div></div><div class="kpi"><div class="kv">' + pct(f.leads, r.views) + '</div><div class="kl">Visita a ficha → cita</div></div></div>'
+      + '<p class="note">Del ' + fdate(r.range.from) + ' al ' + fdate(r.range.to) + '. Las visitas a fichas se cuentan desde la fase 2.</p></div>'
+      + '<div class="g2"><div class="card"><h2>Embudo</h2>' + bar('Solicitaron cita', f.leads) + bar('Confirmaron', f.confirmed) + bar('Visitaron', f.visited) + bar('Firmaron', f.signed) + '</div>'
+      + '<div class="card"><h2>Por qué se pierden</h2>' + (r.lost.map((x) => '<div class="fi"><span>' + esc(x[0]) + '</span><b>' + x[1] + '</b></div>').join('') || '<p class="note">Sin perdidos en este periodo.</p>') + '</div></div>'
+      + cost
+      + '<div class="card"><h2>Citas por origen</h2>' + grp(r.byOrigin, 'Origen') + '</div>'
+      + '<div class="g2"><div class="card"><h2>Por zona</h2>' + grp(r.byZone, 'Zona') + '</div><div class="card"><h2>Por asesor</h2>' + grp(r.byAdvisor, 'Asesor') + '</div></div>';
+    $('#per').onchange = function () { S.period = this.value; renderRes(); };
+    if ($('#msgo')) $('#msgo').onclick = async () => { const ok = await act(() => api('meta-spend', { method: 'PUT', body: { month: $('#ms_m').value, amount: $('#ms_a').value } }), 'Inversión guardada.'); if (ok) renderRes(); };
+  }
+
+  // ---------- Reportes semanales al propietario ----------
+  async function renderRep() {
+    $('#app').innerHTML = '<p class="note">Cargando…</p>';
+    const L = await act(() => api('reports'));
+    if (!L || S.tab !== 'rep') return;
+    const t = S.cfg.today;
+    const due = (x) => x.owner && x.status !== 'rentada' && (!x.last_sent || x.last_sent.slice(0, 10) <= addDays(t, -7));
+    $('#app').innerHTML = '<div class="card"><h2>Reporte semanal para cada propietario</h2><p class="note">Visitas a la ficha, citas y opiniones de la última semana, con una recomendación por reglas simples. "Enviar" abre WhatsApp con el mensaje escrito; revísalo antes de mandarlo. ' + L.filter(due).length + ' por enviar esta semana.</p>'
+      + '<div class="tw"><table class="cards"><thead><tr><th>Propiedad</th><th>Propietario</th><th>Semana</th><th>Total</th><th>Recomendación</th><th></th></tr></thead><tbody>'
+      + (L.map((x) => '<tr><td><b>' + esc(x.code) + '</b> <span class="tag">' + PST[x.status] + '</span><br><span class="note">' + esc(x.title) + '</span></td><td data-l="Propietario">' + (x.owner ? esc(x.owner.name) + '<br><span class="note">' + tel(x.owner.phone) + '</span>' : '<span class="note">Sin propietario ligado (Propiedades → Editar)</span>') + '</td>'
+        + '<td data-l="Semana">' + x.week.views + ' visitas · ' + x.week.leads + ' citas · ' + x.week.visited + ' realizadas</td><td data-l="Total">' + x.total.views + ' visitas · ' + x.total.leads + ' citas · ' + x.days + ' días publicada' + (x.op.n ? '<br><span class="note">' + x.op.liked + '/' + x.op.n + ' les gustó</span>' : '') + '</td>'
+        + '<td data-l="Recomendación">' + esc(x.recommendation) + '</td><td>' + (x.owner ? '<a class="b sm' + (due(x) ? '' : ' s') + '" target="_blank" rel="noopener" data-sent="' + x.id + '" href="' + esc(waL(x.owner.phone, x.message)) + '">Enviar</a>' : '') + '<br><span class="note">' + (x.last_sent ? 'Último: ' + fdt(x.last_sent) : 'Nunca enviado') + '</span></td></tr>').join('') || '<tr><td colspan="6" class="note">Sin propiedades publicadas.</td></tr>') + '</tbody></table></div></div>';
+    $$('[data-sent]').forEach((b) => { b.addEventListener('click', () => { setTimeout(() => act(async () => { await api('properties/' + b.dataset.sent + '/report-sent', { method: 'POST', body: {} }); renderRep(); }, 'Marcado como enviado.'), 300); }); });
+  }
+
   // ---------- Seguimiento ----------
   const stSel = (kind, id, list, cur, labels) => '<select data-fs="' + kind + ':' + id + '" aria-label="Estado">' + opts(list, cur, (s) => (labels || {})[s] || s.charAt(0).toUpperCase() + s.slice(1)) + '</select>';
   function renderSeg() {
     const F = S.follow || { owners: [], tickets: [], legal: [], alerts: [] };
     const tab = (head, rows, empty) => '<div class="tw"><table class="cards"><thead><tr>' + head.map((h) => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + (rows.join('') || '<tr><td colspan="' + head.length + '" class="note">' + empty + '</td></tr>') + '</tbody></table></div>';
     const waA = (a) => 'Hola' + (a.name ? ' ' + first(a.name) : '') + ', soy de Rentaypunto. Nos pediste avisarte de propiedades así: ' + a.filters_text + '. ¿Sigues buscando?';
+    const waMatch = (a) => 'Hola' + (a.name ? ' ' + first(a.name) : '') + ', soy de Rentaypunto. Ya tenemos ' + (a.matches.length === 1 ? 'una propiedad' : a.matches.length + ' propiedades') + ' con lo que buscabas (' + a.filters_text + '): ' + a.matches.map((m) => m.title + ' (' + money(m.rent) + ') ' + propUrl(m.slug)).join(' · ');
     $('#app').innerHTML = '<div class="card"><h2>Propietarios que se registraron</h2>' + tab(['Folio', 'Propietario', 'Propiedad', 'Renta', 'Detalles', 'Estado', ''], F.owners.map((o) => '<tr><td data-l="Folio">P-' + o.id + '<br><span class="note">' + fdate(o.created_at) + '</span></td><td><b>' + esc(o.name) + '</b><br><span class="note">' + tel(o.phone) + ' · ' + esc(o.best_time || '') + '</span></td>'
       + '<td data-l="Propiedad">' + esc(o.prop_type || '') + ' en ' + esc(o.zone || '—') + '<br><span class="note">' + esc(o.colonia || '') + (o.bedrooms ? ' · ' + o.bedrooms + ' rec.' : '') + (o.m2 ? ' · ' + o.m2 + ' m²' : '') + '</span></td><td data-l="Renta">' + (o.expected_rent ? money(o.expected_rent) : '—') + '</td>'
       + '<td data-l="Detalles"><span class="note">' + esc(o.occupied || '') + (o.available_from ? ' · desde ' + fdate(o.available_from) : '') + ' · Amueblada: ' + esc(o.furnished || '—') + ' · Mascotas: ' + esc(o.pets || '—') + ' · En otro lado: ' + esc(o.listed_elsewhere || '—') + ' · Vive fuera: ' + esc(o.lives_outside || '—') + (o.notes ? '<br>' + esc(o.notes) : '') + '</span></td>'
       + '<td data-l="Estado">' + stSel('owners', o.id, ['nuevo', 'contactado', 'publicado', 'descartado'], o.status) + '</td><td><span class="row"><a class="b s sm" target="_blank" rel="noopener" href="' + esc(waL(o.phone, 'Hola ' + first(o.name) + ', soy de Rentaypunto. Recibimos el registro de tu propiedad en ' + (o.zone || 'Querétaro') + ' (folio P-' + o.id + '). ¿Te puedo llamar para revisar los detalles?')) + '">WhatsApp</a><button class="b s sm" data-fromowner="' + o.id + '">Crear propiedad</button></span></td></tr>'), 'Sin registros.') + '</div>'
-      + '<div class="card"><h2>Alertas de búsqueda ("Avísame")</h2><p class="note">El cruce automático con propiedades nuevas llega en la fase 2. Por ahora, contáctalos desde aquí.</p>' + tab(['Folio', 'Prospecto', 'Busca', 'Fecha', 'Estado', ''], F.alerts.map((a) => '<tr><td data-l="Folio">A-' + a.id + '</td><td>' + esc(a.name || '—') + '<br><span class="note">' + tel(a.phone) + '</span></td><td data-l="Busca">' + esc(a.filters_text) + '</td><td data-l="Fecha">' + fdate(a.created_at) + '</td><td data-l="Estado">' + stSel('alerts', a.id, ['nuevo', 'contactado', 'cerrado'], a.status) + '</td><td><a class="b s sm" target="_blank" rel="noopener" href="' + esc(waL(a.phone, waA(a))) + '">WhatsApp</a></td></tr>'), 'Sin alertas.') + '</div>'
+      + '<div class="card"><h2>Alertas de búsqueda ("Avísame")</h2><p class="note">Se cruzan solas con las propiedades que se publican después de la alerta (o después del último aviso).</p>' + tab(['Folio', 'Prospecto', 'Busca', 'Coincide con', 'Estado', ''], F.alerts.map((a) => '<tr><td data-l="Folio">A-' + a.id + '<br><span class="note">' + fdate(a.created_at) + '</span></td><td>' + esc(a.name || '—') + '<br><span class="note">' + tel(a.phone) + '</span></td><td data-l="Busca">' + esc(a.filters_text) + '</td>'
+        + '<td data-l="Coincide con">' + (a.matches && a.matches.length ? a.matches.map((m) => '<span class="tag ok">' + esc(m.code) + '</span>').join(' ') : '<span class="note">—</span>') + '</td><td data-l="Estado">' + stSel('alerts', a.id, ['nuevo', 'contactado', 'cerrado'], a.status) + '</td>'
+        + '<td>' + (a.matches && a.matches.length ? '<a class="b sm" target="_blank" rel="noopener" data-notify="' + a.id + '" href="' + esc(waL(a.phone, waMatch(a))) + '">Avisar</a>' : '<a class="b s sm" target="_blank" rel="noopener" href="' + esc(waL(a.phone, waA(a))) + '">WhatsApp</a>') + '</td></tr>'), 'Sin alertas.') + '</div>'
+      + '<div class="card"><h2>Solicitudes de propietarios</h2>' + tab(['Folio', 'Propiedad', 'Pide', 'Registró', 'Estado', ''], (F.requests || []).map((r) => '<tr><td data-l="Folio">S-' + r.id + '<br><span class="note">' + fdate(r.created_at) + '</span></td><td data-l="Propiedad">' + esc(r.code + ' · ' + r.title) + '</td><td data-l="Pide">' + esc(S.cfg.ownerRequests[r.kind]) + (r.new_rent ? ' a ' + money(r.new_rent) + ' <span class="note">(hoy ' + money(r.rent) + ')</span>' : '') + (r.note ? '<br><span class="note">' + esc(r.note) + '</span>' : '') + '</td>'
+        + '<td data-l="Registró">' + esc(r.by_name || '—') + '</td><td data-l="Estado"><span class="tag ' + (r.status === 'aplicada' ? 'ok' : r.status === 'rechazada' ? 'no' : 'wa') + '">' + r.status + '</span></td><td>' + (r.status === 'nueva' ? '<span class="row"><button class="b sm" data-rq="' + r.id + ':aplicar">Aplicar</button><button class="b s sm" data-rq="' + r.id + ':rechazar">Rechazar</button></span>' : '') + '</td></tr>'), 'Sin solicitudes. Se registran desde la propiedad (Propiedades → Editar).') + '</div>'
+      + '<div class="card"><h2>Opiniones de visitas</h2>' + tab(['Propiedad', 'Opiniones', 'Les gustó', 'Renta alta'], (F.opinions || []).map((o) => '<tr><td>' + esc(o.code + ' · ' + o.title) + '</td><td data-l="Opiniones">' + o.n + '</td><td data-l="Les gustó">' + o.liked + '</td><td data-l="Renta alta">' + o.high + '</td></tr>'), 'Aún sin opiniones. Se piden desde el lead con "Pedir opinión" después de la visita.') + '</div>'
       + '<div class="card"><h2>Quejas, inconformidades y sugerencias</h2>' + tab(['Folio', 'Tipo', 'Quién', 'Propiedad', 'Mensaje', 'Asignado', 'Estado'], F.tickets.map((t) => '<tr><td data-l="Folio">#' + t.id + '<br><span class="note">' + fdate(t.created_at) + '</span></td><td data-l="Tipo">' + esc(t.kind) + '</td><td>' + esc(t.name || '—') + '<br><span class="note">' + esc(t.contact || '') + '</span></td><td data-l="Propiedad">' + esc(t.property_ref || '—') + '</td><td data-l="Mensaje">' + esc(t.message) + '</td>'
       + '<td data-l="Asignado"><select data-tas="' + t.id + '"><option value="">Sin asignar</option>' + opts(advisors().map((u) => [u.id, u.name]), t.assigned_to) + '</select></td><td data-l="Estado">' + stSel('tickets', t.id, ['en_gestion', 'resuelto'], t.status, { en_gestion: 'En gestión', resuelto: 'Resuelto' }) + '</td></tr>'), 'Sin reportes.') + '</div>'
       + '<div class="card"><h2>Solicitudes de contacto jurídico</h2>' + tab(['Folio', 'Nombre', 'WhatsApp', 'Es', 'Fecha', 'Estado'], F.legal.map((l) => '<tr><td data-l="Folio">J-' + l.id + '</td><td>' + esc(l.name) + '</td><td data-l="WhatsApp"><a target="_blank" rel="noopener" href="' + esc(waL(l.phone, 'Hola ' + first(l.name) + ', soy de Rentaypunto. Nos pediste información de la póliza jurídica.')) + '">' + tel(l.phone) + '</a></td><td data-l="Es">' + esc(l.who) + '</td><td data-l="Fecha">' + fdate(l.created_at) + '</td><td data-l="Estado">' + stSel('legal', l.id, ['nuevo', 'contactado', 'cerrado'], l.status) + '</td></tr>'), 'Sin solicitudes.') + '</div>';
     $$('[data-fs]').forEach((s) => { s.onchange = () => { const x = s.dataset.fs.split(':'); act(async () => { await api('follow/' + x[0] + '/' + x[1], { method: 'PATCH', body: { status: s.value } }); await reload(['follow']); }, 'Actualizado.'); }; });
+    $$('[data-notify]').forEach((b) => { b.addEventListener('click', () => { setTimeout(() => act(async () => { await api('follow/alerts/' + b.dataset.notify + '/notified', { method: 'POST', body: {} }); await reload(['follow']); renderSeg(); }, 'Marcada como avisada.'), 300); }); });
+    $$('[data-rq]').forEach((b) => { b.onclick = () => { const x = b.dataset.rq.split(':'); act(async () => { await api('requests/' + x[0] + '/' + x[1], { method: 'POST', body: {} }); await reload(['follow', 'props']); renderSeg(); }, x[1] === 'aplicar' ? 'Aplicada.' : 'Rechazada.'); }; });
     $$('[data-tas]').forEach((s) => { s.onchange = () => act(async () => { await api('follow/tickets/' + s.dataset.tas, { method: 'PATCH', body: { assigned_to: s.value ? Number(s.value) : null } }); await reload(['follow']); }, 'Asignado.'); });
     $$('[data-fromowner]').forEach((b) => { b.onclick = () => {
       const o = F.owners.find((x) => x.id === Number(b.dataset.fromowner)); const z = S.cfg.zones.find((x) => x.name === o.zone);
@@ -503,7 +630,11 @@
       + '<div><label for="c_d">Días para agendar</label><input id="c_d" type="number" min="1" max="30" value="' + esc(st.visit_days) + '"></div>'
       + '<div><label for="c_q">Plazo de respuesta a quejas</label><input id="c_q" value="' + esc(st.complaints_promise) + '" placeholder="Ej. 48 horas hábiles"></div>'
       + '<div><label for="c_n">Razón social</label><input id="c_n" value="' + esc(st.company_legal_name) + '"></div>'
-      + '<div><label for="c_m">Correo que recibe copia de cada lead</label><input id="c_m" type="email" value="' + esc(st.notify_email) + '"></div></div>'
+      + '<div><label for="c_m">Correo que recibe copia de cada lead</label><input id="c_m" type="email" value="' + esc(st.notify_email) + '"></div>'
+      + '<div><label for="c_px">ID del píxel de Meta</label><input id="c_px" inputmode="numeric" value="' + esc(st.meta_pixel_id) + '" placeholder="Solo números"></div>'
+      + '<div><label for="c_cm">Cobro al propietario (meses de renta)</label><input id="c_cm" type="number" step="0.5" min="0" value="' + esc(st.commission_months) + '"></div>'
+      + '<div><label for="c_cp">% de ese cobro para el asesor</label><input id="c_cp" type="number" min="0" max="100" value="' + esc(st.commission_pct) + '"></div></div>'
+      + '<p class="note">Meta: ' + (st.meta_pixel_id ? 'píxel activo en el sitio' : 'sin píxel') + ' · API de Conversiones ' + (S.cfg.capi ? 'activa' : 'apagada (falta META_CAPI_TOKEN en Railway)') + '. El cobro y el % son supuestos para calcular "Mis números"; ajústalos cuando definas el modelo.</p>'
       + '<label for="c_f">Cuánto cuesta (para propietarios)</label><textarea id="c_f" rows="2" placeholder="Vacío = Por definir">' + esc(st.fees_text) + '</textarea>'
       + '<label for="c_l">Póliza jurídica: alcance y precio</label><textarea id="c_l" rows="3" placeholder="Vacío = propuesta Básico/Plus por definir">' + esc(st.legal_text) + '</textarea>'
       + '<p><button class="b" id="csave">Guardar configuración</button></p><p class="note">Avisos por correo: ' + (S.cfg.mail ? 'activos.' : 'apagados (falta RESEND_API_KEY en Railway). Los leads igual llegan aquí.') + '</p></div>'
@@ -521,7 +652,7 @@
     $$('[data-upub]').forEach((c) => { c.onchange = () => upd(Number(c.dataset.upub), { publish_direct: c.checked }, c.checked ? 'Ahora publica sin aprobación.' : 'Ahora deja borrador y el Gerente publica.'); });
     $$('[data-uact]').forEach((b) => { b.onclick = () => { const x = b.dataset.uact.split(':'); if (x[1] === '0' && !confirm('Se cierra su sesión y sus leads abiertos quedan sin asesor para repartirlos. ¿Desactivar?')) return; upd(Number(x[0]), { active: x[1] === '1' }, 'Listo.'); }; });
     $('#csave').onclick = async () => {
-      const r = await act(() => api('settings', { method: 'PATCH', body: { whatsapp: $('#c_wa').value, visit_hours: $('#c_h').value, visit_days: $('#c_d').value, complaints_promise: $('#c_q').value, company_legal_name: $('#c_n').value, notify_email: $('#c_m').value, fees_text: $('#c_f').value, legal_text: $('#c_l').value } }), 'Configuración guardada.');
+      const r = await act(() => api('settings', { method: 'PATCH', body: { whatsapp: $('#c_wa').value, visit_hours: $('#c_h').value, visit_days: $('#c_d').value, complaints_promise: $('#c_q').value, company_legal_name: $('#c_n').value, notify_email: $('#c_m').value, meta_pixel_id: $('#c_px').value, commission_months: $('#c_cm').value, commission_pct: $('#c_cp').value, fees_text: $('#c_f').value, legal_text: $('#c_l').value } }), 'Configuración guardada.');
       if (r) { await reload(['cfg']); renderEquipo(); }
     };
     $$('[data-zone]').forEach((c) => { c.onchange = () => act(async () => { await api('zones/' + c.dataset.zone, { method: 'PATCH', body: { active: c.checked } }); await reload(['cfg']); }, 'Zona actualizada.'); });

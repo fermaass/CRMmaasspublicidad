@@ -12,6 +12,7 @@ const { mailer } = require('./notify');
 const { offsiteConfig, uploadBackup } = require('./offsite');
 const { dailyBackup } = require('./backup');
 const { seedDemo } = require('./demo');
+const { metaCapi } = require('./meta');
 
 function loadConfig(env = process.env) {
   const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID || env.RAILWAY_SERVICE_ID);
@@ -29,6 +30,9 @@ function loadConfig(env = process.env) {
     resendKey: env.RESEND_API_KEY,
     mailFrom: env.MAIL_FROM, // p. ej. "Rentaypunto <avisos@rentaypunto.com>"
     mfaOff: env.MFA_OFF === 'true', // solo para pruebas locales
+    metaToken: env.META_CAPI_TOKEN, // token de la API de Conversiones (Administrador de eventos de Meta)
+    metaApiVersion: env.META_API_VERSION || 'v23.0',
+    metaTestCode: env.META_TEST_EVENT_CODE, // solo para probar en el Administrador de eventos
     version: `${require('../package.json').version}-${Date.now().toString(36)}`,
   };
 }
@@ -40,7 +44,8 @@ function logError(db, place, message) {
   } catch { /* el registro de fallas nunca debe tumbar la app */ }
 }
 
-function createApp({ db, config, mail = mailer(config), photos = photoStore(path.join(config.dataDir, 'fotos'), offsiteConfig()) }) {
+function createApp({ db, config, mail = mailer(config), photos = photoStore(path.join(config.dataDir, 'fotos'), offsiteConfig()), meta = metaCapi(config),
+  actas = photoStore(path.join(config.dataDir, 'actas'), offsiteConfig(), console, 'actas') }) {
   ensureSetupCode(db, config);
   const panelBase = () => (config.panelHost ? `https://${config.panelHost}` : `${config.siteUrl || ''}/panel`);
   const managers = () => db.prepare("SELECT email FROM users WHERE active = 1 AND role IN ('gerente','dueno')").all().map((u) => u.email);
@@ -70,8 +75,8 @@ function createApp({ db, config, mail = mailer(config), photos = photoStore(path
   });
   app.use('/fotos', express.static(photos.dir, { maxAge: '30d', immutable: true, fallthrough: false }));
 
-  const panel = panelRouter({ db, config, photos, onLead });
-  const site = siteRouter({ db, config, notify, onLead });
+  const panel = panelRouter({ db, config, photos, actas, onLead });
+  const site = siteRouter({ db, config, notify, onLead, meta });
   if (config.panelHost) {
     // Cada dirección ve solo su aplicación: el panel no existe en rentaypunto.com y el sitio no existe en el panel.
     app.use((req, res, next) => (req.hostname.toLowerCase() === config.panelHost ? panel(req, res, next) : site(req, res, next)));

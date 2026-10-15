@@ -22,9 +22,12 @@
     store.set('rp_utm', { source: qs.get('utm_source'), medium: qs.get('utm_medium') || '', campaign: qs.get('utm_campaign') || '', content: qs.get('utm_content') || '', at: Date.now() });
   }
   const utm = () => { const u = store.get('rp_utm', null); return u && Date.now() - u.at < 30 * 86400e3 ? u : null; };
+  // Píxel de Meta: solo si el sitio lo tiene configurado.
+  const fbq = function () { if (typeof window.fbq === 'function') { try { window.fbq.apply(null, arguments); } catch (x) { /* el píxel nunca debe romper la página */ } } };
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-wa]');
     if (!a) return;
+    fbq('track', 'Contact');
     try { fetch('/api/wa-click', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ property_id: Number(a.dataset.wa) || null }) }); } catch (x) { /* no importa */ }
   });
 
@@ -63,19 +66,22 @@
     if (!r.ok) throw new Error(out.error || 'No se pudo enviar. Revisa tu internet e intenta de nuevo.');
     return out;
   }
-  const ENDPOINT = { avisame: '/api/avisame', propietario: '/api/propietario', queja: '/api/queja', juridico: '/api/juridico' };
+  const ENDPOINT = { avisame: '/api/avisame', propietario: '/api/propietario', queja: '/api/queja', juridico: '/api/juridico', opinion: '/api/opinion' };
   $$('form[data-form]').forEach((f) => {
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const err = $('[data-err]', f); err.textContent = '';
       const data = Object.fromEntries(new FormData(f).entries());
-      data.privacy = f.privacy && f.privacy.checked;
+      data.privacy = f.privacy ? f.privacy.checked : true;
+      if (f.dataset.form === 'opinion' && (!data.liked || !data.rent_opinion)) { err.textContent = 'Contesta las dos preguntas.'; return; }
       if (data.filters) { try { data.filters = JSON.parse(data.filters); } catch (x) { data.filters = {}; } }
       if (f.phone && !okTel(data.phone)) { err.textContent = 'Escribe tu WhatsApp a 10 dígitos.'; f.phone.focus(); return; }
       if (!data.privacy) { err.textContent = 'Acepta el aviso de privacidad para continuar.'; return; }
       const btn = $('button.b', f); btn.disabled = true;
       try {
         const out = await post(ENDPOINT[f.dataset.form], data);
+        if (f.dataset.form === 'avisame') fbq('track', 'Subscribe');
+        if (f.dataset.form === 'propietario') fbq('track', 'CompleteRegistration');
         const done = f.parentElement.querySelector('[data-done]');
         if (done) { $$('[data-folio]', done).forEach((x) => { x.textContent = out.folio || ''; }); done.hidden = false; f.hidden = true; done.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
       } catch (x) { err.textContent = x.message; } finally { btn.disabled = false; }
@@ -172,6 +178,7 @@
   });
 
   if (P.gone) return;
+  fbq('track', 'ViewContent', { content_ids: [P.code], content_type: 'product', value: P.rent, currency: 'MXN' });
   const bk = { d: '', h: '', name: '', phone: '', ok: false, done: null };
   const waLink = (extra) => (window.RP.wa ? 'https://wa.me/52' + window.RP.wa + '?text=' + encodeURIComponent(P.waText + (extra || '') + (b ? ' Busco para: ' + M.buscaTxt(b) + '.' : '')) : '');
   function keep() { const n = $('#bk_n'); if (n) { bk.name = n.value; bk.phone = $('#bk_w').value; bk.ok = $('#bk_c').checked; } }
@@ -217,6 +224,7 @@
     try {
       const out = await post('/api/visita', { property_id: P.id, date: bk.d, time: bk.h, name: bk.name.trim(), phone: bk.phone, privacy: true, website: $('#bk_hp').value, busca: b ? M.buscaTxt(b) : '', utm: utm() });
       const day = P.slots.find((y) => y.date === bk.d); const s = day && day.slots.find((x) => x.time === bk.h); if (s) s.free = false;
+      fbq('track', 'Lead', { content_ids: [out.code], content_type: 'product', value: out.rent, currency: 'MXN' }, { eventID: out.event_id });
       bk.done = { date: bk.d, time: bk.h, name: bk.name.trim(), folio: out.folio }; renderBook();
       $('#bkbox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (x) {
