@@ -36,6 +36,7 @@ function panelRouter({ db, config, photos, actas, onLead, vlt, wa, seo }) {
   app.use(express.static(path.join(__dirname, '..', 'public', 'panel'), { index: 'index.html', maxAge: 0 }));
   // El panel usa la misma regla de "Ideal para" que el sitio.
   app.get('/match.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'sitio', 'match.js')));
+  app.get('/brand.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'sitio', 'brand.js')));
   app.use(auth.authMiddleware(db));
   // Las fotos llegan en JSON más grande; todo lo demás, hasta 1 MB.
   app.use('/api/properties/:id/photos', express.json({ limit: '12mb' }));

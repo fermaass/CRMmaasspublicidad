@@ -40,7 +40,12 @@
   const opts = (list, cur, fmt) => list.map((x) => { const v = typeof x === 'object' ? x[0] : x; const t = typeof x === 'object' ? x[1] : (fmt ? fmt(x) : x); return '<option value="' + esc(v) + '"' + (String(v) === String(cur == null ? '' : cur) ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
 
   // ---------- Entrar ----------
-  function screen(html) { $('#tabs').innerHTML = ''; $('#who').textContent = ''; $('#app').innerHTML = '<div class="center card">' + html + '</div>'; }
+  // Pantallas de entrada: tarjeta al centro sobre el paisaje de la marca.
+  function screen(html) { $('#tabs').innerHTML = ''; $('#who').textContent = ''; $('#main').innerHTML = '<div class="auth">' + BRAND.hero() + '<div class="center card">' + html + '</div></div>'; }
+  // Íconos y logo de la marca (los mismos del sitio).
+  document.body.insertAdjacentHTML('afterbegin', BRAND.sprite());
+  $('#logo').innerHTML = BRAND.mark(30) + '<span class="word">Renta<b>y</b>punto</span> <span class="tag">Panel</span>';
+  const IC = BRAND.icon;
   async function boot() {
     const qs = new URLSearchParams(location.search);
     if (qs.get('acceso')) return accessScreen(qs.get('acceso'));
@@ -132,15 +137,16 @@
   }
 
   // ---------- Pestañas por perfil ----------
-  const TABS = [['hoy', 'Hoy', 'vgd'], ['leads', 'Leads', 'vgd'], ['citas', 'Citas', 'vgd'], ['props', 'Propiedades', 'vgd'], ['res', 'Resumen', 'gd'], ['rep', 'Reportes', 'gd'], ['seo', 'SEO', 'gd'], ['seg', 'Seguimiento', 'gd'], ['equipo', 'Equipo', 'd']];
+  const TABS = [['hoy', 'Hoy', 'vgd', 'clock'], ['leads', 'Leads', 'vgd', 'users'], ['citas', 'Citas', 'vgd', 'calendar'], ['props', 'Propiedades', 'vgd', 'home'], ['res', 'Resumen', 'gd', 'chart'], ['rep', 'Reportes', 'gd', 'doc'], ['seo', 'SEO', 'gd', 'search'], ['seg', 'Seguimiento', 'gd', 'bell'], ['equipo', 'Equipo', 'd', 'gear']];
   const roleKey = () => ({ vendedor: 'v', gerente: 'g', dueno: 'd' }[S.me.role]);
   function render() {
+    if (!$('#app')) $('#main').innerHTML = '<div id="app" class="w"></div>';
     const mine = TABS.filter((t) => t[2].includes(roleKey()));
     if (!mine.some((t) => t[0] === S.tab)) S.tab = 'hoy';
     const urgent = S.leads.filter((l) => l.stage === 'nuevo' && hoursAgo(l.created_at) >= 24).length;
-    $('#tabs').innerHTML = mine.map((t) => '<button role="tab" data-t="' + t[0] + '" class="' + (S.tab === t[0] ? 'on' : '') + '">' + t[1] + (t[0] === 'hoy' && urgent ? '<span class="cnt">' + urgent + '</span>' : '') + '</button>').join('');
+    $('#tabs').innerHTML = mine.map((t) => '<button role="tab" data-t="' + t[0] + '" class="' + (S.tab === t[0] ? 'on' : '') + '">' + IC(t[3]) + t[1] + (t[0] === 'hoy' && urgent ? '<span class="cnt">' + urgent + '</span>' : '') + '</button>').join('');
     $$('#tabs button').forEach((b) => { b.onclick = () => { S.tab = b.dataset.t; S.lead = null; S.losing = false; render(); scrollTo(0, 0); }; });
-    $('#who').innerHTML = esc(S.me.name) + ' · ' + ROLE[S.me.role] + ' · <a href="#" id="pw">Contraseña</a> · <a href="#" id="out">Salir</a>';
+    $('#who').innerHTML = '<span class="nm">' + esc(S.me.name) + '</span><span class="role">' + ROLE[S.me.role] + '</span><a href="#" id="pw">Contraseña</a><a href="#" id="out">Salir</a>';
     $('#out').onclick = async (e) => { e.preventDefault(); await api('logout', { method: 'POST', body: {} }).catch(() => {}); S.me = null; loginScreen(); };
     $('#pw').onclick = (e) => { e.preventDefault(); S.tab = 'pw'; renderPw(); };
     ({ hoy: renderHoy, leads: renderLeads, citas: renderCitas, props: renderProps, res: renderRes, rep: renderRep, seo: renderSeoTab, seg: renderSeg, equipo: renderEquipo })[S.tab]();

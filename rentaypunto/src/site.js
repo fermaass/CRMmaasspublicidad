@@ -33,6 +33,7 @@ function siteRouter({ db, config, notify, onLead, meta, vlt, onFileReceived }) {
   const ctxOf = (req) => ({
     siteUrl: config.siteUrl || `${req.protocol}://${req.get('host')}`,
     settings: siteSettings(db), today: localNow().date, version: config.version,
+    zones: db.prepare('SELECT name, slug FROM zones WHERE active = 1 ORDER BY name').all(), // para el pie de página
   });
   const visible = () => visibleProps(db).map((p) => ({ ...publicProp(p), zone_id: p.zone_id, photos_all: p.photos }));
   const html = (res, body, status = 200) => res.status(status).type('html').set('Cache-Control', 'no-cache').send(body);

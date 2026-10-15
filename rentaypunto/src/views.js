@@ -1,6 +1,7 @@
 // Páginas del sitio público, armadas en el servidor (así Google lee todo sin depender de JavaScript).
 const { money, jsonLd } = require('./seo');
 const MATCH = require('../public/sitio/match.js');
+const BRAND = require('../public/sitio/brand.js');
 const { EXTRAS } = require('./db');
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9,34 +10,56 @@ const json = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
 const fdate = MATCH.fdate;
 const waHref = (num, text) => `https://wa.me/52${num}?text=${encodeURIComponent(text)}`;
 const photoUrl = (file, small) => `/fotos/${file}${small ? '-sm' : ''}.jpg`;
+const I = BRAND.icon;
 
-function layout({ ctx, title, desc, path, body, og = {}, ld, noindex, active, bodyClass, scripts = [] }) {
+// Estructura común: encabezado, banner opcional a todo lo ancho, contenido y pie.
+function layout({ ctx, title, desc, path, body, hero = '', og = {}, ld, noindex, active, bodyClass, scripts = [] }) {
   const url = `${ctx.siteUrl}${path}`;
-  const nav = [['/', 'Propiedades', 'home'], ['/#como-funciona', 'Cómo funciona', 'how'], ['/renta-tu-propiedad', 'Renta tu propiedad', 'pub'], ['/ayuda', 'Ayuda', 'help']];
+  const nav = [['/', 'Propiedades', 'home'], ['/renta/queretaro', 'Zonas', 'zonas'], ['/#como-funciona', 'Cómo funciona', 'how'], ['/renta-tu-propiedad', 'Renta tu propiedad', 'pub'], ['/ayuda', 'Ayuda', 'help']];
+  const links = nav.map(([h, t, k]) => `<a href="${h}"${active === k ? ' class="on" aria-current="page"' : ''}>${t}</a>`).join('');
+  const wa = ctx.settings.whatsapp;
+  const cta = wa ? `<a class="b sm navcta" target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(wa, 'Hola, quiero rentar una propiedad en Querétaro.'))}">${I('chat')} WhatsApp</a>`
+    : '<a class="b sm navcta" href="/#listado">Ver propiedades</a>';
+  const zones = (ctx.zones || []).slice(0, 8);
   return `<!doctype html>
 <html lang="es-MX"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(desc)}">
 ${noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${esc(url)}">`}
+<meta name="theme-color" content="#0f766e">
 <meta property="og:type" content="website"><meta property="og:site_name" content="Rentaypunto"><meta property="og:locale" content="es_MX">
 <meta property="og:title" content="${esc(og.title || title)}"><meta property="og:description" content="${esc(desc)}"><meta property="og:url" content="${esc(url)}">
 ${og.image ? `<meta property="og:image" content="${esc(og.image)}"><meta name="twitter:card" content="summary_large_image">` : '<meta name="twitter:card" content="summary">'}
 <link rel="icon" href="/sitio/icon.svg" type="image/svg+xml">
+<link rel="preload" href="/sitio/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/sitio/site.css?v=${ctx.version}">
 ${ld ? `<script type="application/ld+json">${json(ld)}</script>` : ''}
 ${pixel(ctx.settings.meta_pixel_id)}
 </head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
-<header><div class="w nav"><a class="logo" href="/">Renta<b>y</b>punto</a>
-<nav>${nav.map(([h, t, k]) => `<a href="${h}"${active === k ? ' class="on" aria-current="page"' : ''}>${t}</a>`).join('')}</nav></div></header>
-<main class="w">${body}</main>
-<footer><a href="/">Propiedades</a> · <a href="/renta-tu-propiedad">Renta tu propiedad</a> · <a href="/ayuda">Ayuda</a> · <a href="/quejas">Quejas y sugerencias</a> · <a href="/aviso-de-privacidad">Aviso de privacidad</a><br>© Rentaypunto · Querétaro, México</footer>
-<script>window.RP=${json({ wa: ctx.settings.whatsapp, today: ctx.today })}</script>
+${BRAND.sprite()}
+<header class="top"><div class="w nav"><a class="logo" href="/" aria-label="Rentaypunto, inicio">${BRAND.logo(34)}</a>
+<nav class="mainnav" aria-label="Principal">${links}</nav>${cta}
+<details class="mmenu"><summary aria-label="Menú">${I('menu')}</summary><nav aria-label="Menú">${links}${wa ? `<a target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(wa, 'Hola, quiero rentar una propiedad en Querétaro.'))}">Escríbenos por WhatsApp</a>` : ''}</nav></details></div></header>
+<main>${hero}<div class="w">${body}</div></main>
+<footer class="foot"><div class="w"><div class="cols">
+<div><span class="logo-in">${BRAND.mark(30)}<span class="word">Renta<b>y</b>punto</span></span><p>Casas y departamentos en renta en Querétaro, con costo de entrada claro y un asesor que te acompaña por WhatsApp.</p></div>
+<div><h3>Rentar</h3><a href="/#listado">Propiedades disponibles</a><a href="/renta/queretaro/departamentos-para-estudiantes">Para estudiantes</a><a href="/renta/queretaro/para-familias">Para familias</a><a href="/renta/queretaro/que-aceptan-mascotas">Aceptan mascotas</a><a href="/renta/queretaro/amueblados">Amueblados</a></div>
+<div><h3>Zonas</h3>${zones.map((z) => `<a href="/renta/${z.slug}">${esc(z.name)}</a>`).join('')}</div>
+<div><h3>Rentaypunto</h3><a href="/renta-tu-propiedad">Renta tu propiedad</a><a href="/certeza-juridica">Póliza jurídica</a><a href="/ayuda">Ayuda</a><a href="/quejas">Quejas y sugerencias</a>${wa ? `<a target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(wa, 'Hola, tengo una pregunta.'))}">WhatsApp</a>` : ''}</div>
+</div><div class="legal"><span>© Rentaypunto · Querétaro, México</span><a href="/aviso-de-privacidad">Aviso de privacidad</a></div></div></footer>
+<script>window.RP=${json({ wa, today: ctx.today })}</script>
 ${scripts.map((s) => `<script>${s}</script>`).join('')}
+<script src="/sitio/brand.js?v=${ctx.version}"></script>
 <script src="/sitio/match.js?v=${ctx.version}"></script>
 <script src="/sitio/site.js?v=${ctx.version}"></script>
 </body></html>`;
 }
+
+// Banner de páginas internas: ruta, título y entrada.
+const pageHero = ({ crumbs: c = [], h1, lead, eyebrow, h1Class = 'zt' }) => `<section class="phero"><div class="w">
+${c.length ? `<nav class="bc" aria-label="Ruta">${c.map(([t, h], i) => (h && i < c.length - 1 ? `<a href="${h}">${esc(t)}</a> ›` : `<span>${esc(t)}</span>`)).join(' ')}</nav>` : ''}
+${eyebrow ? `<span class="eyebrow">${eyebrow}</span>` : ''}<h1 class="${h1Class}">${esc(h1)}</h1>${lead ? `<p class="lead">${esc(lead)}</p>` : ''}</div></section>`;
 
 // Píxel de Meta (código estándar de Meta). Solo si el Dueño configuró el ID en el panel.
 function pixel(id) {
@@ -44,18 +67,23 @@ function pixel(id) {
   return `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${id}');fbq('track','PageView');</script>`;
 }
 
+// Costo de entrada: primer mes + depósito + mantenimiento (si no va incluido).
+const entryOf = (p) => p.rent + Math.round((p.deposit_months || 0) * p.rent) + ((p.includes || []).includes('Mantenimiento') ? 0 : (p.maintenance || 0));
+
+// Tarjeta de propiedad (la misma estructura la arma site.js para el buscador).
 function card(p) {
-  const img = p.photo ? `<img src="${photoUrl(p.photo, true)}" alt="${esc(p.title)} en ${esc(p.zone)}" loading="lazy">` : '';
-  return `<div class="p" data-id="${p.id}"><div class="ph">${img}<span>${esc(p.zone)}</span>${p.status === 'apartada' ? '<span class="tag wa">Apartada</span>' : ''}
-<button class="heart" type="button" data-fav="${p.id}" aria-pressed="false" aria-label="Guardar en favoritos">♡</button></div>
-<div class="pb"><div class="pr">${money(p.rent)}/mes</div><b>${esc(p.title)}</b>
-<div class="ch">${p.m2 ? `<span>📐 ${p.m2} m²</span>` : ''}<span>🛏 ${p.bedrooms || 0}</span><span>🛁 ${p.bathrooms || 0}</span></div>
-<div>${p.extras.map((x) => `<span class="tag">${esc(x)}</span>`).join(' ')}</div>
-<p class="note">Depósito: ${p.deposit_months} mes(es)${p.available_from ? ` · Disponible desde ${fdate(p.available_from)}` : ''}</p>
-<a class="b" href="/${esc(p.slug)}">Ver ficha y agendar</a></div></div>`;
+  const img = p.photo ? `<img src="${photoUrl(p.photo, true)}" alt="${esc(p.title)} en renta en ${esc(p.zone)}, Querétaro" loading="lazy">` : BRAND.noPhoto();
+  return `<article class="pc" data-id="${p.id}"><div class="pc-img">${img}
+<div class="pc-badges"><span class="tag">${I('pin')} ${esc(p.zone)}</span>${p.status === 'apartada' ? '<span class="tag wa">Apartada</span>' : ''}</div>
+<button class="heart" type="button" data-fav="${p.id}" aria-pressed="false" aria-label="Guardar en favoritos">${I('heart')}</button></div>
+<div class="pc-body"><div class="pc-price">${money(p.rent)} <small>/mes</small></div>
+<a class="pc-title" href="/${esc(p.slug)}">${esc(p.title)}</a>
+${p.colonia ? `<div class="pc-loc">${I('pin')} ${esc(p.colonia)}</div>` : ''}
+<div class="specs"><span>${I('bed')} ${p.bedrooms || 0} rec.</span><span>${I('bath')} ${p.bathrooms || 0} baños</span>${p.m2 ? `<span>${I('area')} ${p.m2} m²</span>` : ''}${(p.extras || []).includes('Mascotas') ? `<span>${I('paw')}</span>` : ''}</div>
+<div class="pc-foot"><span>Entrada: <b>${money(entryOf(p))}</b></span><span class="go">Ver ficha ${I('arrow')}</span></div></div></article>`;
 }
 
-const alertForm = (filtersText, filters) => `<div class="card" id="avisame"><h2>¿No encuentras lo que buscas?</h2>
+const alertForm = (filtersText, filters) => `<div class="card" id="avisame"><h2>${I('bell')} ¿No encuentras lo que buscas?</h2>
 <p class="note">Te avisamos por WhatsApp cuando entre algo así: <b>${esc(filtersText)}</b></p>
 <form data-form="avisame" novalidate><input type="hidden" name="filters" value="${esc(json(filters))}">
 <div class="filters"><div><label for="al_n">Nombre (opcional)</label><input id="al_n" name="name" autocomplete="name" maxlength="80"></div>
@@ -89,6 +117,20 @@ function faqBlock(faq, title = 'Preguntas frecuentes') {
 const crumbs = (ctx, items) => ({ '@context': 'https://schema.org', '@type': 'BreadcrumbList',
   itemListElement: items.map(([name, path], i) => ({ '@type': 'ListItem', position: i + 1, name, item: `${ctx.siteUrl}${path}` })) });
 const landingChips = (L) => (L.length ? `<div class="chips">${L.map((l) => `<a class="chip" href="${l.path}">${esc(l.short)} (${l.n})</a>`).join('')}</div>` : '');
+// Ícono y frase de cada búsqueda por intención (tarjetas "¿Para quién buscas?").
+const PERSONA = {
+  'departamentos-para-estudiantes': ['cap', 'Para estudiantes', 'Si vienes a estudiar o buscas para tu hijo'],
+  'para-una-persona-o-pareja': ['user', 'Para una persona o pareja', 'Lo justo para vivir solo o de dos'],
+  'para-familias': ['family', 'Para familias', 'Recámaras, cochera y escuelas cerca'],
+  'que-aceptan-mascotas': ['paw', 'Aceptan mascotas', 'Para que tu perro o gato venga contigo'],
+  amueblados: ['sofa', 'Amueblados', 'Si llegas por trabajo o vienes de otra ciudad'],
+  'con-servicios-incluidos': ['bolt', 'Servicios incluidos', 'Un solo pago al mes, sin recibos'],
+  economicas: ['tag', 'Económicas', 'Hasta $12,000 al mes'],
+};
+const ZONE_GRADS = ['linear-gradient(135deg,#0f766e,#14b8a6)', 'linear-gradient(135deg,#0e4f6e,#0ea5b7)', 'linear-gradient(135deg,#7c4a03,#d97706)', 'linear-gradient(135deg,#155e75,#0891b2)',
+  'linear-gradient(135deg,#3f4d14,#65a30d)', 'linear-gradient(135deg,#7f1d1d,#c2410c)', 'linear-gradient(135deg,#1e3a8a,#2563eb)', 'linear-gradient(135deg,#134e4a,#0d9488)'];
+const zoneArt = '<svg class="zart" viewBox="0 0 150 110" aria-hidden="true"><path fill="currentColor" d="M0 110V70h150v40zM6 70V52a10 10 0 0 1 20 0v18zM32 70V52a10 10 0 0 1 20 0v18zM58 70V52a10 10 0 0 1 20 0v18zM84 70V52a10 10 0 0 1 20 0v18zM110 70V52a10 10 0 0 1 20 0v18zM0 42h150v6H0z"/></svg>';
+
 let HOME_FAQ_HTML = ''; let HOME_FAQ_LD = null;
 const HOME_FAQ = [
   ['¿Cómo agendo una visita?', 'Entra a la ficha de la propiedad, elige día y hora y deja tu nombre y WhatsApp. Tu asesor te confirma por ese medio.'],
@@ -98,31 +140,44 @@ const HOME_FAQ = [
   ['¿Hay rentas que acepten mascotas?', 'Sí: usa el filtro Extras → Mascotas o entra a la sección de rentas que aceptan mascotas.'],
   ['¿Tengo una propiedad, ustedes me la rentan?', 'Sí. Regístrala en "Renta tu propiedad": un asesor te contacta, la publicamos, agendamos las visitas y filtramos a los prospectos.'],
 ];
-
 ({ html: HOME_FAQ_HTML, ld: HOME_FAQ_LD } = faqBlock(HOME_FAQ));
+
+const ownerBand = () => `<section class="cta-band"><svg class="bigic" aria-hidden="true"><use href="#i-key"/></svg><div><span class="eyebrow" style="color:#ffe7b0">Para propietarios</span>
+<h2>¿Tienes una casa o departamento para rentar?</h2><p>La publicamos con ficha propia, agendamos las visitas, filtramos a los prospectos y te mandamos un reporte semanal por WhatsApp.</p></div>
+<a class="b ac lg" href="/renta-tu-propiedad">Registrar mi propiedad ${I('arrow')}</a></section>`;
 
 function home(ctx, { list, all, zones, f, cityLandings = [] }) {
   const sel = (v, cur) => (String(v) === String(cur || '') ? ' selected' : '');
-  const zoneCounts = zones.map((z) => ({ ...z, n: all.filter((p) => p.zone_slug === z.slug).length })).filter((z) => z.n > 0);
+  const zoneCounts = zones.map((z, i) => {
+    const L = all.filter((p) => p.zone_slug === z.slug);
+    return { ...z, n: L.length, min: L.length ? Math.min(...L.map((p) => p.rent)) : 0, grad: ZONE_GRADS[i % ZONE_GRADS.length] };
+  }).filter((z) => z.n > 0);
   const finderData = all.map((p) => ({ ...p, description: undefined, near: undefined, photos_all: undefined }));
-  const body = `<div class="hero2"><h1>Renta en Querétaro y agenda tu visita en minutos</h1>
-<p>Fichas completas, costo de entrada claro y un asesor que te confirma la cita por WhatsApp.</p>
-<div class="cta"><a class="b" href="#finder">Encuentra tu renta</a><a class="b s" href="#listado">Ver todas las propiedades</a>${ctx.settings.whatsapp ? `<a class="b s" target="_blank" rel="noopener" data-wa="0" href="${esc(waHref(ctx.settings.whatsapp, 'Hola, quiero rentar una propiedad en Querétaro.'))}">Escríbenos por WhatsApp</a>` : ''}</div>
-<ul class="trust"><li>Un asesor asignado a cada propiedad</li><li>Costo de entrada calculado en cada ficha</li><li>Póliza jurídica disponible</li></ul></div>
+  const personas = cityLandings.filter((l) => PERSONA[l.key]);
+  const filtered = Object.values(f).some(Boolean);
+  const hero = `<section class="hero">${BRAND.hero()}<div class="w hero-in"><div>
+<span class="eyebrow">${I('pin')} Querétaro</span>
+<h1>Tu próxima renta en Querétaro, <em>sin sorpresas</em></h1>
+<p class="lead">Casas y departamentos con ficha completa, el costo de entrada calculado y visita agendada en minutos. Un asesor te confirma por WhatsApp.</p>
+<ul class="trust"><li>${I('tag')} Costo de entrada claro</li><li>${I('chat')} Asesor por WhatsApp</li><li>${I('shield')} Póliza jurídica opcional</li></ul></div>
+<form class="qs" method="get" action="/#listado" role="search"><h2>${I('search')} Busca tu renta</h2>
+<label for="qs_z">Zona</label><select id="qs_z" name="zona"><option value="">Todo Querétaro</option>${zones.map((z) => `<option value="${z.slug}"${sel(z.slug, f.zona)}>${esc(z.name)}</option>`).join('')}</select>
+<div class="row2"><div><label for="qs_m">Renta máxima</label><select id="qs_m" name="max"><option value="">Sin límite</option>${[8000, 10000, 12000, 15000, 20000, 25000, 35000].map((n) => `<option value="${n}"${sel(n, f.max)}>${money(n)}</option>`).join('')}</select></div>
+<div><label for="qs_r">Recámaras</label><select id="qs_r" name="rec"><option value="">Cualquiera</option>${[1, 2, 3, 4].map((n) => `<option value="${n}"${sel(n, f.rec)}>${n}+</option>`).join('')}</select></div></div>
+<button class="b full lg">${I('search')} Ver propiedades</button>
+<p class="note" style="margin:10px 0 0;text-align:center">o <a href="#finder">responde 4 preguntas</a> y te decimos cuáles te quedan</p></form></div></section>`;
+  const body = `<div class="features">
+<div class="feat"><span class="ib">${I('tag')}</span><div><b>Sabes cuánto necesitas</b><span>Primer mes, depósito y mantenimiento sumados en cada ficha.</span></div></div>
+<div class="feat"><span class="ib">${I('calendar')}</span><div><b>Agenda en minutos</b><span>Elige día y hora; tu asesor confirma por WhatsApp.</span></div></div>
+<div class="feat"><span class="ib">${I('lock')}</span><div><b>Tus documentos, protegidos</b><span>Tu expediente se guarda cifrado y solo lo ve quien lo revisa.</span></div></div>
+<div class="feat"><span class="ib">${I('shield')}</span><div><b>Contrato con respaldo</b><span>Contrato de arrendamiento y póliza jurídica si la eliges.</span></div></div></div>
 
-<div class="card" id="finder"><h2 class="h2" style="margin-top:0">Encuentra tu renta</h2>
-<p class="note">Responde unas preguntas y te mostramos las 3 propiedades que mejor te quedan, con el porqué de cada una.</p>
-<label>¿Quién va a vivir?</label><div class="chips" id="q_perfil">${[['Una persona o pareja', 2], ['Familia pequeña', 4], ['Familia grande', 6], ['Estudiante o joven', 1]].map(([v, n]) => `<button type="button" class="chip" data-v="${v}" data-n="${n}" aria-pressed="false">${v}</button>`).join('')}</div>
-<p class="note">"Estudiante o joven" incluye a quien viene de otro estado.</p>
-<div class="filters"><div><label for="q_pers">Cuántas personas</label><input id="q_pers" type="number" min="1" inputmode="numeric"></div>
-<div><label for="q_presu">Renta máxima al mes (MXN)</label><input id="q_presu" type="number" inputmode="numeric"></div>
-<div><label for="q_cuando">¿Para cuándo?</label><select id="q_cuando"><option value="">Solo estoy viendo</option><option value="mes">Este mes</option><option value="dos">En 1 a 2 meses</option></select></div></div>
-<label>Qué es lo más importante (hasta 3)</label><div class="chips" id="q_prior">${['Seguridad', 'Cochera', 'Mascotas', 'Amueblado', 'Servicios incluidos', 'Espacio'].map((v) => `<button type="button" class="chip" data-v="${v}" aria-pressed="false">${v}</button>`).join('')}</div>
-<p><button type="button" class="b" id="q_go">Ver mis mejores opciones</button> <button type="button" class="b s" id="q_clear">Borrar</button></p><div id="finderout"></div></div>
+${personas.length ? `<section class="sec"><span class="eyebrow">Para quién buscas</span><h2>Encuentra rentas pensadas para ti</h2><p class="sub">Elige tu situación y te mostramos lo que hoy hay disponible.</p>
+<div class="personas">${personas.map((l) => { const [ic, t, d] = PERSONA[l.key]; return `<a class="persona" href="${l.path}"><span class="ib">${I(ic)}</span><b>${t}</b><span>${d}</span><small>${l.n} disponible(s) →</small></a>`; }).join('')}</div></section>` : ''}
 
-<div id="listado"><h2 class="h2">Propiedades disponibles</h2>
-${zoneCounts.length ? `<div class="chips" aria-label="Explora por zona">${zoneCounts.map((z) => `<a class="chip" href="/renta/${z.slug}">${esc(z.name)} (${z.n})</a>`).join('')}</div>` : ''}
-<form class="card" method="get" action="/#listado" id="filtros"><div class="filters">
+<section class="sec" id="listado"><span class="eyebrow">Disponibles hoy</span><h2>${filtered ? 'Resultados de tu búsqueda' : 'Propiedades en renta'}</h2>
+<details class="card filtercard"${filtered ? ' open' : ''}><summary>${I('search')} Más filtros${filtered ? ` · <span class="note">${esc(filtersText(f, zones))}</span>` : ''}</summary>
+<form method="get" action="/#listado" id="filtros"><div class="filters" style="margin-top:12px">
 <div><label for="fz">Zona</label><select id="fz" name="zona"><option value="">Todas</option>${zones.map((z) => `<option value="${z.slug}"${sel(z.slug, f.zona)}>${esc(z.name)}</option>`).join('')}</select></div>
 <div><label for="fmin">Precio mín. (MXN)</label><input id="fmin" name="min" type="number" inputmode="numeric" placeholder="0" value="${esc(f.min || '')}"></div>
 <div><label for="fmax">Precio máx. (MXN)</label><input id="fmax" name="max" type="number" inputmode="numeric" placeholder="Sin límite" value="${esc(f.max || '')}"></div>
@@ -130,29 +185,43 @@ ${zoneCounts.length ? `<div class="chips" aria-label="Explora por zona">${zoneCo
 <div><label for="fb">Baños (mín.)</label><select id="fb" name="ban"><option value="">Cualquiera</option>${[1, 2, 3].map((n) => `<option${sel(n, f.ban)}>${n}</option>`).join('')}</select></div>
 <div><label for="fm">m² (mín.)</label><input id="fm" name="m2" type="number" inputmode="numeric" placeholder="0" value="${esc(f.m2 || '')}"></div>
 <div><label for="fe">Extras</label><select id="fe" name="extra"><option value="">Todos</option>${EXTRAS.map((e) => `<option${sel(e, f.extra)}>${e}</option>`).join('')}</select></div>
-<div><label for="fo">Ordenar por</label><select id="fo" name="orden"><option value="">Más recientes</option><option value="precio"${sel('precio', f.orden)}>Precio: menor a mayor</option><option value="-precio"${sel('-precio', f.orden)}>Precio: mayor a menor</option></select></div>
-<div><label class="chk"><input id="ffav" type="checkbox"> Solo mis favoritos</label><p><button class="b sm">Aplicar</button> <a class="b s sm" href="/#listado">Limpiar</a></p></div></div></form>
-<p class="note" id="cnt">${list.length} propiedad(es) encontrada(s)</p>
-<div class="grid" id="track">${list.map(card).join('') || `<div class="card empty"><b>No hay propiedades con esos filtros.</b><p class="note">Prueba quitar algún filtro o deja tu WhatsApp abajo y te avisamos cuando entre una parecida.</p><a class="b s" href="/#listado">Limpiar filtros</a> <a class="b" href="#avisame">Avísame</a></div>`}</div></div>
+<div><label for="fo">Ordenar por</label><select id="fo" name="orden"><option value="">Más recientes</option><option value="precio"${sel('precio', f.orden)}>Precio: menor a mayor</option><option value="-precio"${sel('-precio', f.orden)}>Precio: mayor a menor</option></select></div></div>
+<p style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 0"><button class="b">Aplicar filtros</button> <a class="b s" href="/#listado">Limpiar</a></p></form></details>
+<div class="listbar"><span class="note" id="cnt">${list.length} propiedad(es) encontrada(s)</span><label class="chk" style="margin:0"><input id="ffav" type="checkbox"> ${I('heart')} Solo mis favoritos</label></div>
+<div class="grid" id="track">${list.map(card).join('') || `<div class="card empty"><b>No hay propiedades con esos filtros.</b><p class="note">Prueba quitar algún filtro o deja tu WhatsApp abajo y te avisamos cuando entre una parecida.</p><a class="b s" href="/#listado">Limpiar filtros</a> <a class="b" href="#avisame">Avísame</a></div>`}</div></section>
+
+${zoneCounts.length ? `<section class="sec"><span class="eyebrow">Explora por zona</span><h2>Rentas en las mejores zonas de Querétaro</h2>
+<div class="zones">${zoneCounts.map((z) => `<a class="zone" style="--zg:${z.grad}" href="/renta/${z.slug}">${zoneArt}<b>${esc(z.name)}</b><span>${z.n} disponible(s) · desde ${money(z.min)}</span></a>`).join('')}</div></section>` : ''}
+
+<section class="sec card" id="finder"><span class="eyebrow">${I('star')} Encuentra tu renta</span><h2 style="margin:6px 0">Te decimos cuáles te quedan mejor</h2>
+<p class="note">Responde unas preguntas y te mostramos las 3 propiedades que mejor te quedan, con el porqué de cada una.</p>
+<label>¿Quién va a vivir?</label><div class="chips" id="q_perfil">${[['Una persona o pareja', 2], ['Familia pequeña', 4], ['Familia grande', 6], ['Estudiante o joven', 1]].map(([v, n]) => `<button type="button" class="chip" data-v="${v}" data-n="${n}" aria-pressed="false">${v}</button>`).join('')}</div>
+<p class="note">"Estudiante o joven" incluye a quien viene de otro estado.</p>
+<div class="filters"><div><label for="q_pers">Cuántas personas</label><input id="q_pers" type="number" min="1" inputmode="numeric"></div>
+<div><label for="q_presu">Renta máxima al mes (MXN)</label><input id="q_presu" type="number" inputmode="numeric"></div>
+<div><label for="q_cuando">¿Para cuándo?</label><select id="q_cuando"><option value="">Solo estoy viendo</option><option value="mes">Este mes</option><option value="dos">En 1 a 2 meses</option></select></div></div>
+<label>Qué es lo más importante (hasta 3)</label><div class="chips" id="q_prior">${['Seguridad', 'Cochera', 'Mascotas', 'Amueblado', 'Servicios incluidos', 'Espacio'].map((v) => `<button type="button" class="chip" data-v="${v}" aria-pressed="false">${v}</button>`).join('')}</div>
+<p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px"><button type="button" class="b" id="q_go">Ver mis mejores opciones</button> <button type="button" class="b s" id="q_clear">Borrar</button></p><div id="finderout"></div></section>
+
 ${alertForm(filtersText(f, zones), f)}
-${cityLandings.length ? `<h2 class="h2">Busca según quién va a vivir y lo que necesitas</h2>${landingChips(cityLandings)}` : ''}
-<div id="como-funciona"><h2 class="h2">Cómo funciona</h2><ol class="steps">
-<li><b>Elige</b><span class="note">Filtra por zona, precio y lo que necesitas, y revisa la ficha completa.</span></li>
-<li><b>Agenda</b><span class="note">Escoge día y hora. Tu asesor confirma por WhatsApp.</span></li>
-<li><b>Arma tu expediente</b><span class="note">INE, constancia fiscal y comprobante de ingresos.</span></li>
-<li><b>Firma y múdate</b><span class="note">Contrato de arrendamiento, con póliza jurídica si la eliges.</span></li></ol></div>
-${HOME_FAQ_HTML}
-<div class="banner"><span>¿Tienes una propiedad para rentar?</span><a class="b s sm" href="/renta-tu-propiedad">Regístrala con nosotros</a></div>`;
+${cityLandings.length ? `<section class="sec"><h2>Busca según lo que necesitas</h2>${landingChips(cityLandings)}</section>` : ''}
+<section class="sec" id="como-funciona"><span class="eyebrow">Cómo funciona</span><h2>De la búsqueda a las llaves, en 4 pasos</h2><ol class="steps" style="margin-top:16px">
+<li><span class="ib">${I('search')}</span><b>Elige</b><span>Filtra por zona, precio y lo que necesitas, y revisa la ficha completa.</span></li>
+<li><span class="ib">${I('calendar')}</span><b>Agenda</b><span>Escoge día y hora. Tu asesor confirma por WhatsApp.</span></li>
+<li><span class="ib">${I('doc')}</span><b>Arma tu expediente</b><span>INE, constancia fiscal y comprobante de ingresos, desde tu celular.</span></li>
+<li><span class="ib">${I('key')}</span><b>Firma y múdate</b><span>Contrato de arrendamiento, con póliza jurídica si la eliges.</span></li></ol></section>
+<section class="sec">${HOME_FAQ_HTML}</section>
+${ownerBand()}`;
   const st = ctx.settings;
   const org = { '@context': 'https://schema.org', '@type': 'RealEstateAgent', name: 'Rentaypunto', url: `${ctx.siteUrl}/`, logo: `${ctx.siteUrl}/sitio/icon.svg`,
     areaServed: { '@type': 'City', name: 'Querétaro' }, address: { '@type': 'PostalAddress', addressLocality: 'Querétaro', addressRegion: 'Querétaro', addressCountry: 'MX' },
     ...(st.whatsapp ? { telephone: `+52${st.whatsapp}` } : {}), ...(st.social_links && st.social_links.length ? { sameAs: st.social_links } : {}) };
   return layout({
-    ctx, path: '/', active: 'home', body,
+    ctx, path: '/', active: 'home', body, hero,
     title: 'Casas y departamentos en renta en Querétaro | Rentaypunto',
     desc: 'Casas y departamentos en renta en Querétaro para estudiantes, familias, con mascotas o amueblados. Costo de entrada claro y visita agendada en minutos.',
     ld: [org, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'Rentaypunto', url: `${ctx.siteUrl}/` }, HOME_FAQ_LD],
-    noindex: Object.values(f).some(Boolean), // los listados filtrados no se indexan (evita páginas duplicadas)
+    noindex: filtered, // los listados filtrados no se indexan (evita páginas duplicadas)
     scripts: [`window.FINDER=${json(finderData)}`],
   });
 }
@@ -166,19 +235,19 @@ function zonePage(ctx, { zone, list, zones, landings = [] }) {
     : `Por ahora no hay propiedades disponibles en ${place}. Déjanos tu WhatsApp y te avisamos cuando entre una.`;
   const faq = faqBlock(city ? [] : [
     [`¿Cuánto cuesta rentar en ${zone.name}?`, list.length ? `Hoy, las rentas publicadas en ${zone.name} van de ${money(Math.min(...pr))} a ${money(Math.max(...pr))} al mes. A eso se suma el depósito y, si aplica, el mantenimiento: cada ficha lo calcula.` : `Por ahora no tenemos propiedades publicadas en ${zone.name}; deja tu WhatsApp y te avisamos.`],
-    [`¿Hay rentas para estudiantes o con mascotas en ${zone.name}?`, 'Revisa las secciones de abajo: solo aparecen las que hoy tienen propiedades disponibles.'],
+    [`¿Hay rentas para estudiantes o con mascotas en ${zone.name}?`, 'Revisa las secciones de arriba: solo aparecen las que hoy tienen propiedades disponibles.'],
   ], `Preguntas sobre rentar en ${zone.name}`);
-  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <span>${esc(city ? 'Querétaro' : zone.name)}</span></nav>
-<h1 class="zt">Casas y departamentos en renta en ${esc(place)}</h1><p class="lead">${esc(intro)}</p>
-${zone.intro ? `<div class="card"><p>${esc(zone.intro).replace(/\n/g, '<br>')}</p>${zone.near ? `<p class="note"><b>Cerca:</b> ${esc(zone.near)}</p>` : ''}</div>` : ''}
-${landings.length ? `<h2 class="h2">Busca en ${esc(city ? 'Querétaro' : zone.name)} según lo que necesitas</h2>${landingChips(landings)}` : ''}
-<div class="grid" style="margin-top:14px">${list.map(card).join('')}</div>
+  const hero = pageHero({ crumbs: [['Propiedades', '/'], [city ? 'Querétaro' : zone.name]], eyebrow: `${I('pin')} ${esc(city ? 'Todas las zonas' : zone.name)}`, h1: `Casas y departamentos en renta en ${place}`, lead: intro });
+  const body = `${zone.intro ? `<div class="card"><p style="margin:0">${esc(zone.intro).replace(/\n/g, '<br>')}</p>${zone.near ? `<p class="note" style="margin:10px 0 0">${I('pin')} <b>Cerca:</b> ${esc(zone.near)}</p>` : ''}</div>` : ''}
+${landings.length ? `<section class="sec" style="margin-top:24px"><h2>Busca en ${esc(city ? 'Querétaro' : zone.name)} según lo que necesitas</h2>${landingChips(landings)}</section>` : ''}
+<div class="grid" style="margin-top:24px">${list.map(card).join('')}</div>
 ${list.length ? '' : alertForm(zone.name, { zona: city ? '' : zone.slug })}
-${faq.html}
-<h2 class="h2">${city ? 'Rentas por zona' : 'Otras zonas'}</h2><div class="chips">${zones.filter((z) => z.id !== zone.id).map((z) => `<a class="chip" href="/renta/${z.slug}">${esc(z.name)}</a>`).join('')}</div>`;
+<section class="sec">${faq.html}</section>
+<section class="sec"><h2>${city ? 'Rentas por zona' : 'Otras zonas'}</h2><div class="chips">${zones.filter((z) => z.id !== zone.id).map((z) => `<a class="chip" href="/renta/${z.slug}">${I('pin')} ${esc(z.name)}</a>`).join('')}</div></section>
+${ownerBand()}`;
   const t = `Casas y departamentos en renta en ${city ? 'Querétaro' : zone.name}`;
   return layout({
-    ctx, path: `/renta/${zone.slug}`, active: 'home', body,
+    ctx, path: `/renta/${zone.slug}`, active: 'zonas', body, hero,
     title: `${t}${t.length <= 46 ? ' | Rentaypunto' : ''}`.slice(0, 60),
     desc: intro.slice(0, 155),
     noindex: !list.length,
@@ -190,15 +259,15 @@ ${faq.html}
 function landingPage(ctx, { lg, related, sameInZones }) {
   const city = lg.zone.slug === 'queretaro';
   const faq = faqBlock(lg.faq);
-  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <a href="/renta/${lg.zone.slug}">${esc(city ? 'Querétaro' : lg.zone.name)}</a> › <span>${esc(lg.short)}</span></nav>
-<h1 class="zt">${esc(lg.h1)}</h1><p class="lead">${esc(lg.intro)}</p>
-<div class="grid" style="margin-top:14px">${lg.list.map(card).join('')}</div>
+  const pz = PERSONA[lg.key];
+  const hero = pageHero({ crumbs: [['Propiedades', '/'], [city ? 'Querétaro' : lg.zone.name, `/renta/${lg.zone.slug}`], [lg.short]], eyebrow: `${I(pz ? pz[0] : 'search')} ${esc(lg.short)}`, h1: lg.h1, lead: lg.intro });
+  const body = `<div class="grid" style="margin-top:24px">${lg.list.map(card).join('')}</div>
 ${lg.n < 3 ? alertForm(`${lg.short} en ${city ? 'Querétaro' : lg.zone.name}`, { zona: city ? '' : lg.zone.slug }) : ''}
-${faq.html}
-${related.length ? `<h2 class="h2">También te puede servir</h2>${landingChips(related)}` : ''}
-${sameInZones.length ? `<h2 class="h2">${esc(lg.short)} en otras zonas</h2>${landingChips(sameInZones.map((x) => ({ ...x, short: x.zone.name })))}` : ''}`;
+<section class="sec">${faq.html}</section>
+${related.length ? `<section class="sec"><h2>También te puede servir</h2>${landingChips(related)}</section>` : ''}
+${sameInZones.length ? `<section class="sec"><h2>${esc(lg.short)} en otras zonas</h2>${landingChips(sameInZones.map((x) => ({ ...x, short: x.zone.name })))}</section>` : ''}`;
   return layout({
-    ctx, path: lg.path, active: 'home', body, title: lg.title, desc: lg.intro.slice(0, 152).replace(/\s+\S*$/, '') + '…',
+    ctx, path: lg.path, active: 'zonas', body, hero, title: lg.title, desc: lg.intro.slice(0, 152).replace(/\s+\S*$/, '') + '…',
     noindex: !lg.indexable,
     ld: [crumbs(ctx, [['Propiedades', '/'], [city ? 'Querétaro' : lg.zone.name, `/renta/${lg.zone.slug}`], [lg.short, lg.path]]), faq.ld,
       { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: lg.list.map((p, i) => ({ '@type': 'ListItem', position: i + 1, url: `${ctx.siteUrl}/${p.slug}` })) }].filter(Boolean),
@@ -216,9 +285,11 @@ function ficha(ctx, { p, sim, slots, op, idealLinks = {}, zoneLandings = [] }) {
   const idl = MATCH.ideal(p); const cons = MATCH.considera(p); const pk = MATCH.parkOf(p);
   const url = `${ctx.siteUrl}/${p.slug}`;
   const photos = p.photos.map((x) => photoUrl(x.file));
+  const shown = photos.slice(0, 5);
   const imgs = photos.length
-    ? `<div class="gal">${photos.slice(0, 5).map((src, i) => `<img src="${src}" alt="${esc(p.title)} en ${esc(p.zone)}, Querétaro - foto ${i + 1}" data-lb="${i}" tabindex="0"${i ? ' loading="lazy"' : ' fetchpriority="high"'}>`).join('')}</div>${photos.length > 5 ? `<p class="note"><button type="button" class="b s sm" data-lb="0">Ver las ${photos.length} fotos</button></p>` : ''}`
-    : '<div class="ph big">Fotos próximamente</div>';
+    ? `<div class="gal n${Math.min(shown.length, 3) === 3 ? '' : shown.length}">${shown.map((src, i) => `<img src="${src}" alt="${esc(p.title)} en ${esc(p.zone)}, Querétaro - foto ${i + 1}" data-lb="${i}" tabindex="0"${i ? ' loading="lazy"' : ' fetchpriority="high"'}>`).join('')}
+${photos.length > 1 ? `<button type="button" class="b s sm more" data-lb="0">${I('camera')} Ver ${photos.length} fotos</button>` : ''}</div>`
+    : `<div class="gal-empty">${BRAND.noPhoto()}</div>`;
   const share = `https://wa.me/?text=${encodeURIComponent(`Mira esta renta: ${p.title} en ${p.zone}, ${money(p.rent)}/mes. ${url}`)}`;
   const map = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.colonia || ''} ${p.zone} Querétaro`)}`;
   const waText = `Hola, me interesa ${p.title} (${p.code}) en ${p.zone}, ${money(p.rent)}/mes. Ficha: ${url}`;
@@ -231,29 +302,29 @@ function ficha(ctx, { p, sim, slots, op, idealLinks = {}, zoneLandings = [] }) {
     ...(p.min_term ? [['¿Cuál es el plazo mínimo del contrato?', `${p.min_term} meses.`]] : []),
     ...(p.requirements ? [['¿Qué piden para rentarla?', `${p.requirements}, además de INE, Constancia de Situación Fiscal y comprobante de ingresos.`]] : []),
   ], 'Preguntas sobre esta propiedad');
-  const body = `<nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <a href="/renta/${p.zone_slug}">${esc(p.zone)}</a> › <span>${esc(p.title)}</span></nav>
-<div class="fgrid"><div>${imgs}
-<h1 class="zt">${esc(p.h1)}</h1><div class="pr">${money(p.rent)}/mes</div>
-<div class="ch">${p.m2 ? `<span>📐 ${p.m2} m²</span>` : ''}<span>🛏 ${p.bedrooms || 0} rec.</span><span>🛁 ${p.bathrooms || 0} baños</span></div>
-<div>${p.extras.map((x) => `<span class="tag">${esc(x)}</span>`).join(' ')}${p.status === 'apartada' ? ' <span class="tag wa">Apartada</span>' : ''}</div>
-${idl.length ? `<p><b>Ideal para:</b> ${idl.map((x) => (idealLinks[x] ? `<a class="tag ok" href="${idealLinks[x]}">${esc(x)}</a>` : `<span class="tag ok">${esc(x)}</span>`)).join(' ')} <span class="note">Sugerido según sus características</span></p>` : ''}
+  const ks = [['bed', p.bedrooms || 0, 'Recámaras'], ['bath', p.bathrooms || 0, 'Baños'], ...(p.m2 ? [['area', `${p.m2} m²`, 'Construcción']] : []),
+    ['car', pk || '—', 'Cochera'], ['paw', p.extras.includes('Mascotas') ? 'Sí' : 'No indicado', 'Mascotas'], ...(p.extras.includes('Amueblado') ? [['sofa', 'Sí', 'Amueblado']] : [])];
+  const body = `<div style="margin-top:16px"><nav class="bc" aria-label="Ruta"><a href="/">Propiedades</a> › <a href="/renta/${p.zone_slug}">${esc(p.zone)}</a> › <span>${esc(p.title)}</span></nav></div>
+<div style="margin-top:12px">${imgs}</div>
+<div class="fgrid"><div class="ftitle">
+<div class="chips" style="gap:6px">${p.status === 'apartada' ? '<span class="tag wa">Apartada</span>' : ''}<span class="tag">${I('pin')} ${esc(p.colonia || p.zone)}</span><span class="tag">${esc(p.code)}</span></div>
+<h1 class="zt">${esc(p.h1)}</h1>
+${idl.length ? `<p style="margin:6px 0"><b>Ideal para:</b> ${idl.map((x) => (idealLinks[x] ? `<a class="tag ok" href="${idealLinks[x]}">${esc(x)}</a>` : `<span class="tag ok">${esc(x)}</span>`)).join(' ')} <span class="note">Sugerido según sus características</span></p>` : ''}
+<div class="keyspecs">${ks.map(([ic, v, l]) => `<div>${I(ic)}<b>${esc(v)}</b><span>${l}</span></div>`).join('')}</div>
 <div class="acts"><button type="button" class="b s sm" data-fav="${p.id}" aria-pressed="false">♡ Guardar</button>
-<a class="b s sm" target="_blank" rel="noopener" href="${esc(share)}">Compartir por WhatsApp</a>
-<a class="b s sm" target="_blank" rel="noopener" href="${esc(map)}">Ver zona en el mapa</a></div>
-${p.description ? `<p>${esc(p.description).replace(/\n/g, '<br>')}</p>` : ''}
+<a class="b s sm" target="_blank" rel="noopener" href="${esc(share)}">${I('share')} Compartir por WhatsApp</a>
+<a class="b s sm" target="_blank" rel="noopener" href="${esc(map)}">${I('map')} Ver zona en el mapa</a></div>
+${p.description ? `<div class="card"><h2>Descripción</h2><p style="margin:0">${esc(p.description).replace(/\n/g, '<br>')}</p></div>` : ''}
 <div class="card" id="parati" hidden></div>
-${op && op.n >= 3 ? `<div class="card"><h2>Opiniones de quienes la visitaron</h2><p>A <b>${op.liked} de ${op.n}</b> personas que la visitaron les gustó.</p><p class="note">Opiniones anónimas que recibimos después de cada visita.</p></div>` : ''}
+${op && op.n >= 3 ? `<div class="card"><h2>${I('star')} Opiniones de quienes la visitaron</h2><p>A <b>${op.liked} de ${op.n}</b> personas que la visitaron les gustó.</p><p class="note">Opiniones anónimas que recibimos después de cada visita.</p></div>` : ''}
 <div class="card"><h2>Qué incluye</h2><div class="svc">${['Agua', 'Luz', 'Gas', 'Internet', 'Mantenimiento'].map((k) => `<div><b>${k}</b><br>${inc.includes(k) ? '<span class="cok">✓ Incluido</span>' : '<span class="note">Por tu cuenta</span>'}</div>`).join('')}</div>
 <div class="fi"><span>Plazo mínimo del contrato</span><b>${p.min_term ? `${p.min_term} meses` : '—'}</b></div>
 <div class="fi"><span>Ocupantes máximos</span><b>${p.max_occupants || '—'}</b></div>
-<div class="fi"><span>Cochera</span><b>${pk ? `${pk} lugar(es)` : 'No indicada'}</b></div>
-<div class="fi"><span>Mascotas</span><b>${p.extras.includes('Mascotas') ? 'Se indican como permitidas' : 'No indicado'}</b></div>
-${p.near ? `<div class="fi"><span>Cerca de</span><b>${esc(p.near)}</b></div>` : ''}
-${cons.length ? `<h4>Considera</h4><ul class="why">${cons.map((c) => `<li class="c">${esc(c)}</li>`).join('')}</ul>` : ''}</div>
-<div class="card"><div class="fi"><span>Código</span><b>${esc(p.code)}</b></div>${p.advisor ? `<div class="fi"><span>Asesor</span><b>${esc(p.advisor)}</b></div>` : ''}
-<div class="fi"><span>Ubicación</span><b>${esc(p.colonia || p.zone)}</b></div><div class="fi"><span>Disponible desde</span><b>${p.available_from ? fdate(p.available_from) : 'Ya'}</b></div>
+<div class="fi"><span>Disponible desde</span><b>${p.available_from ? fdate(p.available_from) : 'Ya'}</b></div>
 ${p.requirements ? `<div class="fi"><span>Requisitos</span><b>${esc(p.requirements)}</b></div>` : ''}
-<p class="note">La dirección exacta se comparte cuando tu cita está confirmada.</p></div>
+${p.near ? `<div class="fi"><span>Cerca de</span><b>${esc(p.near)}</b></div>` : ''}
+${cons.length ? `<h4>Considera</h4><ul class="why">${cons.map((c) => `<li class="c">${esc(c)}</li>`).join('')}</ul>` : ''}
+<p class="note">${I('lock')} La dirección exacta se comparte cuando tu cita está confirmada.</p></div>
 <div class="card"><h2>Cuánto necesitas</h2><h4>Para entrar</h4>
 <div class="fi"><span>Renta del primer mes</span><b>${money(p.rent)}</b></div>
 <div class="fi"><span>Depósito (${p.deposit_months} mes(es))</span><b>${money(deposit)}</b></div>
@@ -262,10 +333,13 @@ ${p.requirements ? `<div class="fi"><span>Requisitos</span><b>${esc(p.requiremen
 <h4>Cada mes</h4><div class="fi tot"><span>Pago mensual fijo</span><b>${money(monthly)}</b></div>
 <p class="note">${apart.length ? `Aparte, según tu consumo: ${apart.join(', ').toLowerCase()}.` : 'Agua, luz, gas e internet incluidos.'} La póliza jurídica y otros costos se definen con tu asesor.</p></div>
 ${pfaq.html}
-${sim.length ? `<h2 class="h2">Propiedades similares</h2><div class="grid">${sim.map(card).join('')}</div>` : ''}
-${zoneLandings.length ? `<h2 class="h2">Más rentas en ${esc(p.zone)}</h2>${landingChips(zoneLandings)}` : ''}
-</div><div class="card stick" id="bkbox">${gone ? '<h2>Esta propiedad ya no está disponible</h2><p class="note">Revisa las similares o vuelve al listado.</p><a class="b" href="/">Ver propiedades</a>' : '<p class="note">Cargando horarios…</p>'}</div></div>
-${gone ? '' : `<div class="sbar"><a class="b" href="#bkbox">Agendar visita</a>${ctx.settings.whatsapp ? `<a class="b s" target="_blank" rel="noopener" data-wa="${p.id}" href="${esc(waHref(ctx.settings.whatsapp, waText))}">WhatsApp</a>` : ''}</div>`}`;
+</div><aside class="stick"><div class="card pricebox"><div class="big">${money(p.rent)} <small>/mes</small></div>
+<div class="entry"><span>Para entrar</span><b>${money(entry)}</b></div>
+${p.advisor ? `<p class="note" style="margin:0 0 6px">${I('user')} Te atiende <b>${esc(p.advisor)}</b>, asesor de Rentaypunto</p>` : ''}
+<div id="bkbox">${gone ? '<h2>Esta propiedad ya no está disponible</h2><p class="note">Revisa las similares o vuelve al listado.</p><a class="b full" href="/">Ver propiedades</a>' : '<p class="note">Cargando horarios…</p>'}</div></div></aside></div>
+${sim.length ? `<section class="sec"><h2>Propiedades similares</h2><div class="grid" style="margin-top:14px">${sim.map(card).join('')}</div></section>` : ''}
+${zoneLandings.length ? `<section class="sec"><h2>Más rentas en ${esc(p.zone)}</h2>${landingChips(zoneLandings)}</section>` : ''}
+${gone ? '' : `<div class="sbar"><a class="b" href="#bkbox">${I('calendar')} Agendar visita</a>${ctx.settings.whatsapp ? `<a class="b s" target="_blank" rel="noopener" data-wa="${p.id}" href="${esc(waHref(ctx.settings.whatsapp, waText))}">${I('chat')} WhatsApp</a>` : ''}</div>`}`;
   const ld = jsonLd({ ...p, seo_title: p.seo_title, seo_desc: p.seo_desc }, url, photos.map((s) => ctx.siteUrl + s));
   return layout({
     ctx, path: `/${p.slug}`, active: 'home', body, bodyClass: 'ficha', title: p.seo_title, desc: p.seo_desc,
@@ -279,17 +353,17 @@ ${gone ? '' : `<div class="sbar"><a class="b" href="#bkbox">Agendar visita</a>${
   });
 }
 
-function simplePage(ctx, { path, title, desc, h1, lead, inner, active, noindex }) {
-  return layout({ ctx, path, title, desc, active, noindex, body: `<div class="hero"><h1>${esc(h1)}</h1>${lead ? `<p>${esc(lead)}</p>` : ''}</div>${inner}` });
+function simplePage(ctx, { path, title, desc, h1, lead, inner, active, noindex, eyebrow }) {
+  return layout({ ctx, path, title, desc, active, noindex, hero: pageHero({ h1, lead, eyebrow, h1Class: '' }), body: `<div style="margin-top:8px">${inner}</div>` });
 }
 
 function owners(ctx, { zones, ref }) {
   const s = ctx.settings;
   const opt = (a) => a.map((x) => `<option>${esc(x)}</option>`).join('');
   const inner = `<div class="g2">
-<div class="card"><h2>Qué hacemos por ti</h2><ul class="plain"><li>Publicamos tu propiedad con ficha propia y fotos.</li><li>Agendamos las visitas y filtramos a los prospectos.</li><li>Priorizamos prospectos con expediente completo.</li><li>Te mandamos un reporte semanal por WhatsApp con visitas y citas.</li><li>Puedes sumar póliza jurídica para el contrato.</li></ul></div>
+<div class="card"><h2>Qué hacemos por ti</h2><ul class="ticks"><li>${I('check')}<span>Publicamos tu propiedad con ficha propia y fotos.</span></li><li>${I('check')}<span>Agendamos las visitas y filtramos a los prospectos.</span></li><li>${I('check')}<span>Priorizamos prospectos con expediente completo.</span></li><li>${I('check')}<span>Te mandamos un reporte semanal por WhatsApp con visitas y citas.</span></li><li>${I('check')}<span>Puedes sumar póliza jurídica para el contrato.</span></li></ul></div>
 <div class="card"><h2>Cuánto cuesta</h2>${s.fees_text ? `<p>${esc(s.fees_text)}</p>` : '<p><span class="tag wa">Por definir</span></p><p class="note">Te explicamos el costo completo antes de que firmes cualquier cosa.</p>'}</div>
-<div class="card"><h2>Cómo cuidamos tu propiedad</h2><ul class="plain"><li>Validamos el expediente del inquilino: INE, constancia fiscal y comprobante de ingresos.</li><li>Contrato de arrendamiento.</li><li>Póliza jurídica opcional.</li><li>Acta de entrega con fotos cuando se renta.</li></ul></div>
+<div class="card"><h2>Cómo cuidamos tu propiedad</h2><ul class="ticks"><li>${I('check')}<span>Validamos el expediente del inquilino: INE, constancia fiscal y comprobante de ingresos.</span></li><li>${I('check')}<span>Contrato de arrendamiento.</span></li><li>${I('check')}<span>Póliza jurídica opcional.</span></li><li>${I('check')}<span>Acta de entrega con fotos cuando se renta.</span></li></ul></div>
 <div class="card"><h2>Qué sigue después de registrarte</h2><ol class="nx"><li>Tu asesor te escribe por WhatsApp.</li><li>Revisamos tus documentos de propiedad.</li><li>Visita para fotos y detalles.</li><li>Publicamos la ficha y te avisamos.</li><li>Te mandamos por WhatsApp un reporte semanal con visitas y citas de tu propiedad.</li></ol></div></div>
 <div class="card" id="registro"><h2>Registra tu propiedad</h2><p class="note">En la ficha pública solo mostramos zona y colonia. La dirección exacta se comparte únicamente con prospectos que tienen una cita confirmada.</p>
 <form data-form="propietario" novalidate><div class="filters">
@@ -325,7 +399,8 @@ function owners(ctx, { zones, ref }) {
   return layout({
     ctx, path: '/renta-tu-propiedad', active: 'pub', title: 'Renta tu casa o departamento en Querétaro | Rentaypunto',
     desc: 'Registra tu propiedad: la publicamos, agendamos las visitas y filtramos a los prospectos. Te mandamos un reporte semanal por WhatsApp.',
-    body: `<div class="hero"><h1>Renta tu propiedad con Rentaypunto</h1><p>Regístrala y nosotros la publicamos, agendamos las visitas y filtramos a los prospectos. Tu asesor te mantiene al tanto por WhatsApp.</p></div>${inner}`,
+    hero: pageHero({ eyebrow: `${I('key')} Para propietarios`, h1: 'Renta tu propiedad con Rentaypunto', lead: 'Regístrala y nosotros la publicamos, agendamos las visitas y filtramos a los prospectos. Tu asesor te mantiene al tanto por WhatsApp.', h1Class: '' }),
+    body: `<div style="margin-top:8px">${inner}</div>`,
     scripts: [`window.REF=${json(ref)}`],
   });
 }

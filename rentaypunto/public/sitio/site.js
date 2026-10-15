@@ -37,13 +37,13 @@
     $$('[data-fav]').forEach((b) => {
       const on = favs.includes(Number(b.dataset.fav));
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      if (b.classList.contains('heart')) { b.textContent = on ? '♥' : '♡'; b.setAttribute('aria-label', on ? 'Quitar de favoritos' : 'Guardar en favoritos'); }
+      if (b.classList.contains('heart')) b.setAttribute('aria-label', on ? 'Quitar de favoritos' : 'Guardar en favoritos');
       else b.textContent = on ? '♥ En favoritos' : '♡ Guardar';
     });
     const only = $('#ffav');
     if (only) {
       let n = 0;
-      $$('#track .p').forEach((c) => { const show = !only.checked || favs.includes(Number(c.dataset.id)); c.hidden = !show; if (show) n++; });
+      $$('#track .pc').forEach((c) => { const show = !only.checked || favs.includes(Number(c.dataset.id)); c.hidden = !show; if (show) n++; });
       const cnt = $('#cnt');
       if (cnt) cnt.textContent = n + ' propiedad(es) encontrada(s)' + (favs.length ? ' · ' + favs.length + ' en favoritos' : '');
     }
@@ -104,11 +104,15 @@
 
   // ---------- Buscador "Encuentra tu renta" ----------
   const busca = () => store.get('rp_busca', null);
+  // Misma tarjeta que arma el servidor (views.js).
   function card(p) {
-    return '<div class="p" data-id="' + p.id + '"><div class="ph">' + (p.photo ? '<img src="/fotos/' + p.photo + '-sm.jpg" alt="' + esc(p.title) + '" loading="lazy">' : '') + '<span>' + esc(p.zone) + '</span>'
-      + '<button class="heart" type="button" data-fav="' + p.id + '" aria-pressed="false" aria-label="Guardar en favoritos">♡</button></div><div class="pb"><div class="pr">' + M.money(p.rent) + '/mes</div><b>' + esc(p.title) + '</b>'
-      + '<div class="ch">' + (p.m2 ? '<span>📐 ' + p.m2 + ' m²</span>' : '') + '<span>🛏 ' + (p.bedrooms || 0) + '</span><span>🛁 ' + (p.bathrooms || 0) + '</span></div>'
-      + '<a class="b" href="/' + esc(p.slug) + '">Ver ficha y agendar</a></div></div>';
+    const I = window.BRAND.icon;
+    const entry = p.rent + Math.round((p.deposit_months || 0) * p.rent) + ((p.includes || []).indexOf('Mantenimiento') >= 0 ? 0 : (p.maintenance || 0));
+    return '<article class="pc" data-id="' + p.id + '"><div class="pc-img">' + (p.photo ? '<img src="/fotos/' + p.photo + '-sm.jpg" alt="' + esc(p.title) + ' en renta en ' + esc(p.zone) + '" loading="lazy">' : window.BRAND.noPhoto())
+      + '<div class="pc-badges"><span class="tag">' + I('pin') + ' ' + esc(p.zone) + '</span></div><button class="heart" type="button" data-fav="' + p.id + '" aria-pressed="false" aria-label="Guardar en favoritos">' + I('heart') + '</button></div>'
+      + '<div class="pc-body"><div class="pc-price">' + M.money(p.rent) + ' <small>/mes</small></div><a class="pc-title" href="/' + esc(p.slug) + '">' + esc(p.title) + '</a>'
+      + '<div class="specs"><span>' + I('bed') + ' ' + (p.bedrooms || 0) + ' rec.</span><span>' + I('bath') + ' ' + (p.bathrooms || 0) + ' baños</span>' + (p.m2 ? '<span>' + I('area') + ' ' + p.m2 + ' m²</span>' : '') + '</div>'
+      + '<div class="pc-foot"><span>Entrada: <b>' + M.money(entry) + '</b></span><span class="go">Ver ficha ' + I('arrow') + '</span></div></div></article>';
   }
   function showFinder(b) {
     const all = window.FINDER.map((p) => ({ p: p, f: M.fit(p, b, window.RP.today) }));
@@ -230,7 +234,7 @@
     if (bk.done) {
       const c = bk.done; const fl = new Date(c.date + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
       const wl = waLink('. Quiero visitarla el ' + M.fdate(c.date) + ' a las ' + c.time + '. Soy ' + c.name + '. Folio ' + c.folio + '.');
-      box.innerHTML = '<h2>✓ Cita solicitada</h2><div class="fi"><span>Propiedad</span><b>' + esc(P.code + ' · ' + P.title) + '</b></div><div class="fi"><span>Día y hora</span><b>' + esc(fl) + ', ' + c.time + '</b></div><div class="fi"><span>Folio</span><b>' + esc(c.folio) + '</b></div>'
+      box.innerHTML = '<h2 style="color:var(--ok)">✓ Cita solicitada</h2><div class="fi"><span>Propiedad</span><b>' + esc(P.code + ' · ' + P.title) + '</b></div><div class="fi"><span>Día y hora</span><b>' + esc(fl) + ', ' + c.time + '</b></div><div class="fi"><span>Folio</span><b>' + esc(c.folio) + '</b></div>'
         + '<p><b>Qué sigue</b></p><ol class="nx"><li>Tu asesor te confirma por WhatsApp.</li><li>Ten a la mano INE, Constancia de Situación Fiscal y comprobante de ingresos.</li><li>Con tu expediente completo te atienden primero.</li></ol>'
         + (wl ? '<p><a class="b" target="_blank" rel="noopener" data-wa="' + P.id + '" href="' + esc(wl) + '">Escribir por WhatsApp</a></p>' : '')
         + '<p><button type="button" class="b s sm" id="bk_new">Agendar otra visita</button></p>';
@@ -242,12 +246,12 @@
     const day = P.slots.find((x) => x.date === bk.d);
     if (day) H = '<div class="chips">' + day.slots.map((s) => '<button type="button" class="chip" data-h="' + s.time + '"' + (s.free ? '' : ' disabled') + ' aria-pressed="' + (bk.h === s.time) + '">' + s.time + '</button>').join('') + '</div>';
     const wl = waLink('');
-    box.innerHTML = '<h2>Agenda tu visita</h2><label>Día</label><div class="chips">' + D + '</div><label>Hora</label>' + H
+    box.innerHTML = '<h2 style="font-size:1.1rem">Agenda tu visita</h2><label>Día</label><div class="chips">' + D + '</div><label>Hora</label>' + H
       + '<label for="bk_n">Nombre</label><input id="bk_n" autocomplete="name" maxlength="80" value="' + esc(bk.name) + '">'
       + '<label for="bk_w">WhatsApp</label><input id="bk_w" type="tel" inputmode="numeric" autocomplete="tel" placeholder="10 dígitos" value="' + esc(bk.phone) + '">'
       + '<div class="hp" aria-hidden="true"><input id="bk_hp" tabindex="-1" autocomplete="off"></div>'
       + '<label class="chk"><input type="checkbox" id="bk_c"' + (bk.ok ? ' checked' : '') + '> Acepto el <a href="/aviso-de-privacidad" target="_blank">aviso de privacidad</a></label>'
-      + '<p class="note">Usamos tus datos solo para agendar y confirmar tu visita.</p><p class="err" id="bk_err"></p><p><button type="button" class="b" id="bk_go">Agendar visita</button></p>'
+      + '<p class="note">Usamos tus datos solo para agendar y confirmar tu visita.</p><p class="err" id="bk_err"></p><p><button type="button" class="b full lg" id="bk_go">Agendar visita</button></p>'
       + (wl ? '<a class="wl" target="_blank" rel="noopener" data-wa="' + P.id + '" href="' + esc(wl) + '">¿Prefieres escribir? Abre WhatsApp con esta propiedad</a>' : '');
     $$('[data-d]', box).forEach((x) => { x.onclick = () => { keep(); bk.d = x.dataset.d; const d2 = P.slots.find((y) => y.date === bk.d); if (bk.h && !d2.slots.some((s) => s.time === bk.h && s.free)) bk.h = ''; renderBook(); }; });
     $$('[data-h]', box).forEach((x) => { x.onclick = () => { keep(); bk.h = x.dataset.h; renderBook(); }; });
