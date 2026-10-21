@@ -733,3 +733,8 @@ body.m .outcome-grid button { min-height: 48px; }
 .m-foot .link { color: var(--accent); font-weight: 600; }
 .m-head { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
 .m-head .m-big { min-height: 40px; font-size: 14px; }
+.giro-confirm ul { margin: 6px 0 10px; padding-left: 18px; display: grid; gap: 6px; }
+.giro-confirm p { margin: 6px 0; }
+.giro-confirm { min-width: 0; }
+.giro-confirm .inline-check { display: flex; gap: 8px; align-items: flex-start; white-space: normal; font-weight: 600; color: var(--text); margin-top: 8px; }
+.giro-confirm .inline-check input { width: 18px; height: 18px; min-height: 0; flex: none; margin: 2px 0 0; padding: 0; }

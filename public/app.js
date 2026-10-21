@@ -2664,6 +2664,23 @@ async function renderSettings() {
   $('#company-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
+    // Cambiar de giro cambia la forma de trabajar de todo el equipo: se confirma para evitar un clic por error.
+    const from = state.meta.industries.find((g) => g.key === (state.company.industry || 'general'));
+    const to = state.meta.industries.find((g) => g.key === f.elements.industry.value);
+    if (from.key !== to.key) {
+      const qp = F.INDUSTRIES[to.key].profile;
+      const ok = await askForm(`¿Cambiar el giro de "${from.name}" a "${to.name}"?`, `<div class="giro-confirm">
+        <p>Esto cambia para <b>todo tu equipo</b> desde este momento:</p>
+        <ul>
+          <li>${f.elements.appointments.checked ? `Las ventas se miden en <b>${esc(F.apptPlural(F.INDUSTRIES[to.key].appt || 'cita'))}</b>: el tablero tendrá las columnas de cita y los botones para agendar, confirmar y anotar si llegó.` : 'Las ventas <b>no</b> se miden en citas: se quitan las columnas y botones de cita.'}</li>
+          <li>Las preguntas para perfilar serán: ${Object.values(qp).map((q) => esc(q.label)).join(' · ')}</li>
+          <li>A lo que vendes se le llamará <b>${esc(F.TERMS[f.elements.term.value][0])}</b>${f.elements.renewals.checked ? ', con aviso de renovación' : ', sin renovaciones'}.</li>
+        </ul>
+        <p class="muted">No se borra nada: leads, citas y respuestas ya capturadas se conservan, y puedes regresar al giro anterior cuando quieras.</p>
+        <label class="inline-check"><input type="checkbox" name="entiendo" required> Entiendo que cambia la forma de trabajar de todo el equipo</label>
+      </div>`, `Sí, cambiar a ${to.name}`);
+      if (ok === null) { renderSettings(); return; } // se cancela: el formulario vuelve a como estaba guardado
+    }
     try {
       applyCompany(await api('/api/company', { method: 'PATCH', body: { name: f.elements.name.value, industry: f.elements.industry.value,
         appointments: f.elements.appointments.checked, term: f.elements.term.value, renewals: f.elements.renewals.checked } }));

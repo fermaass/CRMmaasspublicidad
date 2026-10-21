@@ -75,7 +75,7 @@
   // Cómo se le llama a la cita en este giro (cita, valoración, prueba de manejo, reunión). Todas son "la".
   const apptNoun = () => industry().appt || 'cita';
   const PLURAL = { cita: 'citas', valoración: 'valoraciones', 'prueba de manejo': 'pruebas de manejo', reunión: 'reuniones' };
-  const apptPlural = () => PLURAL[apptNoun()] || `${apptNoun()}s`;
+  const apptPlural = (noun = apptNoun()) => PLURAL[noun] || `${noun}s`;
   const quickProfile = () => industry().profile;
   // Texto de una respuesta del perfil; si se capturó con otro giro, se busca en todos para no perderla.
   function answerLabel(k, v) {
