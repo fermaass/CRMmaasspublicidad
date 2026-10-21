@@ -151,6 +151,8 @@ function createApp({ db, config }) {
   // Detrás del proxy HTTPS del hosting: así sabemos si la conexión es segura y la URL pública real.
   app.set('trust proxy', 1);
   // Salud: confirma que la base responde (Railway reinicia el servicio si esto falla).
+  // Qué versión está publicada (para comprobar que ya se aplicó una actualización): leads.tudominio.com/version
+  app.get('/version', (req, res) => res.type('text').send(`Maass Leads ${require('../package.json').version}${process.env.RAILWAY_GIT_COMMIT_SHA ? ` · ${process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7)}` : ''}`));
   app.get('/health', (req, res) => {
     try { db.prepare('SELECT 1').get(); res.send('ok'); } catch (err) { res.status(503).send(`base de datos sin respuesta: ${err.message}`); }
   });
@@ -1596,7 +1598,8 @@ function createApp({ db, config }) {
     res.send(file);
   });
 
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  // Que el navegador (sobre todo en celular) pregunte siempre si hay versión nueva: así cada actualización se ve al recargar.
+  app.use(express.static(path.join(__dirname, '..', 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
   app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
   // Cualquier falla inesperada: se registra en el servidor y al usuario se le dice algo claro, sin detalles internos.
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
