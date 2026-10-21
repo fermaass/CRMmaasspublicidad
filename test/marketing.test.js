@@ -24,7 +24,7 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
   gerente = (await req('/api/login', { method: 'POST', body: { email: 'g@t.com', password: 'clave-gerente' } })).cookie;
   anaId = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Ana', email: 'a@t.com', password: 'password123', role: 'vendedor' } })).json.id;
-  await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Mar', email: 'm@t.com', password: 'password123', role: 'marketing' } });
+  await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Mar', email: 'm@t.com', password: 'password123', role: 'gerente' } });
   ana = await login('a@t.com'); mkt = await login('m@t.com');
 });
 after(() => server.close());
@@ -35,16 +35,21 @@ test('el origen es obligatorio al capturar a mano', async () => {
   assert.match(r.json.error, /de dónde viene/);
 });
 
-test('marketing corrige el origen pero no toca el avance de ventas', async () => {
+test('el Director solo ve: no registra toques, no edita y no configura; el Administrador corrige el origen', async () => {
+  await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Dora', email: 'd@t.com', password: 'password123', role: 'director' } });
+  const dir = await login('d@t.com');
   const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone: '5570000002', channel_id: 1, assigned_to: anaId } })).json.id;
-  assert.equal((await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: mkt, body: { channel: 'llamada', outcome: 'cumple' } })).status, 403);
-  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: mkt, body: { status: 'vendido', channel_id: 3, name: 'Corregido' } });
-  const l = (await req(`/api/leads/${id}`, { cookie: mkt })).json;
-  assert.equal(l.status, 'nuevo', 'la etapa no cambia');
-  assert.equal(l.channel_id, 3); assert.equal(l.name, 'Corregido');
-  assert.equal(l.can_edit, false); assert.equal(l.can_edit_origin, true);
-  assert.equal((await req(`/api/leads/${id}/notes`, { method: 'POST', cookie: mkt, body: { content: 'Vino del evento' } })).status, 201);
-  assert.equal((await req('/api/settings', { method: 'PATCH', cookie: mkt, body: { auto_assign: true } })).status, 403, 'el reparto no es de marketing');
+  assert.equal((await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: dir, body: { channel: 'llamada', outcome: 'cumple' } })).status, 403);
+  assert.equal((await req(`/api/leads/${id}`, { method: 'PATCH', cookie: dir, body: { status: 'vendido', name: 'X' } })).status, 403);
+  const l = (await req(`/api/leads/${id}`, { cookie: dir })).json;
+  assert.equal(l.status, 'nuevo'); assert.equal(l.can_edit, false); assert.equal(l.can_edit_origin, false);
+  assert.equal((await req('/api/settings', { method: 'PATCH', cookie: dir, body: { wa_templates: {} } })).status, 403);
+  assert.equal((await req('/api/company', { method: 'PATCH', cookie: dir, body: { industry: 'salud' } })).status, 403);
+  // Sí puede pedir seguimiento al vendedor y descargar su cartera.
+  assert.equal((await req(`/api/leads/${id}/request`, { method: 'POST', cookie: dir, body: { text: 'Llámale hoy' } })).status, 200);
+  assert.equal((await req('/api/export/cartera.xlsx', { cookie: dir })).status, 200);
+  await req(`/api/leads/${id}`, { method: 'PATCH', cookie: mkt, body: { channel_id: 3, name: 'Corregido' } });
+  assert.equal((await req(`/api/leads/${id}`, { cookie: mkt })).json.name, 'Corregido');
 });
 
 test('calidad por campaña: por qué se descartan, días a cerrar y audiencia para anuncios', async () => {

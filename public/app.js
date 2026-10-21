@@ -5,7 +5,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const label = (k) => state.meta.labels[k] || k;
 const fmtDate = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 const can = (...roles) => state.me && roles.includes(state.me.role);
-// Asignar es el trabajo del Coordinador de leads; a cualquier otro usuario se le puede dar con "También asigna leads".
+// Asignar es el trabajo del Asignador; a cualquier otro usuario se le puede dar con "También asigna leads".
 const canAssign = () => Boolean(state.me && (state.me.role === 'operador' || state.me.can_assign));
 // Atiende leads: el vendedor, o cualquier otro con "También atiende leads" (por ejemplo, el gerente de un equipo chico).
 const sells = () => Boolean(state.me && (state.me.role === 'vendedor' || state.me.sells));
@@ -117,7 +117,8 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 // Título de tarjeta con su cuadrito de color, como en el panel de referencia.
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
-const ROLE_NAMES = { gerente: 'Gerente', marketing: 'Gerente de marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Coordinador de leads' };
+// Por dentro 'gerente' es el Administrador y 'operador' el Asignador (ver src/db.js).
+const ROLE_NAMES = { gerente: 'Administrador', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
 const VIEW_TITLES = { 'm-assign': 'Asignar', 'm-team': 'Equipo', 'm-numbers': 'Números del mes', today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
@@ -259,7 +260,7 @@ async function showAccess(token) {
   try {
     const t = await api(`/api/access/${encodeURIComponent(token)}`);
     $('#access-title').textContent = t.kind === 'invite' ? `Hola ${t.name.split(' ')[0]}, crea tu contraseña` : 'Crea tu contraseña nueva';
-    $('#access-sub').textContent = `Entrarás con ${t.email}. Solo tú la conoces; ni tu gerente la ve.`;
+    $('#access-sub').textContent = `Entrarás con ${t.email}. Solo tú la conoces; ni el administrador la ve.`;
   } catch (err) {
     $('#access-title').textContent = 'Este link ya no sirve';
     $('#access-sub').textContent = err.message;
@@ -318,8 +319,8 @@ async function start() {
       showCarteraReminder(sys.cartera);
     }).catch(() => {});
   }
-  // Cada rol arranca en lo suyo: vendedor en Mi día, gerente en Equipo hoy, coordinador en Asignación, marketing y analista en el Resumen.
-  const home = { vendedor: 'today', gerente: 'team', operador: 'assign', marketing: 'stats', analista: 'stats' };
+  // Cada rol arranca en lo suyo: vendedor en Mi día, Administrador y Director en Equipo hoy, Asignador en Asignación.
+  const home = { vendedor: 'today', gerente: 'team', director: 'team', operador: 'assign' };
   // En el celular: solo las pantallas de la barra de abajo; en la computadora, las pantallas m- no existen.
   if (setupMobile()) {
     const ok = mobileTabs().some((t) => t.view === state.view);
@@ -605,7 +606,7 @@ function renderBoardAlert() {
   el.classList.toggle('hidden', !(late || today) || state.view !== 'board');
   el.innerHTML = `${late ? `<span class="alert-pill late">${icon('phone', 15)} ${late} ${late === 1 ? 'pendiente vencido' : 'pendientes vencidos'}</span>` : ''}
     ${today ? `<span class="alert-pill today">${icon('calendar', 15)} ${today} para hoy</span>` : ''}
-    ${can('gerente', 'marketing', 'vendedor') ? '<button type="button" class="ghost small" id="go-today">Ver Mi día</button>' : ''}`;
+    ${sells() ? '<button type="button" class="ghost small" id="go-today">Ver Mi día</button>' : ''}`;
   $('#go-today')?.addEventListener('click', () => setView('today'));
 }
 
@@ -643,7 +644,7 @@ function renderToday() {
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
-        ${req ? `<span class="request-pill">${icon('sparkles', 13)} Pedido del gerente: ${esc(l.manager_request)}</span>`
+        ${req ? `<span class="request-pill">${icon('sparkles', 13)} Pedido de seguimiento: ${esc(l.manager_request)}</span>`
           : `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>`}
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
@@ -681,7 +682,7 @@ function renderToday() {
       ${sells() ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
     <div id="today-results" class="today-results hidden" role="region" aria-live="polite" aria-label="Resultados de la búsqueda"></div>
-    ${requested.length ? `<section class="card today-group requests">${cardTitle('sparkles', 'var(--accent)', `Pedidos del gerente (${requested.length})`,
+    ${requested.length ? `<section class="card today-group requests">${cardTitle('sparkles', 'var(--accent)', `Pedidos de seguimiento (${requested.length})`,
       'Se quitan solos al registrar el toque')}${requested.map(row).join('')}</section>` : ''}
     ${items.length ? sections : requested.length ? '' : `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
 
@@ -1005,11 +1006,11 @@ async function renderStats() {
   const f = s.funnel;
   // El vendedor ve solo su Resumen de ventas; lo de marketing (inversión, costos) no le aplica.
   const seller = state.me.role === 'vendedor';
-  // Vendedor: solo ventas. Gerente de marketing: solo marketing (evaluar vendedores no es su trabajo). Gerente y analista: ambas.
-  const tab = seller ? 'ventas' : state.me.role === 'marketing' ? 'marketing' : state.statsTab || pref.get('statsTab') || 'ventas';
+  // Vendedor: solo ventas. Administrador, Director y Asignador: ventas y marketing.
+  const tab = seller ? 'ventas' : state.statsTab || pref.get('statsTab') || 'ventas';
   state.statsTab = tab;
   const health = tab === 'marketing' ? await api('/api/campaign-health').catch(() => null) : null;
-  const tabs = !can('gerente', 'analista') ? '' : `<div class="tabs" role="tablist">
+  const tabs = seller ? '' : `<div class="tabs" role="tablist">
     <button type="button" role="tab" data-tab="ventas" class="${tab === 'ventas' ? 'active' : ''}">Ventas</button>
     <button type="button" role="tab" data-tab="marketing" class="${tab === 'marketing' ? 'active' : ''}">Marketing</button></div>`;
 
@@ -1079,11 +1080,14 @@ async function renderStats() {
     <div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>`;
   }
   const banner = seller ? sellerMonth(await api('/api/leads'), s) : tab === 'marketing' ? marketingInsight(s, health) : salesInsight(s, prev, prevQ);
-  const reportBtn = `<div class="stats-actions"><button type="button" class="ghost" id="stats-report">${icon('file', 16)} Descargar reporte</button></div>`;
+  // El Director no entra a Configuración: su cartera (sus datos) la descarga desde aquí.
+  const reportBtn = `<div class="stats-actions">${can('director') ? `<a class="button-link ghost" href="/api/export/cartera.xlsx" download id="stats-cartera">${icon('users', 16)} Descargar cartera (Excel)</a>` : ''}
+    <button type="button" class="ghost" id="stats-report">${icon('file', 16)} Descargar reporte</button></div>`;
   $('#view-stats').innerHTML = `<div class="dash">${tabs}${reportBtn}${banner}${body}</div>`;
   $('#view-stats').querySelectorAll('[data-campaign-open]').forEach((b) => b.addEventListener('click', () => openCampaign(b.dataset.campaignOpen)));
   $('#monthly-report')?.addEventListener('click', () => openReport('marketing', 'mes_pasado'));
   $('#stats-report').addEventListener('click', () => openReport(seller ? 'vendedor' : tab === 'marketing' ? 'marketing' : 'ventas'));
+  $('#stats-cartera')?.addEventListener('click', (e) => { if (window.crmCartera) { e.preventDefault(); window.crmCartera(); } });
   $('#view-stats').querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => openSeller(Number(b.dataset.sellerOpen))));
   $('#view-stats').querySelectorAll('[data-audience]').forEach((b) => b.addEventListener('click', () => {
     exportCsv(`${filterQuery()}&audience=${b.dataset.audience}${b.dataset.format ? `&format=${b.dataset.format}` : ''}`);
@@ -1208,7 +1212,7 @@ function hours(h) {
 function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
-  const canOpen = can('gerente', 'analista');
+  const canOpen = can('gerente', 'director');
   return `<div class="table-wrap"><table class="funnel-table sellers-table"><thead><tr>
     <th>Vendedor</th><th>Recibe</th><th>Conversión</th><th>Cierra de lo cotizado</th><th>Ticket promedio</th><th>Descuento</th><th>Primer toque</th><th>Vencidos</th>
   </tr></thead><tbody>${rows.map((r) => {
@@ -1665,9 +1669,9 @@ async function openLead(id) {
       ${l.campaign_end ? `<span class="tag">${esc(cap(F.term()))} hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
       ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
     </div>
-    ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido del gerente:</b> ${esc(l.manager_request)}
-      <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('gerente') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
-    ${can('gerente') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
+    ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido de seguimiento:</b> ${esc(l.manager_request)}
+      <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('gerente', 'director') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
+    ${can('gerente', 'director') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
       ? `<button type="button" class="ghost small ask-followup" id="req-ask">${icon('sparkles', 14)} Pedir seguimiento a ${esc(l.assigned_name)}</button>` : ''}
     ${quickProfileStrip(l)}
     ${apptNote(l)}
@@ -2051,7 +2055,7 @@ async function renderSeller() {
 }
 
 // ---------- Reportes por periodo: cada rol elige las fechas, lo ve, lo imprime/guarda en PDF o lo descarga en Excel ----------
-// kind: 'ventas' (gerente y analista), 'vendedor' (el suyo), 'marketing', 'asignacion' (quien asigna leads).
+// kind: 'ventas' (Administrador, Director y Asignador), 'vendedor' (el suyo), 'marketing', 'asignacion' (quien asigna leads).
 const REPORT_PRESETS = [['7', 'Últimos 7 días'], ['mes', 'Este mes'], ['mes_pasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['anio', 'Este año'], ['custom', 'Elegir fechas']];
 async function openReport(kind, preset) {
   // El periodo arranca con el de los filtros (si hay uno) o con el más común para ese reporte.
@@ -2107,7 +2111,7 @@ async function salesReport(range, kind) {
   const seller = kind === 'vendedor';
   const [a, p, st] = await Promise.all([api(`/api/activity?${rangeQuery(range)}`), api(`/api/activity?${rangeQuery(prevRange(range))}`), api(`/api/stats?${rangeQuery(range)}`)]);
   const tot = (x, k) => x.sellers.reduce((t, r) => t + (r[k] || 0), 0);
-  const team = !seller && can('gerente', 'analista') ? await api('/api/team').catch(() => null) : null;
+  const team = !seller && can('gerente', 'director') ? await api('/api/team').catch(() => null) : null;
   const f = st.funnel;
   const myPipe = (st.pipeline || []).filter((r) => (seller ? r.id === state.me.id : r.id));
   const body = `
@@ -2320,31 +2324,31 @@ async function renderUsers() {
       <p class="muted">Al crearlo se genera un <b>link de invitación</b> (vence en 72 horas) para mandárselo por WhatsApp o correo. Con ese link la persona
         crea su propia contraseña: así confirmas que el acceso le llegó a ella y nadie más la conoce. Si alguien olvida su contraseña,
         dale clic a "Link para contraseña nueva" en su renglón y mándaselo igual.</p>
-      <p class="muted"><b>Gerente:</b> dirige; ve Equipo hoy, el Resumen y todos los leads, pide seguimientos y corrige; reasigna solo en emergencias.
-        <b>Coordinador de leads:</b> su único trabajo es capturar y asignar leads y corregir sus datos; no ve reportes. <b>Vendedor:</b> trabaja los leads que le asignan y ve su propio Resumen.
-        <b>Gerente de marketing:</b> Resumen de marketing, campañas a revisar, ficha de cada campaña, links y audiencias. <b>Analista:</b> solo lectura.</p>
-      <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el gerente en un equipo chico).
-        Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo.</p>
+      <p class="muted"><b>Administrador:</b> todo: usuarios, giro, productos, campañas, inversión, mensajes, cartera y respaldos; corrige leads y reasigna en emergencias.
+        <b>Director:</b> solo ve: Tablero, Equipo hoy, Resumen y reportes; puede pedir seguimiento a un vendedor y descargar la cartera.
+        <b>Asignador:</b> captura y asigna leads, corrige sus datos y ve el Resumen y los reportes. <b>Vendedor:</b> trabaja los leads que le asignan, su Mi día y su propio Resumen.</p>
+      <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el Director en un equipo chico).
+        Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo. <b>Si nadie asigna</b> (no hay Asignador ni nadie con esta casilla), los leads se reparten solos y parejo entre los vendedores.</p>
     </div>
     <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones extra</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
     ${state.users.map((u) => `<tr data-id="${u.id}">
       <td>${esc(u.name)}${(u.role === 'vendedor' || u.can_sell) && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
       <td><select data-f="role" aria-label="Rol">${roleOpts(u.role)}</select></td>
       <td>${u.role === 'operador' ? '<span class="muted">Asignar es su trabajo</span>' : `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>`}
-        ${['vendedor', 'analista'].includes(u.role) ? '' : `<br><label class="inline-check"><input type="checkbox" data-f="can_sell" ${u.can_sell ? 'checked' : ''}> También atiende leads</label>`}</td>
+        ${u.role === 'vendedor' ? '' : `<br><label class="inline-check"><input type="checkbox" data-f="can_sell" ${u.can_sell ? 'checked' : ''}> También atiende leads</label>`}</td>
       <td>${status(u)}</td>
       <td><input type="checkbox" data-f="active" aria-label="Activo" ${u.active ? 'checked' : ''}></td>
       <td>${u.active && u.id !== state.me.id ? `<button class="ghost small" data-f="link">${u.pendiente ? 'Reenviar invitación' : 'Link para contraseña nueva'}</button>` : ''}</td>
     </tr>`).join('')}
     </tbody></table></div>`;
 
-  // Al Coordinador de leads no se le pregunta: asignar ya es su trabajo.
+  // Al Asignador no se le pregunta: asignar ya es su trabajo.
   const roleSel = $('#user-form [name=role]');
   const syncQuestion = () => {
     const isCoord = roleSel.value === 'operador';
     $('#op-question').classList.toggle('hidden', isCoord);
     const box = $('#op-question input'); box.disabled = isCoord; if (isCoord) box.checked = false;
-    const noSell = ['vendedor', 'analista'].includes(roleSel.value);
+    const noSell = roleSel.value === 'vendedor';
     $('#sell-question').classList.toggle('hidden', noSell);
     const sellBox = $('#sell-question input'); sellBox.disabled = noSell; if (noSell) sellBox.checked = false;
   };
@@ -2430,7 +2434,7 @@ $('#setup-form').querySelectorAll('[name=who]').forEach((r) => r.addEventListene
   $('#setup-pass').classList.toggle('hidden', client);
   $('#setup-form [name=password]').required = !client; $('#setup-form [name=password]').disabled = client;
   $('#setup-client-note').classList.toggle('hidden', !client);
-  $('[data-who-label]').textContent = client ? 'Nombre del gerente del cliente' : 'Tu nombre';
+  $('[data-who-label]').textContent = client ? 'Nombre de quien administrará' : 'Tu nombre';
   $('[data-who-mail]').textContent = client ? 'Su email' : 'Tu email';
   $('#setup-submit').textContent = client ? 'Crear e invitar' : 'Crear y entrar';
 }));
@@ -2535,7 +2539,7 @@ async function renderSettings() {
         de cada contacto, tus productos con precios, campañas con su inversión y tu equipo. Se abre en Excel, Google Sheets o Numbers.</p>
       <a class="button-link" id="cartera-download" href="/api/export/cartera.xlsx" download>Descargar mi cartera (Excel)</a>
       ${sys?.cartera ? `<p class="muted small-note">${sys.cartera.last ? `Última descarga: ${shortDate(sys.cartera.last)}.` : 'Aún no la has descargado.'} Te la recordamos cada mes.</p>` : ''}
-      <p class="muted small-note">Solo el gerente puede descargarla: trae los datos de contacto de todos tus clientes. Guárdala en un lugar seguro.</p>
+      <p class="muted small-note">Solo el Administrador y el Director pueden descargarla: trae los datos de contacto de todos tus clientes. Guárdala en un lugar seguro.</p>
     </div>` : ''}
     ${sys ? `<div class="card">
       ${cardTitle('layers', 'var(--f-cerrados)', 'Respaldos y datos')}
@@ -2866,7 +2870,7 @@ function listEditor(kind, title, help, placeholder) {
         ${renewals() ? '<input name="duration_months" inputmode="numeric" placeholder="Dura (meses)" aria-label="Duración en meses" style="max-width:120px">' : ''}` : ''}
       <button type="submit">Agregar</button>
     </form>
-    ${kind === 'producto' ? `<p class="muted small-note">Con <b>precio fijo</b>, al cotizar o vender el monto se calcula solo (precio × cantidad) y el vendedor no lo puede cambiar; solo el gerente lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el real.${renewals() ? ` Si pones cuántos <b>meses dura</b>, al vender se calcula sola la fecha en que termina ${esc(F.theTerm())} y se avisa la renovación a tiempo.` : ''}</p>` : ''}
+    ${kind === 'producto' ? `<p class="muted small-note">Con <b>precio fijo</b>, al cotizar o vender el monto se calcula solo (precio × cantidad) y el vendedor no lo puede cambiar; solo el Administrador lo corrige. Sin precio fijo, el precio de lista sale como referencia y el vendedor captura el real.${renewals() ? ` Si pones cuántos <b>meses dura</b>, al vender se calcula sola la fecha en que termina ${esc(F.theTerm())} y se avisa la renovación a tiempo.` : ''}</p>` : ''}
     <ul class="items">
       ${items.map((i) => `<li data-item="${i.id}" data-active="${i.active}" class="${i.active ? '' : 'inactive'}">
         <span>${esc(i.name)}${i.active ? '' : ' <small>(quitado)</small>'}</span>

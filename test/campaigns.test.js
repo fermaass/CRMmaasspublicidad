@@ -21,7 +21,7 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
   const login = async (email, password) => (await fetch(`${base}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })).headers.get('set-cookie').split(';')[0];
   const g = await login('g@t.com', 'clave-gerente');
-  await req('/api/users', { method: 'POST', cookie: g, body: { name: 'Mar', email: 'm@t.com', password: 'password123', role: 'marketing' } });
+  await req('/api/users', { method: 'POST', cookie: g, body: { name: 'Mar', email: 'm@t.com', password: 'password123', role: 'gerente' } });
   mkt = await login('m@t.com', 'password123');
 });
 after(() => server.close());

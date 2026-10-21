@@ -70,12 +70,12 @@ test('lead sin asignar: quien atiende leads lo toma al registrar el toque; al ge
   const db = openDb(':memory:');
   const { s, url } = await listen(createApp({ db, config: { setupCode: 'TAKE-1234', formApiKey: 'k' } }));
   const call = (method, path, body, cookie) => fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  const g = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'TAKE-1234' })).headers.get('set-cookie').split(';')[0];
+  const g = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'TAKE-1234', can_assign: '1' })).headers.get('set-cookie').split(';')[0];
   for (const [n, e] of [['Ana', 'a@x.mx'], ['Beto', 'b@x.mx']]) await call('POST', '/api/users', { name: n, email: e, password: 'password123', role: 'vendedor' }, g);
   const id = (await (await call('POST', '/webhooks/form?key=k', { nombre: 'Lead', telefono: '5519191919' })).json()).id;
 
   let l = await (await call('GET', `/api/leads/${id}`, null, g)).json();
-  assert.equal(l.assigned_to, null, 'con dos vendedores y reparto apagado queda sin asignar');
+  assert.equal(l.assigned_to, null, 'con dos vendedores, reparto apagado y alguien que asigna, queda sin asignar');
   assert.equal(l.can_touch, false); assert.equal(l.can_take, true, 'al gerente que no atiende se le ofrece tomarlo');
 
   // El gerente activa "También atiende leads": ya puede registrar el toque y el lead queda suyo.
@@ -87,5 +87,24 @@ test('lead sin asignar: quien atiende leads lo toma al registrar el toque; al ge
   assert.equal(r.status, 201);
   l = await (await call('GET', `/api/leads/${id}`, null, g)).json();
   assert.equal(l.assigned_name, 'Fer'); assert.equal(l.touch_count, 1); assert.equal(F.stageOf(l), 'contactando');
+  s.close();
+});
+
+test('si nadie tiene la función de asignar, los leads se reparten solos entre los vendedores', async () => {
+  const db = openDb(':memory:');
+  const { s, url } = await listen(createApp({ db, config: { setupCode: 'AUTO-5678', formApiKey: 'k' } }));
+  const call = (method, path, body, cookie) => fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const g = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'AUTO-5678' })).headers.get('set-cookie').split(';')[0];
+  for (const [n, e] of [['Ana', 'a@x.mx'], ['Beto', 'b@x.mx']]) await call('POST', '/api/users', { name: n, email: e, password: 'password123', role: 'vendedor' }, g);
+  const ids = [];
+  for (const t of ['5519191911', '5519191912']) ids.push((await (await call('POST', '/webhooks/form?key=k', { nombre: 'Lead', telefono: t })).json()).id);
+  const owners = [];
+  for (const id of ids) owners.push((await (await call('GET', `/api/leads/${id}`, null, g)).json()).assigned_name);
+  assert.deepEqual(owners.sort(), ['Ana', 'Beto'], 'parejo, uno a cada quien');
+
+  // En cuanto alguien asigna (Asignador), el reparto vuelve a ser manual.
+  await call('POST', '/api/users', { name: 'Oscar', email: 'o@x.mx', password: 'password123', role: 'operador' }, g);
+  const id = (await (await call('POST', '/webhooks/form?key=k', { nombre: 'Lead', telefono: '5519191913' })).json()).id;
+  assert.equal((await (await call('GET', `/api/leads/${id}`, null, g)).json()).assigned_to, null);
   s.close();
 });

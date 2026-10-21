@@ -86,18 +86,20 @@ test('con el reparto automático encendido, va al de menor carga', async () => {
   assert.equal((await lead(id)).assigned_to, w.suggested);
 });
 
-test('asignar es del operador; el gerente solo reasigna; marketing y vendedor no', async () => {
+test('asignar es del Asignador; el Administrador solo reasigna; el Director y el vendedor no', async () => {
   await req('/api/assign-settings', { method: 'PATCH', cookie: op, body: { auto_assign: false } });
   const mk = async (name, role) => {
     const email = `${name}@t.com`;
     await req('/api/users', { method: 'POST', cookie: gerente, body: { name, email, password: 'password123', role } });
     return (await req('/api/login', { method: 'POST', body: { email, password: 'password123' } })).cookie;
   };
-  const mkt = await mk('mkt', 'marketing');
-  assert.equal((await req('/api/workload', { cookie: mkt })).status, 403, 'marketing no asigna');
+  const mkt = await mk('dir', 'director');
+  assert.equal((await req('/api/workload', { cookie: mkt })).status, 403, 'el Director no asigna');
   assert.equal((await req('/api/workload', { cookie: gerente })).status, 403, 'la pestaña Asignación es del operador');
   assert.equal((await req('/api/me', { cookie: op })).json.can_assign, 1);
-  assert.equal((await req('/api/stats', { cookie: op })).status, 403, 'el operador no ve reportes');
+  assert.equal((await req('/api/stats', { cookie: op })).status, 200, 'el Asignador ve los resultados generales');
+  assert.equal((await req('/api/stats', { cookie: mkt })).status, 200);
+  assert.equal((await req('/api/catalog', { method: 'POST', cookie: mkt, body: { kind: 'producto', name: 'X' } })).status, 403, 'el Director no configura');
 
   const { id } = (await capture('5540000030')).json;
   assert.ok((await req('/api/leads?assigned=none', { cookie: op })).json.some((l) => l.id === id));

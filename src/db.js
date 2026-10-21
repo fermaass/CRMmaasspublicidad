@@ -4,8 +4,14 @@ const { DatabaseSync } = require('node:sqlite');
 
 const STATUSES = ['nuevo', 'nuevo_perfil', 'cotizando', 'declinado', 'vendido'];
 const PROFILES = ['sin_perfilar', 'cumple', 'no_cumple'];
-// 'operador' = Coordinador de leads: captura leads, los asigna y corrige datos; no ve reportes ni registra toques.
-const ROLES = ['gerente', 'marketing', 'vendedor', 'analista', 'operador'];
+// Niveles (por dentro conservan su clave para no romper datos):
+//   'gerente'  = Administrador: todo (usuarios, giro, productos, campañas, inversión, cartera y respaldos).
+//   'director' = Director: solo ve (tablero, Equipo hoy, Resumen, reportes); puede pedir seguimiento y descargar su cartera.
+//   'operador' = Asignador: captura y asigna leads, corrige sus datos y ve resultados generales; no registra toques.
+//   'vendedor' = Vendedor: trabaja sus leads, su Mi día y su Resumen.
+const ROLES = ['gerente', 'director', 'operador', 'vendedor'];
+// Roles anteriores: el Gerente de marketing pasa a Administrador y el Analista (solo lectura) a Director.
+const ROLE_MIGRATION_SQL = "CASE role WHEN 'marketing' THEN 'gerente' WHEN 'analista' THEN 'director' ELSE role END";
 const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 // Orígenes que se capturan a mano (el formulario es el único automático).
 const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
@@ -161,7 +167,7 @@ function openDb(dbPath) {
       db.exec(`BEGIN;
         ${usersDDL('users_new')}
         INSERT INTO users_new (id, name, email, password_hash, role, active, created_at, can_assign)
-          SELECT id, name, email, password_hash, role, active, created_at, can_assign FROM users;
+          SELECT id, name, email, password_hash, ${ROLE_MIGRATION_SQL}, active, created_at, can_assign FROM users;
         DROP TABLE users;
         ALTER TABLE users_new RENAME TO users;
         COMMIT;`);
@@ -246,6 +252,21 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
   // "También atiende leads": un gerente (u otro rol) que además trabaja sus propios leads como vendedor.
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'can_sell')) db.exec('ALTER TABLE users ADD COLUMN can_sell INTEGER NOT NULL DEFAULT 0');
+  // Bases anteriores a Director/Asignador: se rehace la tabla de usuarios con los niveles nuevos (conserva ids y datos).
+  if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'users'").get().sql.includes("'director'")) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec(`BEGIN;
+        ${usersDDL('users_new')}
+        ALTER TABLE users_new ADD COLUMN last_login_at TEXT;
+        ALTER TABLE users_new ADD COLUMN can_sell INTEGER NOT NULL DEFAULT 0;
+        INSERT INTO users_new (id, name, email, password_hash, role, active, created_at, can_assign, last_login_at, can_sell)
+          SELECT id, name, email, password_hash, ${ROLE_MIGRATION_SQL}, active, created_at, can_assign, last_login_at, can_sell FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+        COMMIT;`);
+    } catch (err) { try { db.exec('ROLLBACK'); } catch { /* sin transacción abierta */ } throw err; } finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS user_tokens (
       token_hash TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

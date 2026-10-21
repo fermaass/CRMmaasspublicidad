@@ -132,11 +132,13 @@ function assignTo(db, leadId, seller, userId, how) {
   addEvent(db, leadId, userId, 'asignacion', `${how} a ${seller.name}`);
 }
 
-// Asignación automática al vendedor con menos carga. Está apagada salvo que se encienda en Configuración.
+// Asignación automática al vendedor con menos carga. Está apagada salvo que se encienda en Asignación.
 // Con una sola persona que atiende leads no hay nada que decidir: se le asigna siempre, aunque el reparto esté apagado.
+// Si nadie tiene la función de asignar (no hay Asignador ni "También asigna leads"), también se reparte solo: nadie lo haría.
 function autoAssign(db, leadId) {
   const sellers = workload(db);
-  if (getSetting(db, 'auto_assign') !== '1' && sellers.length !== 1) return null;
+  const nobodyAssigns = !db.prepare("SELECT 1 FROM users WHERE active = 1 AND (role = 'operador' OR can_assign = 1)").get();
+  if (getSetting(db, 'auto_assign') !== '1' && sellers.length !== 1 && !nobodyAssigns) return null;
   const lead = db.prepare('SELECT l.assigned_to, u.active FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?').get(leadId);
   if (!lead || (lead.assigned_to && lead.active)) return null;
   const next = sellers.length === 1 ? sellers[0] : suggestSeller(db);

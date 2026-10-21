@@ -665,7 +665,7 @@ button.link.name, .sellers-table button.link, .team-table button.link { font-siz
 .hero::after { pointer-events: none; } .hero-btn { position: relative; z-index: 1; }
 a.button-link.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
 a.button-link.small { padding: 5px 10px; font-size: 12px; }
-.stats-actions { display: flex; justify-content: flex-end; grid-column: 1 / -1; }
+.stats-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; grid-column: 1 / -1; }
 .stats-actions .ico { margin-right: 4px; vertical-align: -3px; }
 
 .quick-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: -4px 0 10px; }

@@ -22,6 +22,7 @@ const lead = async (id) => (await req(`/api/leads/${id}`, { cookie: gerente })).
 before(async () => {
   db = openDb(':memory:');
   seedAdmin(db, config);
+  db.prepare('UPDATE users SET can_assign = 1').run(); // el Administrador asigna: sin esto los leads se reparten solos
   server = createApp({ db, config }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;

@@ -55,11 +55,11 @@ test('simulación: un lead de punta a punta y el resto del equipo, de hace 80 d�
   const G = await as('fer@maass.mx');
   const ids = {};
   for (const [name, email, role] of [['Coco Ruiz', 'coco@maass.mx', 'operador'], ['Ana López', 'ana@maass.mx', 'vendedor'], ['Beto Ramírez', 'beto@maass.mx', 'vendedor'],
-    ['Mara Ortiz', 'mara@maass.mx', 'marketing'], ['Lalo Díaz', 'lalo@maass.mx', 'analista']]) {
+    ['Mara Ortiz', 'mara@maass.mx', 'gerente'], ['Lalo Díaz', 'lalo@maass.mx', 'director']]) {
     const r = await G('/api/users', 'POST', { name, email, password: PW, role });
     ids[name.split(' ')[0]] = r.json.id;
   }
-  check('alta de 5 usuarios (coordinador, 2 vendedores, marketing, analista)', Object.values(ids).every(Boolean));
+  check('alta de 5 usuarios (asignador, 2 vendedores, administradora, director)', Object.values(ids).every(Boolean));
   const M = await as('mara@maass.mx');
   const cat = (await M('/api/catalog')).json;
   const ch = Object.fromEntries(cat.canal.map((c) => [c.name, c.id]));
@@ -71,7 +71,7 @@ test('simulación: un lead de punta a punta y el resto del equipo, de hace 80 d�
   const monthAgo = (k) => { const d = new RealDate(TODAY.getFullYear(), TODAY.getMonth() - k, 15); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
   const budgets = [[fb, 3, 10000], [fb, 2, 10000], [fb, 1, 10000], [fb, 0, 5000], [gg, 3, 8000], [gg, 2, 8000]];
   for (const [id, k, amount] of budgets) check(`inversión ${amount} en ${monthAgo(k)}`, (await M(`/api/catalog/${id}/budgets`, 'PUT', { month: monthAgo(k), amount })).status === 200);
-  check('marketing no da de alta usuarios', (await M('/api/users', 'POST', { name: 'x', email: 'x@x.mx', password: PW, role: 'vendedor' })).status === 403);
+  check('el Director no da de alta usuarios', (await (await as('lalo@maass.mx'))('/api/users', 'POST', { name: 'x', email: 'x@x.mx', password: PW, role: 'vendedor' })).status === 403);
   const formKey = (await G('/api/settings')).json.form_api_key;
   check('hay clave del formulario', Boolean(formKey));
   const form = (body) => call('', `/webhooks/form?key=${encodeURIComponent(formKey)}`, 'POST', body);
@@ -288,10 +288,10 @@ test('simulación: un lead de punta a punta y el resto del equipo, de hace 80 d�
   check('Resumen de Ana trae el promedio del equipo', sa.team && sa.team.vendedores === 2);
   check('al vendedor no se le muestra la inversión', sa.campaignFunnel.every((r) => r.inversion == null));
   // Permisos
-  check('marketing no mueve etapas', (await M2(`/api/leads/${L6}`, 'PATCH', { status: 'vendido', sale_amount: 1 })).status === 200 && (await G2(`/api/leads/${L6}`)).json.status === 'cotizando');
-  check('marketing corrige el origen', (await M2(`/api/leads/${L8}`, 'PATCH', { product_id: prodLed })).status === 200 && (await G2(`/api/leads/${L8}`)).json.product_id === prodLed);
-  check('analista: solo lectura', (await L(`/api/leads/${L6}`, 'PATCH', { name: 'x' })).status === 403 && (await L('/api/stats')).status === 200);
-  check('coordinador no ve reportes', (await O2('/api/stats')).status === 403 && (await O2('/api/team')).status === 403);
+  check('el Director no mueve etapas', (await L(`/api/leads/${L6}`, 'PATCH', { status: 'vendido', sale_amount: 1 })).status === 403 && (await G2(`/api/leads/${L6}`)).json.status === 'cotizando');
+  check('la administradora corrige el origen', (await M2(`/api/leads/${L8}`, 'PATCH', { product_id: prodLed })).status === 200 && (await G2(`/api/leads/${L8}`)).json.product_id === prodLed);
+  check('Director: solo lectura', (await L(`/api/leads/${L6}`, 'PATCH', { name: 'x' })).status === 403 && (await L('/api/stats')).status === 200);
+  check('el Asignador ve los resultados generales', (await O2('/api/stats')).status === 200 && (await O2('/api/team')).status === 403);
   check('vendedor no ve Equipo hoy', (await A2('/api/team')).status === 403);
   // Exportar
   const csv = await fetch(`${base}/api/leads.csv`, { headers: { cookie: await login('fer@maass.mx') } }).then((r) => r.text());

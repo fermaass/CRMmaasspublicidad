@@ -136,7 +136,7 @@ test('reporte de actividad: ventas por fecha de cierre, y cada rol ve lo suyo', 
   const b = (await req(`/api/activity${q}`, { cookie: beto })).json;
   assert.equal(b.ventas.length, 0, 'Beto no ve las ventas de Ana');
   const c = (await req(`/api/activity${q}`, { cookie: coco })).json;
-  assert.equal(c.ventas, undefined, 'el coordinador no ve montos'); assert.ok(c.recibidos.n >= 2);
+  assert.equal(c.ventas.length, 1, 'el Asignador ve los resultados generales, con montos'); assert.ok(c.recibidos.n >= 2);
   assert.equal((await req('/api/activity?from=x', { cookie: boss })).status, 400);
   assert.equal(r.status, 201);
 });

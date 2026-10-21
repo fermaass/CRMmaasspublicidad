@@ -37,10 +37,10 @@ test('en equipos chicos el gerente también opera: se decide al crearlo y se pue
   // Se le puede activar después
   await req(`/api/users/${g2}`, { method: 'PATCH', cookie: boss, body: { can_assign: true } });
   assert.equal((await req('/api/workload', { cookie: await login('g2@t.com') })).status, 200);
-  // Si cambia de rol, conserva la función; al pasar a Coordinador de leads ya no hace falta la casilla
-  await req(`/api/users/${g2}`, { method: 'PATCH', cookie: boss, body: { role: 'analista' } });
+  // Si cambia de rol, conserva la función; al pasar a Asignador ya no hace falta la casilla
+  await req(`/api/users/${g2}`, { method: 'PATCH', cookie: boss, body: { role: 'director' } });
   assert.equal((await req('/api/users', { cookie: boss })).json.find((x) => x.id === g2).can_assign, 1);
-  assert.equal((await req('/api/workload', { cookie: await login('g2@t.com') })).status, 200, 'un analista que asigna ve Asignación');
+  assert.equal((await req('/api/workload', { cookie: await login('g2@t.com') })).status, 200, 'un Director que asigna ve Asignación');
   await req(`/api/users/${g2}`, { method: 'PATCH', cookie: boss, body: { role: 'operador' } });
   assert.equal((await req('/api/users', { cookie: boss })).json.find((x) => x.id === g2).can_assign, 0);
   assert.equal((await req('/api/me', { cookie: await login('g2@t.com') })).json.can_assign, 1, 'el coordinador asigna por su rol');
@@ -53,7 +53,7 @@ test('cualquier usuario puede asignar; el coordinador asigna desde Asignación; 
   const vId = await mkUser('Vale', 'vendedor', true);
   const pId = await mkUser('Pepe', 'vendedor', false);
   await mkUser('Coco', 'operador', false);
-  await mkUser('Mara', 'marketing', true);
+  await mkUser('Mara', 'director', true);
   const vale = await login('vale@t.com'); const pepe = await login('pepe@t.com'); const coco = await login('coco@t.com'); const mara = await login('mara@t.com');
   assert.equal((await req('/api/me', { cookie: vale })).json.can_assign, 1);
   assert.equal((await req('/api/workload', { cookie: pepe })).status, 403, 'sin la casilla no asigna');

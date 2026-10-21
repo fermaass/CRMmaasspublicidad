@@ -9,9 +9,9 @@ function mobileTabs() {
   const tabs = [];
   if (sells()) tabs.push({ view: 'today', label: 'Mi día', ico: 'phone' });
   if (canAssign()) tabs.push({ view: 'm-assign', label: 'Asignar', ico: 'inbox' });
-  if (can('gerente', 'analista')) tabs.push({ view: 'm-team', label: 'Equipo', ico: 'users' });
+  if (can('gerente', 'director')) tabs.push({ view: 'm-team', label: 'Equipo', ico: 'users' });
   if (sells() || canAssign() || can('gerente')) tabs.push({ action: 'new', label: 'Lead', ico: 'plus' });
-  if (!can('operador') || sells()) tabs.push({ view: 'm-numbers', label: sells() && !can('gerente', 'marketing') ? 'Mi mes' : 'Números', ico: 'trend' });
+  tabs.push({ view: 'm-numbers', label: can('vendedor') ? 'Mi mes' : 'Números', ico: 'trend' });
   return tabs;
 }
 const mobileHome = () => mobileTabs().find((t) => t.view)?.view || 'm-numbers';
@@ -142,11 +142,10 @@ async function renderMTeam() {
 async function renderMNumbers() {
   const view = $('#view-m-numbers');
   const range = periodRange('mes');
-  const salesSide = can('gerente', 'vendedor', 'analista') || sells();
-  const mktSide = can('gerente', 'marketing', 'analista');
+  const mktSide = can('gerente', 'director', 'operador');
   const [act, st, health] = await Promise.all([
-    salesSide ? api(`/api/activity?${rangeQuery(range)}`).catch(() => null) : null,
-    mktSide || (salesSide && F.appointments()) ? api(`/api/stats?${rangeQuery(range)}`).catch(() => null) : null,
+    api(`/api/activity?${rangeQuery(range)}`).catch(() => null), // todos ven ventas (el vendedor, solo las suyas)
+    mktSide || F.appointments() ? api(`/api/stats?${rangeQuery(range)}`).catch(() => null) : null,
     mktSide ? api('/api/campaign-health').catch(() => null) : null,
   ]);
   const sum = (list) => (list || []).reduce((t, x) => t + (x.amount || 0), 0);

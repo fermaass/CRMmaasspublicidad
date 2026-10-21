@@ -23,6 +23,7 @@ const lead = async (id) => (await req(`/api/leads/${id}`, { cookie: gerente })).
 before(async () => {
   const db = openDb(':memory:');
   seedAdmin(db, config);
+  db.prepare('UPDATE users SET can_assign = 1').run(); // el Administrador asigna: sin esto los leads se reparten solos
   server = createApp({ db, config }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -101,6 +102,7 @@ test('cinco toques sin respuesta declinan solos; los reportes cuentan en qué to
 test('cadencia: un lead asignado hace días sin tocar cuenta como toque vencido', async () => {
   const db = openDb(':memory:');
   seedAdmin(db, config);
+  db.prepare('UPDATE users SET can_assign = 1').run(); // el Administrador asigna: sin esto los leads se reparten solos
   const { ingestLead } = require('../src/leads');
   const { id } = ingestLead(db, { source: 'formulario', name: 'Viejo', phone: '5520000000' });
   const old = new Date(Date.now() - 3 * 86400e3).toISOString();

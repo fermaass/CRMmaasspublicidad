@@ -41,7 +41,7 @@ let gerente; let vendedorA; let vendedorB; let analista; let idA; let idB;
 test('gerente crea usuarios de cada rol', async () => {
   gerente = await login('gerente@test.com', 'clave-gerente');
   for (const [name, email, role] of [['Ana', 'ana@test.com', 'vendedor'], ['Beto', 'beto@test.com', 'vendedor'],
-    ['Carla', 'carla@test.com', 'analista'], ['Mar', 'mar@test.com', 'marketing']]) {
+    ['Carla', 'carla@test.com', 'director'], ['Oscar', 'oscar@test.com', 'operador']]) {
     const r = await req('/api/users', { method: 'POST', cookie: gerente, body: { name, email, password: 'password123', role } });
     assert.equal(r.status, 201, r.text);
     if (email === 'ana@test.com') idA = r.json.id;
@@ -120,7 +120,7 @@ test('perfil y estado se mantienen coherentes; el perfil sobrevive al declinar',
   assert.equal(l.profile, 'cumple');
 });
 
-test('permisos: vendedor ve solo lo suyo, no toma leads; analista solo lee', async () => {
+test('permisos: vendedor ve solo lo suyo, no toma leads; el Director solo lee', async () => {
   const leads = (await req('/api/leads', { cookie: gerente })).json;
   const [l1, l2] = leads.filter((l) => !l.assigned_to);
   await req(`/api/leads/${l1.id}`, { method: 'PATCH', cookie: gerente, body: { assigned_to: idA } });
@@ -146,7 +146,7 @@ test('permisos: vendedor ve solo lo suyo, no toma leads; analista solo lee', asy
   // Vendedor no reasigna
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { assigned_to: idA } })).status, 403);
 
-  // Analista ve todo, no edita, sí exporta
+  // El Director ve todo, no edita, sí exporta
   assert.equal((await req('/api/leads', { cookie: analista })).json.length, leads.length);
   assert.equal((await req(`/api/leads/${l1.id}`, { method: 'PATCH', cookie: analista, body: { status: 'vendido' } })).status, 403);
   assert.equal((await req(`/api/leads/${l1.id}/notes`, { method: 'POST', cookie: analista, body: { content: 'x' } })).status, 403);

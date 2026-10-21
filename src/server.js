@@ -27,7 +27,10 @@ const { transactionalRoutes } = require('./tx');
 const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
 const fs = require('node:fs');
 
-const EDITORS = ['gerente', 'marketing'];
+// Configuran campañas, productos, canales, links y mensajes: el Administrador ('gerente' por dentro).
+const EDITORS = ['gerente'];
+// Ven resultados (Resumen, campañas, reportes): Administrador, Director y Asignador.
+const VIEWERS = ['gerente', 'director', 'operador'];
 // La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL. Con citas (según el giro) se agregan
 // "Cita agendada" y "Asistió" antes de cotizar.
 const APPT_SQL = `WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state = 'asistio' THEN 'asistio'
@@ -47,14 +50,14 @@ const AUDIENCES = {
   pospuso: ["l.status = 'declinado' AND l.decline_reason = ?", [POSTPONED]],
   clientes: ["l.status = 'vendido'", []],
 };
-// Asignar leads es el trabajo del Coordinador de leads (rol 'operador' por dentro). Además, a cualquier usuario
-// (gerente, gerente de marketing, vendedor o analista) se le puede dar la función con "También asigna leads" (can_assign).
-// Cualquier gerente puede reasignar desde la ficha (emergencias).
+// Asignar leads es el trabajo del Asignador (rol 'operador' por dentro). Además, a cualquier usuario
+// (Administrador, Director o vendedor) se le puede dar la función con "También asigna leads" (can_assign).
+// El Administrador puede reasignar desde la ficha (emergencias).
 const canAssign = (user) => Boolean(user && (user.role === 'operador' || user.can_assign));
-// Al coordinador no le hace falta la casilla: asignar es su rol.
+// Al Asignador no le hace falta la casilla: asignar es su rol.
 const assignFlag = (role, value) => (role !== 'operador' && value ? 1 : 0);
-// "También atiende leads": el vendedor ya lo hace por su rol y el analista es solo lectura.
-const sellFlag = (role, value) => (!['vendedor', 'analista'].includes(role) && value ? 1 : 0);
+// "También atiende leads": el vendedor ya lo hace por su rol.
+const sellFlag = (role, value) => (role !== 'vendedor' && value ? 1 : 0);
 const canReassign = (user) => Boolean(user && (user.role === 'gerente' || canAssign(user)));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
@@ -540,7 +543,7 @@ function createApp({ db, config }) {
     const { name, role, active, password, can_assign: operates, can_sell: sellsToo } = req.body || {};
     if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: 'Rol inválido' });
     if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
-      return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de gerente' });
+      return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de Administrador' });
     }
     // El gerente no escribe contraseñas: genera un link para que cada quien elija la suya.
     if (password !== undefined) return res.status(400).json({ error: 'Las contraseñas las elige cada usuario: genera un link de acceso' });
@@ -645,7 +648,7 @@ function createApp({ db, config }) {
     res.json(archived === null ? leads : { leads, archived, archive_days: ARCHIVE_DAYS });
   });
 
-  app.get('/api/leads.csv', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
+  app.get('/api/leads.csv', auth.requireRole('gerente', 'director'), (req, res) => {
     const { sql, params } = leadFilters(req);
     const rows = db.prepare(`${leadSelect} ${sql} ORDER BY l.created_at DESC`).all(...params);
     const cols = [['id', 'ID'], ['name', 'Nombre'], ['phone', 'Teléfono'], ['email', 'Email'], ['source', 'Origen'],
@@ -688,7 +691,7 @@ function createApp({ db, config }) {
   });
 
   app.post('/api/leads', auth.requireUser, (req, res) => {
-    if (!['gerente', 'marketing', 'vendedor', 'operador'].includes(req.user.role) && !canAssign(req.user)) {
+    if (!['gerente', 'vendedor', 'operador'].includes(req.user.role) && !canAssign(req.user) && !req.user.sells) {
       return res.status(403).json({ error: 'No tienes permiso' });
     }
     const b = req.body || {};
@@ -780,7 +783,7 @@ function createApp({ db, config }) {
   });
 
   // "Pedir seguimiento": el gerente le deja al vendedor una instrucción sobre un lead; sale arriba en su Mi día hasta que registre un toque.
-  app.post('/api/leads/:id/request', auth.requireRole('gerente'), (req, res) => {
+  app.post('/api/leads/:id/request', auth.requireRole('gerente', 'director'), (req, res) => {
     const lead = db.prepare('SELECT id, assigned_to FROM leads WHERE id = ?').get(Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const text = String(req.body?.text || '').trim().slice(0, 300);
@@ -789,14 +792,14 @@ function createApp({ db, config }) {
     db.prepare('UPDATE manager_requests SET cancelled = 1, done_at = ? WHERE lead_id = ? AND done_at IS NULL').run(ts, lead.id);
     if (text) db.prepare('INSERT INTO manager_requests (lead_id, seller_id, text, created_at) VALUES (?, ?, ?, ?)').run(lead.id, lead.assigned_to, text, ts);
     db.prepare('UPDATE leads SET manager_request = ?, manager_request_at = ? WHERE id = ?').run(text || null, text ? ts : null, lead.id);
-    addEvent(db, lead.id, req.user.id, 'nota', text ? `Seguimiento pedido por el gerente: ${text}` : 'El gerente quitó el pedido de seguimiento');
+    addEvent(db, lead.id, req.user.id, 'nota', text ? `Seguimiento pedido por ${req.user.name}: ${text}` : `${req.user.name} quitó el pedido de seguimiento`);
     res.json({ ok: true });
   });
 
   // ---------- Marketing: campañas a revisar y ficha de campaña ----------
   const monthOf = (d) => d.toISOString().slice(0, 7);
   // Semáforo por campaña con lo del mes en curso: dónde se está yendo el dinero sin traer leads buenos.
-  app.get('/api/campaign-health', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
+  app.get('/api/campaign-health', auth.requireRole(...VIEWERS), (req, res) => {
     const nowMs = Date.now(); const month = monthOf(new Date());
     const from = `${month}-01T00:00:00.000Z`;
     const camps = db.prepare("SELECT id, name FROM catalog_items WHERE kind = 'campana' AND active = 1").all();
@@ -837,7 +840,7 @@ function createApp({ db, config }) {
   });
 
   // Ficha de campaña: tendencia semanal, inversión contra leads por mes y lo que dicen sus leads (perfil rápido).
-  app.get('/api/campaign-detail', auth.requireRole('gerente', 'marketing', 'analista'), (req, res) => {
+  app.get('/api/campaign-detail', auth.requireRole(...VIEWERS), (req, res) => {
     const name = String(req.query.name || '');
     const c = db.prepare("SELECT id, name, channel_id FROM catalog_items WHERE kind = 'campana' AND name = ?").get(name);
     if (!c) return res.status(404).json({ error: 'No existe esa campaña' });
@@ -870,7 +873,7 @@ function createApp({ db, config }) {
 
   // Equipo hoy: una fila por vendedor con lo que requiere atención del gerente.
   const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
-  app.get('/api/team', auth.requireRole('gerente', 'analista'), (req, res) => {
+  app.get('/api/team', auth.requireRole('gerente', 'director'), (req, res) => {
     const nowMs = Date.now();
     const sellers = db.prepare("SELECT id, name, can_assign FROM users WHERE (role = 'vendedor' OR can_sell = 1) AND active = 1 ORDER BY name").all();
     // Vendedores que también asignan: cuántos leads repartieron en 7 días y cuántos se quedaron ellos (para que se note si se quedan de más).
@@ -1279,7 +1282,7 @@ function createApp({ db, config }) {
   });
 
   // ---------- Resumen ----------
-  app.get('/api/stats', auth.requireRole('gerente', 'marketing', 'vendedor', 'analista'), (req, res) => {
+  app.get('/api/stats', auth.requireRole(...VIEWERS, 'vendedor'), (req, res) => {
     const { sql, params } = leadFilters(req);
     const group = (col) => db.prepare(`SELECT ${col} AS key, COUNT(*) AS n FROM leads l ${sql} GROUP BY ${col}`).all(...params);
     const bySeller = db.prepare(`SELECT COALESCE(u.name, 'Sin asignar') AS key, COUNT(*) AS n,
@@ -1476,13 +1479,12 @@ function createApp({ db, config }) {
   // ---------- Reporte de actividad de un periodo (lo que pasó entre dos fechas, por fecha de cada hecho) ----------
   // A diferencia del Resumen (que sigue a los leads que llegaron en el periodo), aquí cuenta la venta el día que se cerró,
   // la cotización el día que se envió y la renovación el día que se registró. Cada rol ve lo suyo.
-  app.get('/api/activity', auth.requireRole('gerente', 'analista', 'vendedor', 'operador'), (req, res) => {
+  app.get('/api/activity', auth.requireRole(...VIEWERS, 'vendedor'), (req, res) => {
     const from = req.query.from ? new Date(String(req.query.from)) : new Date(0);
     const to = req.query.to ? new Date(String(req.query.to)) : new Date(Date.now() + 60e3);
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) return res.status(400).json({ error: 'Periodo inválido' });
     const F = from.toISOString(); const T = to.toISOString();
     const seller = req.user.role === 'vendedor';
-    const coord = req.user.role === 'operador';
     const sellers = db.prepare(`SELECT id, name, active FROM users WHERE (role = 'vendedor' OR can_sell = 1) ${seller ? 'AND id = ?' : ''}
       AND (active = 1 OR id IN (SELECT assigned_to FROM leads WHERE assigned_at >= ? AND assigned_at < ?)) ORDER BY name`)
       .all(...(seller ? [req.user.id] : []), F, T);
@@ -1501,7 +1503,7 @@ function createApp({ db, config }) {
       toques: touches[u.id]?.n || 0, contestaron: contacted[u.id]?.n || 0, cotizaciones: quotes[u.id]?.n || 0, cotizado: quotes[u.id]?.m || 0,
       ventas: sales[u.id]?.n || 0, vendido: sales[u.id]?.m || 0, renovaciones: renewals[u.id]?.n || 0, renovado: renewals[u.id]?.m || 0,
       declinados: declined[u.id]?.n || 0 }));
-    // Leads que llegaron en el periodo y cómo se repartieron (lo que mide el coordinador).
+    // Leads que llegaron en el periodo y cómo se repartieron (lo que mide el Asignador).
     const own = seller ? 'AND l.assigned_to = ?' : '';
     const ownP = seller ? [req.user.id] : [];
     const received = db.prepare(`SELECT COUNT(*) AS n, SUM(l.assigned_at IS NOT NULL) AS asignados,
@@ -1512,7 +1514,6 @@ function createApp({ db, config }) {
     const out = { from: F, to: T, sellers: rows,
       recibidos: { n: received.n || 0, asignados: received.asignados || 0, horas_asignar: received.horas_asignar, por_origen: porOrigen,
         sin_asignar_hoy: seller ? 0 : db.prepare("SELECT COUNT(*) AS n FROM leads WHERE assigned_to IS NULL AND status IN ('nuevo', 'nuevo_perfil', 'cotizando')").get().n } };
-    if (coord) return res.json(out); // el coordinador ve recepción y reparto, no montos
     const list = (col, amount) => db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, u.name AS seller, l.${col} AS at, l.${amount} AS amount,
         l.status, p.name AS product, l.quantity FROM leads l LEFT JOIN users u ON u.id = l.assigned_to LEFT JOIN catalog_items p ON p.id = l.product_id
       WHERE l.${col} >= ? AND l.${col} < ? AND l.assigned_to ${inIds} ORDER BY l.${col}`).all(F, T, ...ids);
@@ -1528,7 +1529,7 @@ function createApp({ db, config }) {
 
   // ---------- Tu cartera completa en Excel: los datos son de la empresa y se los puede llevar cuando quiera ----------
   // Una hoja por clasificación, más toques, historial, productos, campañas e inversión, y el equipo. Solo el gerente.
-  app.get('/api/export/cartera.xlsx', auth.requireRole('gerente'), (req, res) => {
+  app.get('/api/export/cartera.xlsx', auth.requireRole('gerente', 'director'), (req, res) => {
     const when = (iso) => (iso ? new Date(iso).toLocaleString('sv-SE', { timeZone: 'America/Mexico_City', dateStyle: 'short', timeStyle: 'short' }) : '');
     const day = (v) => (v ? String(v).slice(0, 10) : '');
     const yes = (v) => (v ? 'Sí' : 'No');
