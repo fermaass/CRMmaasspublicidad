@@ -28,11 +28,18 @@ const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
 const fs = require('node:fs');
 
 const EDITORS = ['gerente', 'marketing'];
-// La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL.
-const STAGE_SQL = `CASE WHEN l.status = 'nuevo' AND l.contacted_at IS NOT NULL THEN 'contesto'
+// La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL. Con citas (según el giro) se agregan
+// "Cita agendada" y "Asistió" antes de cotizar.
+const APPT_SQL = `WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state = 'asistio' THEN 'asistio'
+  WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state IS NOT NULL THEN 'cita'`;
+const stageSql = () => `CASE ${FOLLOWUP.appointments() ? APPT_SQL : ''}
+  WHEN l.status = 'nuevo' AND l.contacted_at IS NOT NULL THEN 'contesto'
   WHEN l.status = 'nuevo' AND l.touch_count > 0 THEN 'contactando'
   WHEN l.status = 'declinado' AND l.profile = 'cumple' THEN 'declinado_perfil'
   WHEN l.status = 'declinado' THEN 'declinado_sin' ELSE l.status END`;
+// Nombres de etapas y resultados de toque con los del giro (cita, valoración, prueba de manejo…).
+const labels = () => ({ ...LABELS, ...(FOLLOWUP.appointments() ? FOLLOWUP.apptLabels() : {}) });
+const outcomeLabels = () => ({ ...TOUCH_OUTCOMES, ...FOLLOWUP.apptOutcomes() });
 // Audiencias para remarketing. Los que nunca contestaron no entran: no vale la pena volver a buscarlos.
 const AUDIENCES = {
   perfil: ["l.status = 'declinado' AND l.profile = 'cumple'", []],
@@ -101,7 +108,8 @@ const normCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 function createApp({ db, config }) {
   ensureSettings(db, config);
-  FOLLOWUP.configure({ term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0' });
+  FOLLOWUP.configure({ term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0',
+    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1' });
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3); // 30 intentos fallidos por IP en 15 min
   const setupTries = rateLimiter(10, 15 * 60e3);
@@ -275,10 +283,11 @@ function createApp({ db, config }) {
 
   // ---------- Empresa: nombre, logo y cómo se llama lo que vende (cada instalación es de una empresa) ----------
   const company = () => ({ name: getSetting(db, 'company_name') || '', logo: getSetting(db, 'company_logo') || '',
-    term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0', captcha_site_key: config.turnstileSiteKey || '' });
+    term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0',
+    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1', captcha_site_key: config.turnstileSiteKey || '' });
   app.get('/api/company', (req, res) => res.json(company()));
   app.patch('/api/company', auth.requireRole('gerente'), (req, res) => {
-    const b = req.body || {};
+    let b = req.body || {};
     if (b.name !== undefined) {
       if (!String(b.name).trim()) return res.status(400).json({ error: 'Escribe el nombre de la empresa' });
       setSetting(db, 'company_name', String(b.name).trim().slice(0, 80));
@@ -289,6 +298,15 @@ function createApp({ db, config }) {
       if (b.logo && b.logo.length > 420000) return res.status(400).json({ error: 'El logo pesa demasiado: usa uno de menos de 300 KB' });
       setSetting(db, 'company_logo', b.logo || '');
     }
+    // Giro: trae sus valores (cómo se le llama a lo que vende, renovaciones y citas); lo que venga en b los ajusta.
+    // Cambiarlo no borra nada: las citas y respuestas ya capturadas se conservan.
+    if (b.industry !== undefined) {
+      const g = FOLLOWUP.INDUSTRIES[String(b.industry)];
+      if (!Object.hasOwn(FOLLOWUP.INDUSTRIES, String(b.industry))) return res.status(400).json({ error: 'Giro inválido' });
+      if (b.industry !== (getSetting(db, 'industry') || 'general')) b = { term: g.term, renewals: g.renewals, appointments: g.appointments, ...b };
+      setSetting(db, 'industry', b.industry); FOLLOWUP.configure({ industry: b.industry });
+    }
+    if (b.appointments !== undefined) { setSetting(db, 'appointments', b.appointments ? '1' : '0'); FOLLOWUP.configure({ appointments: Boolean(b.appointments) }); }
     if (b.term !== undefined) {
       if (!Object.hasOwn(FOLLOWUP.TERMS, String(b.term))) return res.status(400).json({ error: 'Opción inválida' });
       setSetting(db, 'service_term', b.term); FOLLOWUP.configure({ term: b.term });
@@ -297,9 +315,11 @@ function createApp({ db, config }) {
     res.json(company());
   });
 
-  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: LABELS,
-    touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: TOUCH_OUTCOMES, byStatus: OUTCOMES_BY_STATUS },
-    quickProfile: QUICK_PROFILE, stages: FOLLOWUP.STAGES, declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
+  // Depende del giro (etapas, preguntas del perfil, nombres): el navegador la vuelve a pedir al cambiarlo.
+  app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: labels(),
+    touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: outcomeLabels(), byStatus: OUTCOMES_BY_STATUS },
+    quickProfile: FOLLOWUP.quickProfile(), stages: FOLLOWUP.stages(),
+    industries: Object.entries(FOLLOWUP.INDUSTRIES).map(([k, g]) => ({ key: k, name: g.name, help: g.help, term: g.term, renewals: g.renewals, appointments: g.appointments, appt: g.appt || 'cita' })), declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
   // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
@@ -560,7 +580,7 @@ function createApp({ db, config }) {
       where.push('l.assigned_to = ?'); params.push(req.user.id);
     }
     if (STATUSES.includes(q.status)) { where.push('l.status = ?'); params.push(q.status); }
-    if (FOLLOWUP.STAGES.includes(q.stage)) { where.push(`${STAGE_SQL} = ?`); params.push(q.stage); }
+    if (FOLLOWUP.stages().includes(q.stage)) { where.push(`${stageSql()} = ?`); params.push(q.stage); }
     if (PROFILES.includes(q.profile)) { where.push('l.profile = ?'); params.push(q.profile); }
     if (SOURCES.includes(q.source)) { where.push('l.source = ?'); params.push(q.source); }
     if (q.assigned === 'none') where.push('l.assigned_to IS NULL');
@@ -839,10 +859,11 @@ function createApp({ db, config }) {
       const mm = months.get(b.month) || { month: b.month, leads: 0, perfil: 0, inversion: null };
       mm.inversion = b.amount; months.set(b.month, mm);
     }
-    const perfilRapido = Object.fromEntries(Object.keys(QUICK_PROFILE).map((k) => {
+    const qp = FOLLOWUP.quickProfile();
+    const perfilRapido = Object.fromEntries(Object.keys(qp).map((k) => {
       const answered = leads.filter((l) => l[k]);
-      return [k, { label: QUICK_PROFILE[k].label, total: answered.length,
-        options: Object.entries(QUICK_PROFILE[k].options).map(([v, t]) => ({ value: v, label: t, n: answered.filter((l) => l[k] === v).length })) }];
+      return [k, { label: qp[k].label, total: answered.length,
+        options: Object.entries(qp[k].options).map(([v, t]) => ({ value: v, label: t, n: answered.filter((l) => l[k] === v).length })) }];
     }));
     res.json({ id: c.id, name: c.name, weeks: [...weeks.values()], months: [...months.values()].sort((a, b) => b.month.localeCompare(a.month)).slice(0, 6), perfil_rapido: perfilRapido });
   });
@@ -951,13 +972,20 @@ function createApp({ db, config }) {
     const keys = Object.keys(set);
     if (!keys.length) return;
     db.prepare(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => set[k]), lead.id);
-    const answers = Object.keys(QUICK_PROFILE).filter((k) => set[k] && set[k] !== lead[k]).map((k) => QUICK_PROFILE[k].options[set[k]]);
+    const answers = Object.keys(QUICK_PROFILE).filter((k) => set[k] && set[k] !== lead[k]).map((k) => FOLLOWUP.answerLabel(k, set[k]));
     if (answers.length) addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${answers.join(' · ')}`);
     if (set.campaign_end && set.campaign_end !== lead.campaign_end) addEvent(db, lead.id, user.id, 'estado', `La campaña termina el ${set.campaign_end}`);
     if (set.next_step_at) {
       const when = new Date(set.next_step_at).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' });
       addEvent(db, lead.id, user.id, 'estado', `Próximo paso acordado para el ${when}`);
     }
+  }
+
+  // Por qué pasó solo a "Cumple perfil", con las respuestas del giro.
+  function profiledWhy(lead, b) {
+    if ((getSetting(db, 'industry') || 'general') === 'general') return 'habla con quien decide y tiene presupuesto';
+    const a = (k) => FOLLOWUP.answerLabel(k, b[k] !== undefined ? b[k] : lead[k]);
+    return `${a('decision_maker')} y ${a('budget_status').toLowerCase()}`;
   }
 
   // Aplica cambios a un lead (desde la ficha, el tablero o un toque) y registra los hitos del embudo.
@@ -970,7 +998,7 @@ function createApp({ db, config }) {
       if (b.campaign_end && !isDate(b.campaign_end)) throw new Error('Fecha de fin de campaña inválida');
       if (b.next_step_at && !isDateTime(b.next_step_at)) throw new Error('Fecha del próximo paso inválida');
       for (const k of Object.keys(QUICK_PROFILE)) {
-        if (b[k] && !Object.hasOwn(QUICK_PROFILE[k].options, String(b[k]))) throw new Error('Respuesta de perfil inválida');
+        if (b[k] && !Object.hasOwn(FOLLOWUP.quickProfile()[k].options, String(b[k]))) throw new Error('Respuesta de perfil inválida');
       }
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
       saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
@@ -978,10 +1006,11 @@ function createApp({ db, config }) {
       // Si se capturan respuestas del perfil rápido es porque se habló con el cliente: cuenta como que contestó.
       const answering = Object.keys(QUICK_PROFILE).some((k) => b[k]);
       if (answering && !lead.contacted_at && b.contacted === undefined) b = { ...b, contacted: true };
-      // Habla con quien decide y tiene presupuesto: cumple perfil y pasa a esa etapa sola (se puede corregir a mano).
+      // Las dos primeras respuestas califican (p. ej. habla con quien decide y tiene presupuesto): cumple perfil y pasa
+      // a esa etapa sola (se puede corregir a mano).
       const ans = (k) => (b[k] !== undefined ? b[k] : lead[k]);
       if (answering && next.status === 'nuevo' && next.profile === 'sin_perfilar' && b.profile === undefined
-        && ans('decision_maker') === 'si' && ans('budget_status') === 'si') {
+        && FOLLOWUP.qualifies({ decision_maker: ans('decision_maker'), budget_status: ans('budget_status') })) {
         next = resolveStatusProfile(lead, { profile: 'cumple' });
         autoProfiled = true;
       }
@@ -1096,7 +1125,7 @@ function createApp({ db, config }) {
         `${LABELS[lead.status]} → ${LABELS[next.status]}${declineReason ? ` (motivo: ${declineReason})` : ''}`);
     }
     if (next.profile !== lead.profile) {
-      addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${LABELS[next.profile]}${autoProfiled ? ' (habla con quien decide y tiene presupuesto)' : ''}`);
+      addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${LABELS[next.profile]}${autoProfiled ? ` (${profiledWhy(lead, b)})` : ''}`);
     }
     if (assigned !== lead.assigned_to) {
       const name = assigned ? db.prepare('SELECT name FROM users WHERE id = ?').get(assigned).name : 'nadie';
@@ -1118,7 +1147,7 @@ function createApp({ db, config }) {
     let lead = getLead(req, Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     // Lead sin dueño: quien atiende leads y registra el toque se queda con él.
-    if (!lead.assigned_to && req.user.sells && OUTCOMES_BY_STATUS[lead.status]) {
+    if (!lead.assigned_to && req.user.sells && FOLLOWUP.outcomesFor(lead)) {
       assignLead(lead.id, req.user, req.user.id);
       lead = getLead(req, lead.id);
     }
@@ -1131,7 +1160,8 @@ function createApp({ db, config }) {
       if (dup) return res.status(200).json({ ok: true, n: dup.n, duplicate: true, auto_declined: false });
     }
     if (!TOUCH_CHANNELS.includes(channel)) return res.status(400).json({ error: 'Indica por qué medio fue el toque' });
-    const allowed = OUTCOMES_BY_STATUS[lead.status];
+    // En Vendido se valida abajo cuál toca (referidos o renovación) para dar un mensaje claro.
+    const allowed = lead.status === 'vendido' ? OUTCOMES_BY_STATUS.vendido : FOLLOWUP.outcomesFor(lead);
     if (!allowed) return res.status(409).json({ error: 'Este lead ya está cerrado; reábrelo para registrar más toques' });
     if (!allowed.includes(outcome)) return res.status(400).json({ error: 'Ese resultado no aplica en esta etapa' });
 
@@ -1143,6 +1173,10 @@ function createApp({ db, config }) {
       if (['renovo', 'no_renueva'].includes(outcome) && kind !== 'renovacion') return res.status(400).json({ error: 'Todavía no toca la renovación de este cliente' });
       if (req.body.campaign_end && !isDate(req.body.campaign_end)) return res.status(400).json({ error: 'Fecha de fin de campaña inválida' });
     }
+    // Cita: al agendarla o cambiarla se pide cuándo es; "No llegó" puede traer ya la nueva fecha.
+    const apptAt = req.body.appt_at || null;
+    if (['cita_agendada', 'reagendo'].includes(outcome) && !apptAt) return res.status(400).json({ error: `Indica cuándo es la ${FOLLOWUP.apptNoun()}` });
+    if (apptAt && !isDateTime(apptAt)) return res.status(400).json({ error: `Fecha de la ${FOLLOWUP.apptNoun()} inválida` });
     let renewalAmount = null;
     try { renewalAmount = outcome === 'renovo' ? money(req.body.renewal_amount) : null; } catch (e) { return res.status(400).json({ error: e.message }); }
 
@@ -1188,7 +1222,7 @@ function createApp({ db, config }) {
       .run(lead.id, n, req.user.id, channel, outcome, ts, requestId);
     db.prepare('UPDATE leads SET touch_count = ?, silent_streak = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
       .run(n, streak, ts, ts, ts, lead.id);
-    addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${TOUCH_OUTCOMES[outcome]}`);
+    addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${outcomeLabels()[outcome]}`);
     const note = String(req.body.note || '').trim();
     if (note) addEvent(db, lead.id, req.user.id, 'nota', note.slice(0, 5000));
     if (lead.manager_request) {
@@ -1197,6 +1231,19 @@ function createApp({ db, config }) {
       addEvent(db, lead.id, req.user.id, 'estado', 'Atendió el seguimiento que pidió el gerente');
     }
     if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);
+    const noun = FOLLOWUP.apptNoun();
+    const apptText = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' });
+    if (['cita_agendada', 'reagendo'].includes(outcome) || (outcome === 'no_asistio' && apptAt)) {
+      const at = new Date(apptAt).toISOString();
+      db.prepare("UPDATE leads SET appt_at = ?, appt_state = 'agendada', appt_set_at = COALESCE(appt_set_at, ?) WHERE id = ?").run(at, ts, lead.id);
+      addEvent(db, lead.id, req.user.id, 'estado', `${outcome === 'cita_agendada' ? `${noun.charAt(0).toUpperCase()}${noun.slice(1)} agendada` : `${noun.charAt(0).toUpperCase()}${noun.slice(1)} reagendada`} para el ${apptText(at)}`);
+    } else if (outcome === 'confirmo') {
+      db.prepare("UPDATE leads SET appt_state = 'confirmada' WHERE id = ?").run(lead.id);
+    } else if (outcome === 'asistio') {
+      db.prepare("UPDATE leads SET appt_state = 'asistio', appt_done_at = COALESCE(appt_done_at, ?) WHERE id = ?").run(ts, lead.id);
+    } else if (outcome === 'no_asistio') {
+      db.prepare("UPDATE leads SET appt_state = 'no_asistio' WHERE id = ?").run(lead.id);
+    }
     if (outcome === 'no_renueva') db.prepare('UPDATE leads SET renewal_for = campaign_end WHERE id = ?').run(lead.id);
     if (outcome === 'renovo') {
       // Renovó: se registra el monto y, si viene, el nuevo fin de campaña (arranca otro ciclo de renovación).
@@ -1245,7 +1292,7 @@ function createApp({ db, config }) {
         SUM(l.profile = 'cumple') AS cumple, SUM(l.status = 'vendido') AS vendidos
       FROM leads l LEFT JOIN catalog_items c ON c.id = ${col} ${sql} GROUP BY ${col} ORDER BY n DESC`).all(...params);
     // Cruces etapa × dimensión para las barras de batería del Resumen.
-    const byStage = (keyExpr, join) => db.prepare(`SELECT ${keyExpr} AS key, ${STAGE_SQL} AS stage, COUNT(*) AS n
+    const byStage = (keyExpr, join) => db.prepare(`SELECT ${keyExpr} AS key, ${stageSql()} AS stage, COUNT(*) AS n
       FROM leads l ${join} ${sql} GROUP BY 1, 2`).all(...params);
     const since = new Date(Date.now() - 29 * 86400e3).toISOString().slice(0, 10);
     const byDay = db.prepare(`SELECT substr(l.created_at, 1, 10) AS day, COUNT(*) AS n FROM leads l
@@ -1257,6 +1304,8 @@ function createApp({ db, config }) {
       COALESCE(SUM(COALESCE(l.contacted_at, l.profiled_at, l.quoted_at, l.won_at) IS NOT NULL), 0) AS contactados,
       COALESCE(SUM(COALESCE(l.profiled_at, l.quoted_at, l.won_at) IS NOT NULL), 0) AS perfilados,
       COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados,
+      COALESCE(SUM(COALESCE(l.appt_set_at, l.appt_done_at) IS NOT NULL), 0) AS citas,
+      COALESCE(SUM(l.appt_done_at IS NOT NULL), 0) AS asistieron,
       COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
       COALESCE(SUM(l.status = 'declinado'), 0) AS declinados,
       COALESCE(SUM(l.sale_amount), 0) AS ingresos,
@@ -1374,7 +1423,7 @@ function createApp({ db, config }) {
       productStages: byStage("COALESCE(c.name, 'Sin producto')", 'LEFT JOIN catalog_items c ON c.id = l.product_id'),
       channelStages: byStage("COALESCE(c.name, 'Sin dato')", `LEFT JOIN catalog_items c ON c.id = ${CHANNEL_EXPR}`),
       sellerStages: byStage("COALESCE(u.name, 'Sin asignar')", 'LEFT JOIN users u ON u.id = l.assigned_to'),
-      total, byStatus: group('l.status'), byStage: group(STAGE_SQL), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
+      total, byStatus: group('l.status'), byStage: group(stageSql()), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
       byChannel: byItem(CHANNEL_EXPR, 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
     });
   });
@@ -1486,12 +1535,13 @@ function createApp({ db, config }) {
     const company = getSetting(db, 'company_name') || 'Mi empresa';
     const term = FOLLOWUP.term();
     const leads = db.prepare(`${leadSelect} ORDER BY l.created_at`).all();
-    const answer = (l, k) => (l[k] ? QUICK_PROFILE[k].options[l[k]] || l[k] : '');
+    const answer = (l, k) => FOLLOWUP.answerLabel(k, l[k]);
+    const qp = FOLLOWUP.quickProfile(); const stageLabels = labels();
     const head = ['ID', 'Nombre', 'Teléfono', 'Email', 'Clasificación', 'Perfil', 'Producto', 'Cantidad', 'Monto cotizado', 'Monto vendido',
       'Renovaciones', `Fin de ${term}`, 'Motivo de declinación', 'Volver a contactar', 'Vendedor', 'Llegó por', 'Campaña', 'Canal', 'Anuncio',
-      QUICK_PROFILE.decision_maker.label, QUICK_PROFILE.budget_status.label, QUICK_PROFILE.start_window.label,
+      qp.decision_maker.label, qp.budget_status.label, qp.start_window.label,
       'Toques', 'Último toque', 'Próximo paso', 'Fecha del próximo paso', 'Recibido', 'Contestó', 'Cotizado', 'Vendido', 'Mensaje', 'Última nota'];
-    const row = (l) => [l.id, l.name || '', l.phone || '', l.email || '', LABELS[FOLLOWUP.stageOf(l)] || l.status, LABELS[l.profile] || l.profile,
+    const row = (l) => [l.id, l.name || '', l.phone || '', l.email || '', stageLabels[FOLLOWUP.stageOf(l)] || l.status, LABELS[l.profile] || l.profile,
       l.product_name || '', l.quantity ?? '', l.quote_amount ?? '', l.sale_amount ?? '', l.renewal_amount || '', day(l.campaign_end),
       l.decline_reason || '', day(l.recontact_at), l.assigned_name || 'Sin asignar', LABELS[l.source] || l.source, l.campaign || '', l.channel_name || '',
       l.utm_content || '', answer(l, 'decision_maker'), answer(l, 'budget_status'), answer(l, 'start_window'),
@@ -1528,7 +1578,7 @@ function createApp({ db, config }) {
       { name: 'Toda la cartera', rows: [head, ...leads.map(row)] },
       ...groups.map((g) => ({ name: g.name, rows: [head, ...g.list.map(row)] })),
       { name: 'Toques', rows: [['Fecha', 'ID', 'Contacto', 'Toque', 'Medio', 'Resultado', 'Monto', 'Registró'],
-        ...touches.map((t) => [when(t.created_at), t.lead_id, t.lead || '', t.n, LABELS[t.channel] || t.channel, TOUCH_OUTCOMES[t.outcome] || t.outcome, t.amount ?? '', t.who || ''])] },
+        ...touches.map((t) => [when(t.created_at), t.lead_id, t.lead || '', t.n, LABELS[t.channel] || t.channel, outcomeLabels()[t.outcome] || t.outcome, t.amount ?? '', t.who || ''])] },
       { name: 'Historial', rows: [['Fecha', 'ID', 'Contacto', 'Tipo', 'Detalle', 'Usuario'],
         ...events.map((e) => [when(e.created_at), e.lead_id, e.lead || '', e.type, e.content || '', e.who || ''])] },
       { name: 'Productos', rows: [['Producto', 'Precio de lista', 'Precio fijo', 'En uso'],

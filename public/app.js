@@ -10,7 +10,7 @@ const canAssign = () => Boolean(state.me && (state.me.role === 'operador' || sta
 // Atiende leads: el vendedor, o cualquier otro con "También atiende leads" (por ejemplo, el gerente de un equipo chico).
 const sells = () => Boolean(state.me && (state.me.role === 'vendedor' || state.me.sells));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
-const DARK_TEXT = new Set(['cotizando', 'declinado_sin']);
+const DARK_TEXT = new Set(['cotizando', 'declinado_sin', 'cita']);
 const stageOf = (l) => F.stageOf(l);
 const colorVar = (key) => `--c: var(--${key})`;
 const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
@@ -21,7 +21,7 @@ const money = (v) => (v == null ? '—' : Number(v).toLocaleString('es-MX', { st
 const PLATFORM = 'Maass Leads';
 function applyCompany(c) {
   state.company = c;
-  F.configure({ term: c.term, renewals: c.renewals });
+  F.configure({ term: c.term, renewals: c.renewals, industry: c.industry, appointments: c.appointments });
   document.querySelectorAll('.brand-logo').forEach((img) => { img.classList.toggle('hidden', !c.logo); if (c.logo) img.src = c.logo; else img.removeAttribute('src'); });
   // Con logo, arriba se ve el logo; sin logo, el nombre. En la entrada se ven los dos.
   document.querySelectorAll('.company-name').forEach((el) => {
@@ -556,12 +556,8 @@ function nextAction(l) {
   const a = F.nextAction(l);
   return a ? { ...a, days: F.dayDiff(a.due) } : null;
 }
-// Resultados posibles del siguiente toque. En Vendido dependen de lo que toque: referidos o renovación.
-function outcomesFor(l) {
-  if (l.status !== 'vendido') return state.meta.touches.byStatus[l.status] || [];
-  const k = F.nextAction(l)?.kind;
-  return k === 'postventa' ? ['referidos'] : k === 'renovacion' ? ['renovo', 'no_renueva'] : [];
-}
+// Resultados posibles del siguiente toque (public/followup.js): dependen de la etapa, de la cita y, en Vendido, de lo que toque.
+const outcomesFor = (l) => F.outcomesFor(l) || [];
 const hhmm = (d) => new Date(d).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
 // Cuándo toca, con hora si fue acordado con el cliente.
 function whenLabel(a) {
@@ -576,7 +572,7 @@ const whenText = (days) => (days < 0 ? `${-days} ${days === -1 ? 'día' : 'días
 function waHref(l) {
   const a = nextAction(l);
   const kind = a ? a.kind : l.status === 'declinado' || l.status === 'vendido' ? null : l.contacted_at ? 'seguimiento' : 'cadencia';
-  return F.waLink(l.phone, kind ? state.waTemplates[kind] : '', { nombre: l.name, vendedor: state.me.name, producto: l.product_name, empresa: state.company.name });
+  return F.waLink(l.phone, kind ? state.waTemplates[kind] : '', { nombre: l.name, vendedor: state.me.name, producto: l.product_name, empresa: state.company.name, fecha: F.apptWhen(l.appt_at) });
 }
 const WA_ICON = '<svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.8-1.2.2-.6.2-1.1.1-1.2l-.5-.3Z"/></svg>';
 const waButton = (l, small = false) => {
@@ -597,7 +593,7 @@ function touchBadge(l) {
     if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
     return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
   }
-  return `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${icon(a.kind === 'cotizacion' ? 'file' : 'phone', 13)} ${esc(a.label)} · ${whenLabel(a)}</span>`;
+  return `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${icon(a.kind === 'cotizacion' ? 'file' : ['cita', 'asistencia', 'reagendar'].includes(a.kind) ? 'calendar' : 'phone', 13)} ${esc(a.label)} · ${whenLabel(a)}</span>`;
 }
 
 // Aviso arriba del tablero con lo vencido y lo de hoy (toques, seguimientos y cotizaciones).
@@ -632,7 +628,9 @@ function renderToday() {
     nuevo: 'Recién llegados: nadie los ha tocado. Entre más rápido el primer contacto, más cierres',
     contactando: 'Ya se intentó y aún no contestan: 5 toques en 12 días',
     contesto: 'Contestaron: toca perfilar',
-    nuevo_perfil: 'Cumplen perfil: toca enviar la cotización',
+    nuevo_perfil: F.appointments() ? `Cumplen perfil: toca agendar la ${F.apptNoun()}` : 'Cumplen perfil: toca enviar la cotización',
+    cita: `Confirmar la ${F.apptNoun()} un día antes; pasada la hora, anotar si llegó. Si no llegó, reagendar`,
+    asistio: 'Ya vinieron: toca cotizar o cerrar',
     cotizando: 'Seguimiento de la cotización a los 2, 5 y 10 días',
     vendido: `Clientes: preguntar cómo va ${F.theTerm()} y pedir referidos${renewals() ? '; ofrecer la renovación a tiempo' : ''}`,
     declinado_perfil: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
@@ -641,7 +639,7 @@ function renderToday() {
   const canTouch = (l) => sells() && l.assigned_to === state.me.id; // igual que el servidor
   const row = ({ l, a, req }) => {
     // "Volver a contactar": los botones son los del lead ya reactivado; al registrar el toque se reactiva solo.
-    const outcomes = l.status === 'declinado' ? state.meta.touches.byStatus[l.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo'] : outcomesFor(l);
+    const outcomes = l.status === 'declinado' ? outcomesFor({ ...l, status: l.profile === 'cumple' ? 'nuevo_perfil' : 'nuevo' }) : outcomesFor(l);
     return `<div class="today-row" data-id="${l.id}">
       <div class="today-main">
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
@@ -746,6 +744,9 @@ function wireQuickDates(root) {
 }
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
+// Fecha y hora de la cita, con botones rápidos (mañana o pasado a las 10:00, se puede cambiar).
+const apptField = (required, text = `¿Cuándo es la ${F.apptNoun()}?`, note = true) => `<label>${esc(text)}<input type="datetime-local" name="appt_at" ${required ? 'required' : ''}></label>
+  ${note ? '<label>Nota (opcional)<input name="note" maxlength="300" placeholder="Lo que conviene recordar para ese día"></label>' : ''}`;
 const moneyField = (name, text, required = false) => `<label>${text}<input name="${name}" inputmode="decimal" placeholder="Ej. 60000" ${required ? 'required pattern="[$0-9., ]*[1-9][$0-9., ]*"' : ''}></label>`;
 const dateField = (name, text) => `<label>${text}<input type="date" name="${name}"></label>`;
 // Producto, cantidad y monto al cotizar o vender. Con precio fijo el monto sale de precio × cantidad y el vendedor no lo cambia.
@@ -811,6 +812,10 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
     vendido: ['¡Venta cerrada!', `${priceFields(l, 'sale_amount', '¿De cuánto fue la venta?')}${renewals() ? dateField('campaign_end', `¿Cuándo termina ${F.theTerm()}? (para ofrecer la renovación a tiempo)`) : ''}`],
     referidos: ['¿Cómo va su campaña?', '<label>¿Te recomendó a alguien?<input name="note" maxlength="300" placeholder="Nombre y teléfono, si te lo dio"></label>'],
     renovo: ['¡Renovó!', `${moneyField('renewal_amount', '¿Por cuánto?')}${dateField('campaign_end', `¿Hasta cuándo va ahora ${F.theTerm()}?`)}`],
+    cita_agendada: [`${cap(F.apptNoun())} agendada`, apptField(true)],
+    reagendo: ['Nueva fecha', apptField(true)],
+    no_asistio: [`No llegó a la ${F.apptNoun()}`, `${apptField(false, 'Si ya la reagendaste, ¿para cuándo quedó? (si no, déjalo vacío y mañana te toca reagendar)', false)}<label>¿Qué te dijo?<input name="note" maxlength="300" placeholder="Ej. Se le complicó, pide otro día"></label>`],
+    asistio: [`Llegó a la ${F.apptNoun()}`, agreementFields()],
   };
   if (forms[outcome]) {
     const pending = askForm(forms[outcome][0], forms[outcome][1]);
@@ -833,6 +838,7 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
     // La hora la pone el navegador del vendedor: se manda en ISO para que no dependa de la zona del servidor.
     if (body.note && body.next_step_at) body.next_step = body.note;
     if (body.next_step_at) body.next_step_at = new Date(body.next_step_at).toISOString();
+    if (body.appt_at) body.appt_at = new Date(body.appt_at).toISOString();
   }
   if (outcome === 'rechazo') {
     const reason = await ask('¿Por qué no le interesó?', { options: state.meta.declineReasons.filter((r) => r !== state.meta.noAnswer && r !== state.meta.ghosted), okLabel: 'Declinar' });
@@ -971,7 +977,7 @@ function marketingMetrics(st) {
   const sum = (k) => paid.reduce((t, r) => t + (r[k] || 0), 0);
   const per = (k) => (inv && sum(k) ? inv / sum(k) : null);
   return { leads: f.recibidos, perfil: f.recibidos ? (f.perfilados / f.recibidos) * 100 : null, inv: inv || null, paid: paid.length,
-    cpl: per('recibidos'), cplq: per('perfilados'), cpc: per('cerrados'), roas: inv && sum('ingresos') ? sum('ingresos') / inv : null, sinOrigen: f.sin_origen || 0 };
+    cpl: per('recibidos'), cplq: per('perfilados'), cpc: per('cerrados'), cpa: per('citas'), cpv: per('asistieron'), roas: inv && sum('ingresos') ? sum('ingresos') / inv : null, sinOrigen: f.sin_origen || 0 };
 }
 // Flecha contra el periodo anterior. lowerIsBetter para costos; points para porcentajes.
 function delta(cur, old, text, { lowerIsBetter = false, points = false, neutral = false } = {}) {
@@ -1024,9 +1030,12 @@ async function renderStats() {
     const pf = prev?.funnel; const vs = prevQ?.text || '';
     const dv = (cur, old, opts) => (prev ? delta(cur, old, vs, opts) : '');
     const conv = (x) => (x && x.recibidos ? (x.cerrados / x.recibidos) * 100 : null);
-    body = `<div class="kpis" style="--cols:4">
+    const appt = F.appointments();
+    body = `<div class="kpis" style="--cols:${appt ? 5 : 4}">
       ${kpi('inbox', 'Recibidos', f.recibidos, 'leads con los filtros actuales', 'var(--f-recibidos)', '', dv(f.recibidos, pf?.recibidos))}
       ${kpi('chat', 'Contestaron', f.contactados, `${pct(f.contactados, f.recibidos)}% de los recibidos`, 'var(--f-contactados)', '', dv(f.contactados, pf?.contactados))}
+      ${appt ? kpi('calendar', `${cap(F.apptPlural())} agendadas`, f.citas, `${pct(f.citas, f.contactados)}% de los que contestaron`, 'var(--cita)', '', dv(f.citas, pf?.citas)) : ''}
+      ${appt ? kpi('userCheck', 'Llegaron', f.asistieron, `${pct(f.asistieron, f.citas)}% de lo agendado`, 'var(--asistio)', '', dv(f.asistieron, pf?.asistieron)) : ''}
       ${kpi('file', 'Cotizados', f.cotizados, `${pct(f.cotizados, f.recibidos)}% de los recibidos`, 'var(--f-cotizados)', '', dv(f.cotizados, pf?.cotizados))}
       ${kpi('check', 'Cerrados', f.cerrados, `${pct(f.cerrados, f.cotizados)}% de lo cotizado`, 'var(--f-cerrados)', '', dv(f.cerrados, pf?.cerrados))}
       ${kpi('trend', 'Conversión', pct(f.cerrados, f.recibidos), 'de los recibidos se cierra', 'var(--accent)', '%', dv(conv(f), conv(pf), { points: true }))}
@@ -1048,12 +1057,14 @@ async function renderStats() {
     const m = marketingMetrics(s); const o = prev ? marketingMetrics(prev) : null; const vs = prevQ?.text || '';
     const d = (k, opts) => (o ? delta(m[k], o[k], vs, opts) : '');
     const moneyOr = (v) => (v == null ? '—' : money(v));
-    body = `<div class="kpis" style="--cols:4">
+    body = `<div class="kpis" style="--cols:${F.appointments() ? 5 : 4}">
       ${textKpi('inbox', 'Leads', String(m.leads), 'con los filtros actuales', 'var(--f-recibidos)', d('leads'))}
       ${textKpi('userCheck', 'Cumplen perfil', m.perfil == null ? '—' : `${Math.round(m.perfil)}%`, `${f.perfilados} de ${f.recibidos} leads`, 'var(--cumple)', d('perfil', { points: true }))}
       ${textKpi('money', 'Inversión', moneyOr(m.inv), m.inv ? `${m.paid} ${m.paid === 1 ? 'campaña' : 'campañas'} con inversión` : 'captúrala en Configuración', 'var(--llamada)', d('inv', { neutral: true }))}
       ${textKpi('inbox', 'Costo por lead', moneyOr(m.cpl), 'de las campañas con inversión', 'var(--f-recibidos)', d('cpl', { lowerIsBetter: true }))}
       ${textKpi('userCheck', 'Costo por lead con perfil', moneyOr(m.cplq), 'la señal temprana de calidad', 'var(--nuevo_perfil)', d('cplq', { lowerIsBetter: true }))}
+      ${F.appointments() ? textKpi('calendar', `Costo por ${F.apptNoun()}`, moneyOr(m.cpa), 'agendada, de las campañas con inversión', 'var(--cita)', d('cpa', { lowerIsBetter: true })) : ''}
+      ${F.appointments() ? textKpi('userCheck', 'Costo por asistencia', moneyOr(m.cpv), `por cada quien llegó a la ${F.apptNoun()}`, 'var(--asistio)', d('cpv', { lowerIsBetter: true })) : ''}
       ${textKpi('check', 'Costo por cierre', moneyOr(m.cpc), 'de las campañas con inversión', 'var(--f-cerrados)', d('cpc', { lowerIsBetter: true }))}
       ${textKpi('trend', 'Retorno', m.roas == null ? '—' : `${m.roas.toFixed(1)}x`, 'ventas ÷ inversión', 'var(--accent)', d('roas'))}
       ${textKpi('target', 'Leads sin origen', String(m.sinOrigen), m.sinOrigen ? `${pct(m.sinOrigen, m.leads)}%: inversión que no se puede medir` : 'todos tienen origen', m.sinOrigen ? 'var(--declinado)' : 'var(--cumple)')}
@@ -1149,21 +1160,27 @@ function sellerMonth(leads, s) {
   return `<div class="hero">${icon('sparkles', 22)}<div><h2>Tu mes</h2><p>${parts.join(' ')}</p></div></div>`;
 }
 
-const FUNNEL = [
+const FUNNEL_BASE = [
   ['recibidos', 'Recibidos'], ['contactados', 'Contestaron'], ['perfilados', 'Perfilados'], ['cotizados', 'Cotizados'], ['cerrados', 'Cerrados'],
 ];
+// Con citas: Recibidos, Contestaron, Agendaron, Llegaron, Cotizados, Cerrados.
+const funnelSteps = () => (F.appointments()
+  ? [FUNNEL_BASE[0], FUNNEL_BASE[1], ['citas', `Agendaron ${F.apptNoun()}`], ['asistieron', 'Llegaron'], FUNNEL_BASE[3], FUNNEL_BASE[4]]
+  : FUNNEL_BASE);
 const pctOf = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
 // Embudo: barras centradas que se angostan; a la derecha el total y entre pasos cuántos avanzan.
 function funnelChart(f) {
   const top = f.recibidos || 1;
+  const FUNNEL = funnelSteps();
   return `<div class="funnel">${FUNNEL.map(([k, name], i) => {
     const prev = i ? f[FUNNEL[i - 1][0]] : null;
-    const step = i ? `<div class="f-step"><span>↓ ${pctOf(f[k], prev)}% avanza</span></div>` : '';
+    // Se puede cotizar sin cita: si un paso tiene más que el anterior, no se dice "% avanza".
+    const step = i ? `<div class="f-step"><span>${f[k] <= prev ? `↓ ${pctOf(f[k], prev)}% avanza` : '↓'}</span></div>` : '';
     const w = Math.max((f[k] / top) * 100, f[k] ? 3 : 0);
     return `${step}<div class="f-row">
       <span class="f-name">${name}</span>
-      <div class="f-track"><div class="f-bar ${k === 'cotizados' ? 'dark-text' : ''}" style="--w:${w}%; --c:var(--f-${k})"
+      <div class="f-track"><div class="f-bar ${['cotizados', 'citas'].includes(k) ? 'dark-text' : ''}" style="--w:${w}%; --c:var(--f-${k})"
         data-tip="${esc(`${name}: ${f[k]}
 ${pctOf(f[k], f.recibidos)}% de los recibidos${i ? `
 ${pctOf(f[k], prev)}% del paso anterior` : ''}`)}">
@@ -1564,21 +1581,35 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawe
 // Pasos del embudo en la ficha del lead, con la fecha en que se alcanzó cada uno.
 function milestones(l) {
   // Igual que el embudo: llegar a un paso cuenta los anteriores; la fecha es la propia de cada paso si se registró.
-  const reached = [true, !!(l.contacted_at || l.profiled_at || l.quoted_at || l.won_at),
+  let reached = [true, !!(l.contacted_at || l.profiled_at || l.quoted_at || l.won_at),
     !!(l.profiled_at || l.quoted_at || l.won_at), !!(l.quoted_at || l.won_at), !!l.won_at];
-  const dates = [l.created_at, l.contacted_at, l.profiled_at, l.quoted_at, l.won_at];
-  const steps = [['recibidos', 'Recibido'], ['contactados', 'Contestó'], ['perfilados', 'Perfilado'], ['cotizados', 'Cotizado'], ['cerrados', 'Cerrado']]
-    .map(([k, name], i) => [k, name, reached[i] && (dates[i] || true)]);
+  let dates = [l.created_at, l.contacted_at, l.profiled_at, l.quoted_at, l.won_at];
+  let names = [['recibidos', 'Recibido'], ['contactados', 'Contestó'], ['perfilados', 'Perfilado'], ['cotizados', 'Cotizado'], ['cerrados', 'Cerrado']];
+  // Con citas, en lugar de "Perfilado" se ve si agendó y si llegó (solo con lo que de verdad pasó).
+  if (F.appointments()) {
+    reached = [reached[0], reached[1], !!(l.appt_set_at || l.appt_done_at), !!l.appt_done_at, reached[3], reached[4]];
+    dates = [dates[0], dates[1], l.appt_set_at, l.appt_done_at, dates[3], dates[4]];
+    names = [names[0], names[1], ['citas', `${cap(F.apptNoun())}`], ['asistieron', 'Llegó'], names[3], names[4]];
+  }
+  const steps = names.map(([k, name], i) => [k, name, reached[i] && (dates[i] || true)]);
   return `<div class="tracker">${steps.map(([k, name, at]) => `<div class="t-step ${at ? 'done' : ''}" style="--c:var(--f-${k})">
       <span class="t-dot">${at ? '✓' : ''}</span><span class="t-name">${name}</span>
       <span class="t-date">${at && typeof at === 'string' ? new Date(at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : ''}</span></div>`).join('')}
     </div>`;
 }
 
+// La cita del lead en la ficha: cuándo es y cómo va. Se agenda, confirma y cambia con los toques.
+function apptNote(l) {
+  if (!F.appointments() || !l.appt_at) return '';
+  const st = { agendada: 'falta confirmar', confirmada: 'confirmada', asistio: 'llegó', no_asistio: 'no llegó' }[l.appt_state] || '';
+  return `<p class="agreed-note appt-note">${icon('calendar', 15)} <span><b>${esc(cap(F.apptNoun()))}:</b>
+    ${new Date(l.appt_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${st ? ` · ${st}` : ''}</span></p>`;
+}
+
 // Panel de toques: los 5 de la cadencia (y los que sigan) y el registro del siguiente.
 function touchesPanel(l, touches) {
   const t = state.meta.touches;
-  const slots = Math.max(t.max, touches.length + (t.byStatus[l.status] ? 1 : 0));
+  const slots = Math.max(t.max, touches.length + (F.outcomesFor(l) ? 1 : 0));
   const dots = Array.from({ length: slots }, (_, i) => {
     const tt = touches[i];
     const planned = new Date(new Date(l.created_at).getTime() + (t.cadence[i] ?? t.cadence.at(-1)) * DAY);
@@ -1639,6 +1670,7 @@ async function openLead(id) {
     ${can('gerente') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
       ? `<button type="button" class="ghost small ask-followup" id="req-ask">${icon('sparkles', 14)} Pedir seguimiento a ${esc(l.assigned_name)}</button>` : ''}
     ${quickProfileStrip(l)}
+    ${apptNote(l)}
     ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
       ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
     <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${adLine ? ` · ${esc(adLine)}` : ''}</p>
@@ -2098,7 +2130,7 @@ async function salesReport(range, kind) {
       a.renovaciones.map((x) => `<tr>${rCell(rDay(x.at))}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(money(x.amount))}</tr>`))}` : ''}
     <h2>Por qué se perdieron</h2>${rTable(['Motivo', 'Leads'], a.motivos.map((r) => `<tr>${rCell(esc(r.key))}${rCell(r.n)}</tr>`), 'Sin declinados en el periodo')}
     <h2>Embudo de los leads que llegaron en el periodo</h2>${rTable(['Paso', 'Leads', '% de los recibidos'],
-      FUNNEL.map(([k, n]) => `<tr>${rCell(n)}${rCell(f[k])}${rCell(`${pctOf(f[k], f.recibidos)}%`)}</tr>`))}
+      funnelSteps().map(([k, n]) => `<tr>${rCell(n)}${rCell(f[k])}${rCell(`${pctOf(f[k], f.recibidos)}%`)}</tr>`))}
     <h2>Cotizaciones abiertas hoy</h2>${rTable([...(seller ? [] : ['Vendedor']), 'Vivas', 'Frías (más de 15 días sin contacto)', 'Venta esperada'],
       myPipe.map((r) => `<tr>${seller ? '' : rCell(esc(r.key))}${rCell(`${r.vivas} · ${money(r.vivas_monto)}`)}${rCell(r.frias ? `${r.frias} · ${money(r.frias_monto)}` : '0')}${rCell(r.esperado == null ? 'sin historial suficiente' : money(r.esperado))}</tr>`), 'Sin cotizaciones abiertas')}
     ${team ? `<h2>Cotizaciones más grandes hoy</h2>${rTable(['Cliente', 'Vendedor', 'Monto', 'Último contacto'],
@@ -2483,6 +2515,10 @@ async function renderSettings() {
         <div class="price-row">${co.logo ? `<img class="logo-preview" src="${esc(co.logo)}" alt="Logo actual">` : '<span class="muted">Sin logo</span>'}
           <input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp" aria-label="Subir logo">
           ${co.logo ? '<button type="button" class="ghost small" id="logo-remove">Quitar logo</button>' : ''}</div>
+        <label>Giro de tu negocio
+          <select name="industry" id="industry-select">${state.meta.industries.map((g) => `<option value="${g.key}" ${g.key === (co.industry || 'general') ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
+        <p class="muted small-note" id="industry-help"></p>
+        <label class="inline-check"><input type="checkbox" name="appointments" ${co.appointments ? 'checked' : ''}> Mido mis ventas en citas: el vendedor agenda, se le recuerda confirmar un día antes, anota si llegó y el Resumen muestra cuántos agendan, cuántos llegan y cuánto cuesta cada cita</label>
         <label>¿Cómo le llamas a lo que vendes y se renueva?
           <select name="term">${Object.entries(F.TERMS).map(([k, [w]]) => `<option value="${k}" ${k === co.term ? 'selected' : ''}>${esc(cap(w))}</option>`).join('')}</select></label>
         <label class="inline-check"><input type="checkbox" name="renewals" ${co.renewals ? 'checked' : ''}> Mis clientes renuevan: al cerrar una venta se pregunta cuándo termina y se avisa al vendedor 30 días antes para ofrecer la renovación</label>
@@ -2521,9 +2557,10 @@ async function renderSettings() {
     <div class="card">
       ${cardTitle('chat', 'var(--whatsapp)', 'Mensajes de WhatsApp')}
       <p class="muted">El botón de WhatsApp abre el chat del cliente con este mensaje ya escrito, según lo que toque con el lead. El vendedor lo puede cambiar antes de enviarlo.
-        Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code>, <code>{producto}</code>, <code>{empresa}</code> y <code>{servicio}</code> (${esc(F.term())}).</p>
+        Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code>, <code>{producto}</code>, <code>{empresa}</code> y <code>{servicio}</code> (${esc(F.term())})${F.appointments() ? `, <code>{cita}</code> (${esc(F.apptNoun())}) y <code>{fecha}</code>` : ''}.</p>
       <form id="wa-form" class="wa-form">
-        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', `Cliente: cómo va ${F.theTerm()} y referidos`], ...(renewals() ? [['renovacion', 'Cliente: ofrecer la renovación']] : [])]
+        ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', `Cliente: cómo va ${F.theTerm()} y referidos`], ...(renewals() ? [['renovacion', 'Cliente: ofrecer la renovación']] : []),
+          ...(F.appointments() ? [['cita', `Confirmar la ${F.apptNoun()} ({fecha}: cuándo es)`], ['reagendar', `No llegó: reagendar la ${F.apptNoun()}`]] : [])]
           .map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000">${esc(s.wa_templates[k])}</textarea></label>`).join('')}
         <p class="muted small-note">Si dejas uno vacío, vuelve al mensaje de fábrica.</p>
         <button type="submit">Guardar mensajes</button>
@@ -2628,11 +2665,30 @@ async function renderSettings() {
     e.preventDefault();
     const f = e.target;
     try {
-      applyCompany(await api('/api/company', { method: 'PATCH', body: { name: f.elements.name.value, term: f.elements.term.value, renewals: f.elements.renewals.checked } }));
+      applyCompany(await api('/api/company', { method: 'PATCH', body: { name: f.elements.name.value, industry: f.elements.industry.value,
+        appointments: f.elements.appointments.checked, term: f.elements.term.value, renewals: f.elements.renewals.checked } }));
+      // Etapas, preguntas del perfil y nombres dependen del giro.
+      state.meta = await api('/api/meta');
       toast('Datos de la empresa guardados', 'ok');
       renderSettings();
     } catch (err) { toast(err.message, 'error'); }
   });
+  // Al elegir giro se ponen sus valores (citas, cómo se le llama a lo que vende, renovaciones); se pueden ajustar antes de guardar.
+  const indSel = $('#industry-select');
+  if (indSel) {
+    const f = indSel.form;
+    const help = () => {
+      const g = state.meta.industries.find((x) => x.key === indSel.value);
+      const qp = F.INDUSTRIES[indSel.value].profile;
+      $('#industry-help').innerHTML = `${esc(g.help)} Cambiarlo no borra nada de lo que ya capturaste.<br>Para perfilar se pregunta: ${Object.values(qp).map((q) => esc(q.label)).join(' · ')}`;
+    };
+    indSel.addEventListener('change', () => {
+      const g = state.meta.industries.find((x) => x.key === indSel.value);
+      f.elements.appointments.checked = g.appointments; f.elements.term.value = g.term; f.elements.renewals.checked = g.renewals;
+      help();
+    });
+    help();
+  }
   // El logo se reduce en el navegador (máx. 480×120) para que pese poco y se vea bien en cualquier lado.
   $('#logo-file')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];

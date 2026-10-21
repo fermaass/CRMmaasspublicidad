@@ -10,12 +10,15 @@
   --nuevo: #579bfc; --nuevo_perfil: #9d50dd; --cotizando: #f59e0b; --declinado: #ff5a8a; --vendido: #037f4c;
   /* Etapas que se ven: Contactando (se intentó, no contesta), Contestó (igual que el paso del embudo) y declinados con / sin perfil */
   --contactando: #3b4fc4; --contesto: #00a39b; --declinado_perfil: #ff5a8a; --declinado_sin: #c3c6d4;
+  /* Con citas (según el giro): Cita agendada y Asistió */
+  --cita: #ffcb00; --asistio: #0086c0;
   /* Perfil */
   --cumple: #037f4c; --no_cumple: #ff5a8a; --sin_perfilar: var(--empty);
   /* Origen */
   --formulario: #6161ff; --whatsapp: #00a39b; --llamada: #ff7a00; --otro: #e2445c;
   /* Pasos del embudo */
   --f-recibidos: #579bfc; --f-contactados: #00a39b; --f-perfilados: #9d50dd; --f-cotizados: #f59e0b; --f-cerrados: #037f4c;
+  --f-citas: var(--cita); --f-asistieron: var(--asistio);
   --radius: 14px; --radius-lg: 18px;
   --shadow: 0 1px 2px rgba(31, 36, 51, .04), 0 4px 16px rgba(31, 36, 51, .05);
   --shadow-lift: 0 10px 28px rgba(31, 36, 51, .12);
@@ -334,7 +337,7 @@ td.status-cell span.dark-text { color: var(--text); }
 .small-note { font-size: 12px; margin: 8px 0 0; }
 
 /* Pasos en la ficha del lead */
-.tracker { display: grid; grid-template-columns: repeat(5, 1fr); margin: 12px 0 8px; }
+.tracker { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; margin: 12px 0 8px; }
 .t-step { display: grid; justify-items: center; text-align: center; gap: 2px; position: relative; font-size: 12px; }
 .t-step::before { content: ""; position: absolute; top: 11px; left: -50%; width: 100%; height: 3px; background: var(--line); z-index: 0; }
 .t-step:first-child::before { display: none; }
@@ -382,6 +385,8 @@ button.outcome.sin_respuesta { background: #fff; color: var(--text); border: 1.5
 button.outcome.cumple, button.outcome.cotizado, button.outcome.vendido { background: linear-gradient(135deg, #037f4c, #1fa56b); }
 button.outcome.conversacion, button.outcome.seguimiento { background: linear-gradient(135deg, #00a39b, #2cc4b5); }
 button.outcome.no_cumple, button.outcome.rechazo { background: linear-gradient(135deg, #d9304e, #f0607a); }
+button.outcome.cita_agendada, button.outcome.confirmo, button.outcome.asistio, button.outcome.reagendo { background: linear-gradient(135deg, #0077b0, #1d9ad6); }
+button.outcome.no_asistio { background: #fff; color: var(--text); border: 1.5px solid #d5dae6; }
 #modal-select { width: 100%; }
 
 .tip { position: fixed; z-index: 40; pointer-events: none; background: var(--nav); color: #fff; font-size: 12px; line-height: 1.4;

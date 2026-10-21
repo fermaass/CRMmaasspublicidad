@@ -11,7 +11,7 @@ const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
 const LABELS = {
   nuevo: 'Nuevo', nuevo_perfil: 'Cumple perfil', cotizando: 'Cotizando', declinado: 'Declinado', vendido: 'Vendido',
-  contactando: 'Contactando', contesto: 'Contestó', declinado_perfil: 'Declinado · con perfil', declinado_sin: 'Declinado · sin perfil',
+  contactando: 'Contactando', contesto: 'Contestó', cita: 'Cita agendada', asistio: 'Asistió', declinado_perfil: 'Declinado · con perfil', declinado_sin: 'Declinado · sin perfil',
   sin_perfilar: 'Sin perfilar', cumple: 'Cumple perfil', no_cumple: 'No cumple',
   formulario: 'Formulario', whatsapp: 'WhatsApp', llamada: 'Llamada', otro: 'Otro', correo: 'Correo', visita: 'Visita',
 };
@@ -36,23 +36,19 @@ const TOUCH_OUTCOMES = {
   referidos: 'Ya lo contacté (referidos)',
   renovo: 'Renovó',
   no_renueva: 'No renueva',
+  // Con citas (según el giro); el nombre exacto sale de FOLLOWUP.apptOutcomes().
+  cita_agendada: 'Agendó cita',
+  confirmo: 'Confirmó la cita',
+  asistio: 'Asistió',
+  no_asistio: 'No llegó',
+  reagendo: 'Cambió la fecha',
 };
-// Qué resultados tienen sentido según la etapa en que va el lead.
-const OUTCOMES_BY_STATUS = {
-  // Desde el primer toque se puede cotizar o cerrar: el lead salta a esa etapa (los primeros cuatro son los que se ven en Mi día).
-  nuevo: ['sin_respuesta', 'conversacion', 'cumple', 'cotizado', 'no_cumple', 'rechazo', 'vendido'],
-  nuevo_perfil: ['sin_respuesta', 'seguimiento', 'cotizado', 'rechazo', 'vendido'],
-  cotizando: ['sin_respuesta', 'seguimiento', 'vendido', 'rechazo'],
-  vendido: ['referidos', 'renovo', 'no_renueva'], // postventa: cuál aplica depende de lo que toque (ver FOLLOWUP.nextAction)
-};
+// Qué resultados tienen sentido según la etapa (con citas cambian: FOLLOWUP.outcomesFor).
+const OUTCOMES_BY_STATUS = FOLLOWUP.OUTCOMES;
 const NO_ANSWER = 'No contestó (5 toques)';
 const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
-// Perfil rápido: tres preguntas de un toque, todas opcionales.
-const QUICK_PROFILE = {
-  decision_maker: { label: '¿Habla con quien decide?', options: { si: 'Sí, decide', no: 'No, decide otro' } },
-  budget_status: { label: '¿Tiene presupuesto?', options: { si: 'Sí tiene', por_definir: 'Por definir' } },
-  start_window: { label: '¿Cuándo arranca?', options: { mes: 'Este mes', trimestre: '1 a 3 meses', despues: 'Más adelante' } },
-};
+// Perfil rápido: tres preguntas de un toque, todas opcionales. Lo que se pregunta cambia por giro (FOLLOWUP.quickProfile).
+const QUICK_PROFILE = FOLLOWUP.INDUSTRIES.general.profile;
 // Contestó en algún momento pero dejó de responder: 3 seguimientos seguidos sin respuesta (FOLLOWUP.SILENT_MAX).
 const GHOSTED = 'Dejó de contestar';
 const DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
@@ -186,7 +182,9 @@ function openDb(dbPath) {
     ['decision_maker', 'TEXT'], ['budget_status', 'TEXT'], ['start_window', 'TEXT'],
     ['next_step', 'TEXT'], ['next_step_at', 'TEXT'],
     ['manager_request', 'TEXT'], ['manager_request_at', 'TEXT'], // "Pedir seguimiento" del gerente al vendedor
-    ['campaign_end', 'TEXT'], ['postsale_at', 'TEXT'], ['renewal_for', 'TEXT'], ['renewal_amount', 'REAL NOT NULL DEFAULT 0']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
+    ['campaign_end', 'TEXT'], ['postsale_at', 'TEXT'], ['renewal_for', 'TEXT'], ['renewal_amount', 'REAL NOT NULL DEFAULT 0'],
+    // Cita (giros que se miden en citas): cuándo es, cómo va (agendada, confirmada, asistio, no_asistio) y hitos del embudo.
+    ['appt_at', 'TEXT'], ['appt_state', 'TEXT'], ['appt_set_at', 'TEXT'], ['appt_done_at', 'TEXT']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
     if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
   }
   // Inversión de cada campaña por mes ('AAAA-MM').
@@ -323,6 +321,8 @@ const WA_TEMPLATES = {
   recontacto: 'Hola {nombre}, soy {vendedor} de {empresa}. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
   postventa: 'Hola {nombre}, soy {vendedor} de {empresa}. ¿Cómo va tu {servicio}? Si conoces a alguien a quien le pueda servir, con gusto lo atendemos.',
   renovacion: 'Hola {nombre}, soy {vendedor} de {empresa}. Tu {servicio} está por terminar; ¿te ayudo a renovar para el siguiente periodo?',
+  cita: 'Hola {nombre}, soy {vendedor} de {empresa}. Te confirmo tu {cita} el {fecha}. ¿Sigue en pie?',
+  reagendar: 'Hola {nombre}, soy {vendedor} de {empresa}. Te esperábamos en tu {cita}; ¿te parece si la reagendamos? Dime qué día te queda mejor.',
 };
 
 module.exports = {

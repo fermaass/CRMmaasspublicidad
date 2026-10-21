@@ -146,7 +146,7 @@ async function renderMNumbers() {
   const mktSide = can('gerente', 'marketing', 'analista');
   const [act, st, health] = await Promise.all([
     salesSide ? api(`/api/activity?${rangeQuery(range)}`).catch(() => null) : null,
-    mktSide ? api(`/api/stats?${rangeQuery(range)}`).catch(() => null) : null,
+    mktSide || (salesSide && F.appointments()) ? api(`/api/stats?${rangeQuery(range)}`).catch(() => null) : null,
     mktSide ? api('/api/campaign-health').catch(() => null) : null,
   ]);
   const sum = (list) => (list || []).reduce((t, x) => t + (x.amount || 0), 0);
@@ -156,17 +156,18 @@ async function renderMNumbers() {
   if (act && act.ventas) {
     html += `<div class="m-tiles">
       ${tile(act.recibidos.n, sells() && !can('gerente') ? 'leads asignados' : 'leads recibidos')}
+      ${F.appointments() && st ? tile(st.funnel.citas, `${F.apptPlural()} agendadas`, `llegaron ${st.funnel.asistieron}`) : ''}
       ${tile(act.cotizaciones.length, 'cotizaciones', money(sum(act.cotizaciones)))}
       ${tile(act.ventas.length, 'ventas', money(sum(act.ventas)))}
       ${act.renovaciones.length ? tile(act.renovaciones.length, 'renovaciones', money(sum(act.renovaciones))) : ''}
     </div>`;
   }
-  if (st) {
+  if (st && mktSide) {
     const m = marketingMetrics(st);
     html += `<h3 class="m-sub">Campañas</h3><div class="m-tiles">
       ${tile(money(m.inv), 'invertido', `${m.paid} con inversión`)}
       ${tile(m.cpl ? money(m.cpl) : '—', 'por lead')}
-      ${tile(m.cplq ? money(m.cplq) : '—', 'por lead con perfil')}
+      ${F.appointments() ? tile(m.cpa ? money(m.cpa) : '—', `por ${F.apptNoun()}`) : tile(m.cplq ? money(m.cplq) : '—', 'por lead con perfil')}
       ${tile(m.cpc ? money(m.cpc) : '—', 'por venta', m.roas ? `retorno ${m.roas.toFixed(1)}x` : '')}
     </div>`;
   }
