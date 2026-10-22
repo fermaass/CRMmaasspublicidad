@@ -155,6 +155,9 @@ function createApp({ db, config }) {
   // Salud: confirma que la base responde (Railway reinicia el servicio si esto falla).
   // Qué versión está publicada (para comprobar que ya se aplicó una actualización): leads.tudominio.com/version
   app.get('/version', (req, res) => res.type('text').send(`Maass Leads ${require('../package.json').version}${process.env.RAILWAY_GIT_COMMIT_SHA ? ` · ${process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7)}` : ''}`));
+  // Cada respuesta dice qué versión corre: si el navegador tiene abierta una anterior, se recarga sola (ver api() en app.js).
+  const appVersion = process.env.RAILWAY_GIT_COMMIT_SHA || String(Date.now());
+  app.use((req, res, next) => { res.setHeader('X-App-Version', appVersion); next(); });
   app.get('/health', (req, res) => {
     try { db.prepare('SELECT 1').get(); res.send('ok'); } catch (err) { res.status(503).send(`base de datos sin respuesta: ${err.message}`); }
   });

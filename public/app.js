@@ -130,6 +130,19 @@ const pref = {
 };
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
+// Si se publicó una versión nueva mientras la app estaba abierta, la pantalla vieja no entiende los datos nuevos:
+// se recarga sola (después de una consulta, nunca a media captura). Una sola vez por versión, para no ciclarse.
+let loadedVersion = null;
+function checkVersion(v, safe) {
+  if (!v) return;
+  if (!loadedVersion) { loadedVersion = v; return; }
+  if (v === loadedVersion || !safe) return;
+  // Nunca con algo a medio capturar (una ventana, la ficha abierta o un campo en uso): espera a la siguiente consulta.
+  const busy = !$('#modal').classList.contains('hidden') || !$('#drawer').classList.contains('hidden') || document.activeElement?.matches('input, textarea, select');
+  if (busy) return;
+  try { if (sessionStorage.getItem('reloaded-for') === v) return; sessionStorage.setItem('reloaded-for', v); } catch { /* sin almacenamiento */ }
+  location.reload();
+}
 async function api(path, opts = {}) {
   let res;
   try {
@@ -143,6 +156,7 @@ async function api(path, opts = {}) {
     throw Object.assign(new Error(opts.method && opts.method !== 'GET'
       ? 'Sin conexión: no se guardó. Revisa tu internet e intenta de nuevo.' : 'Sin conexión con el servidor. Revisa tu internet.'), { api: true });
   }
+  checkVersion(res.headers.get('x-app-version'), !opts.method || opts.method === 'GET');
   let data = null;
   try { data = res.headers.get('content-type')?.includes('json') ? await res.json() : null; } catch { /* respuesta incompleta */ }
   if (res.status === 401 && path !== '/api/login') { showLogin(); throw Object.assign(new Error('Sesión expirada'), { api: true }); }
