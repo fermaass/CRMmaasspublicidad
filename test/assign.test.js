@@ -105,7 +105,8 @@ test('asignar es del Asignador; el Administrador solo reasigna; el Director y el
   assert.ok((await req('/api/leads?assigned=none', { cookie: op })).json.some((l) => l.id === id));
   assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: op, body: { assigned_to: sellers.Caro.id } })).status, 200);
   assert.equal((await lead(id)).assigned_name, 'Caro');
-  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: op, body: { assigned_to: 99999 } })).status, 400);
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: 99999 } })).status, 400);
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: op, body: { assigned_to: sellers.Ana.id } })).status, 403, 'ya tiene asesor: solo el gerente lo cambia');
   // El operador no registra toques; el gerente reasigna en una emergencia
   assert.equal((await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: op, body: { channel: 'llamada', outcome: 'sin_respuesta' } })).status, 403);
   assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: gerente, body: { assigned_to: sellers.Ana.id } })).status, 200);

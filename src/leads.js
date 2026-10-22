@@ -45,6 +45,12 @@ function niceName(name) {
   return s.toLowerCase().split(' ').map((w, i) => (i > 0 && LOWER_WORDS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
 }
 
+// Aviso para el gerente (Equipo hoy). kind: 'duplicado' (mismo teléfono o correo), 'posible' (mismo nombre), 'cliente' (ya compró).
+function notify(db, leadId, kind, text) {
+  db.prepare('INSERT INTO notifications (created_at, kind, lead_id, text) VALUES (?, ?, ?, ?)').run(now(), kind, leadId, text);
+}
+const ownerName = (db, userId) => (userId ? db.prepare('SELECT name FROM users WHERE id = ?').get(userId)?.name : null);
+
 function ingestLead(db, data) {
   const clean = (v) => (v == null || String(v).trim() === '' ? null : String(v).trim().slice(0, 2000));
   const lead = {
@@ -74,6 +80,11 @@ function ingestLead(db, data) {
     addEvent(db, existing.id, data.userId, 'contacto',
       `Nuevo contacto por ${LABELS[lead.source] || lead.source}${lead.campaign ? ` (${lead.campaign})` : ''}${lead.message ? `: ${lead.message}` : ''}`);
     if (reopen) addEvent(db, existing.id, data.userId, 'estado', `Reabierto (estaba ${existing.status})`);
+    // Se queda con quien ya lo tenía; el gerente se entera (y de quién lo intentó registrar, si fue a mano).
+    const owner = ownerName(db, existing.assigned_to);
+    const by = data.userId && data.userId !== existing.assigned_to ? ownerName(db, data.userId) : null;
+    notify(db, existing.id, 'duplicado', `${existing.name || lead.name || lead.phone || lead.email} llegó de nuevo por ${LABELS[lead.source] || lead.source}`
+      + `${by ? ` (lo registró ${by})` : ''}. ${owner ? `Se quedó con ${owner}, que ya lo atendía.` : 'Sigue sin asignar.'}`);
     return { id: existing.id, created: false };
   }
 
@@ -96,6 +107,15 @@ function ingestLead(db, data) {
     if (seller) {
       db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ? WHERE id = ?').run(seller.id, ts, id);
       addEvent(db, id, null, 'asignacion', `Asignado a ${seller.name} (ya era su cliente)`);
+    }
+    notify(db, id, 'cliente', `${repeatOf.name || lead.name || lead.phone} ya era cliente y volvió a escribir: oportunidad nueva${seller ? ` con ${seller.name}` : ''}.`);
+  } else if (lead.name && lead.name.includes(' ')) {
+    // Mismo nombre completo con otro teléfono o correo: no se junta (puede ser otra persona), pero se avisa para revisarlo.
+    const twin = db.prepare(`SELECT id, assigned_to FROM leads WHERE id != ? AND lower(name) = lower(?) ORDER BY id DESC LIMIT 1`).get(id, lead.name);
+    if (twin) {
+      const owner = ownerName(db, twin.assigned_to);
+      addEvent(db, id, null, 'contacto', `Posible duplicado: ya existe otro contacto con el mismo nombre (lead #${twin.id}).`);
+      notify(db, id, 'posible', `Posible duplicado: ${lead.name} llegó con otro teléfono o correo y ya existe uno con ese nombre${owner ? ` (lo atiende ${owner})` : ''}. Revisa si es la misma persona.`);
     }
   }
   return { id, created: true, repeat_of: repeatOf?.id };
@@ -189,4 +209,4 @@ function releaseLeads(db, userId, byUserId, name) {
   return ids.length;
 }
 
-module.exports = { niceName, releaseLeads, ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };
+module.exports = { notify, niceName, releaseLeads, ingestLead, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, addEvent, resolveStatusProfile, now };

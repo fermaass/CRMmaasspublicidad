@@ -83,6 +83,9 @@ const assignFlag = (role, value) => (role !== 'operador' && value ? 1 : 0);
 // "También atiende leads": el vendedor ya lo hace por su rol.
 const sellFlag = (role, value) => (role !== 'vendedor' && value ? 1 : 0);
 const canReassign = (user) => Boolean(user && (MANAGERS.includes(user.role) || canAssign(user)));
+// Cambiar de asesor un lead que ya tiene vendedor es solo del gerente (o el Administrador); quien asigna reparte los que no tienen.
+const OWNER_LOCKED = 'Este lead ya tiene asesor: solo el gerente puede cambiarlo';
+const canChangeOwner = (user, lead) => Boolean(user && (MANAGERS.includes(user.role) || (canAssign(user) && !lead.assigned_to)));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
   if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo quien asigna leads puede hacerlo' });
@@ -724,7 +727,7 @@ function createApp({ db, config }) {
     res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_touch: canTouch(req.user, lead) || (free && Boolean(req.user.sells)),
       // El gerente que aún no atiende leads: se le ofrece atender este (un clic).
       can_take: free && MANAGERS.includes(req.user.role) && !req.user.sells,
-      can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) });
+      can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) && canChangeOwner(req.user, lead) });
   });
 
   app.post('/api/leads', auth.requireUser, (req, res) => {
@@ -750,8 +753,9 @@ function createApp({ db, config }) {
       if (!result.created) {
         const owner = db.prepare('SELECT l.assigned_to, u.name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?')
           .get(result.id);
-        if (req.user.role === 'vendedor' && !canAssign(req.user) && owner.assigned_to && owner.assigned_to !== req.user.id) {
-          return res.status(409).json({ error: `Este contacto ya lo atiende ${owner.name}. Se dejó registrado en su historial.` });
+        // Ya es de otro: se queda con él (quedó en su historial y el gerente recibió el aviso). No se le muestra la ficha.
+        if (owner.assigned_to && owner.assigned_to !== req.user.id && !MANAGERS.includes(req.user.role)) {
+          return res.json({ existing: true, taken_by: owner.name });
         }
         if (seller && !owner.assigned_to) assignLead(result.id, seller, req.user.id);
         else if (req.user.sells && !owner.assigned_to) assignLead(result.id, req.user, req.user.id);
@@ -779,10 +783,12 @@ function createApp({ db, config }) {
     }
   });
 
+  // Queda en el historial quién lo cambió (el usuario del evento) y de quién a quién.
   function assignLead(id, seller, userId) {
     const ts = now();
+    const prev = db.prepare('SELECT u.name FROM leads l JOIN users u ON u.id = l.assigned_to WHERE l.id = ?').get(id)?.name;
     db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(seller.id, ts, ts, id);
-    addEvent(db, id, userId, 'asignacion', `Asignado a ${seller.name}`);
+    addEvent(db, id, userId, 'asignacion', prev && prev !== seller.name ? `Cambió de asesor: ${prev} → ${seller.name}` : `Asignado a ${seller.name}`);
   }
 
   // Carga por vendedor y a quién le toca el siguiente lead.
@@ -806,16 +812,28 @@ function createApp({ db, config }) {
     const lead = db.prepare('SELECT id, assigned_to FROM leads WHERE id = ?').get(Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const to = req.body?.assigned_to;
+    if (Number(to || 0) !== (lead.assigned_to || 0) && !canChangeOwner(req.user, lead)) return res.status(403).json({ error: OWNER_LOCKED });
     if (!to) {
       if (lead.assigned_to) {
         db.prepare('UPDATE leads SET assigned_to = NULL, assigned_at = NULL, updated_at = ? WHERE id = ?').run(now(), lead.id);
-        addEvent(db, lead.id, req.user.id, 'asignacion', 'Se quitó el vendedor');
+        addEvent(db, lead.id, req.user.id, 'asignacion', `Se le quitó el asesor (${db.prepare('SELECT name FROM users WHERE id = ?').get(lead.assigned_to)?.name || 'sin nombre'})`);
       }
       return res.json({ ok: true });
     }
     const seller = db.prepare("SELECT id, name FROM users WHERE id = ? AND active = 1 AND (role = 'vendedor' OR can_sell = 1)").get(Number(to));
     if (!seller) return res.status(400).json({ error: 'Ese vendedor no existe o está inactivo' });
     if (seller.id !== lead.assigned_to) assignLead(lead.id, seller, req.user.id);
+    res.json({ ok: true });
+  });
+
+  // Avisos para el gerente: contactos repetidos y posibles duplicados. Se marcan como vistos de una vez.
+  app.get('/api/notifications', auth.requireRole(...MANAGERS), (req, res) => {
+    const items = db.prepare(`SELECT n.*, COALESCE(l.name, l.phone, l.email) AS lead_name FROM notifications n
+      LEFT JOIN leads l ON l.id = n.lead_id ORDER BY n.id DESC LIMIT 50`).all();
+    res.json({ items, unseen: db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE seen_at IS NULL').get().n });
+  });
+  app.post('/api/notifications/seen', auth.requireRole(...MANAGERS), (req, res) => {
+    db.prepare('UPDATE notifications SET seen_at = ? WHERE seen_at IS NULL').run(now());
     res.json({ ok: true });
   });
 
@@ -1110,6 +1128,7 @@ function createApp({ db, config }) {
     if (b.assigned_to !== undefined) {
       if (!canReassign(user)) return { status: 403, error: 'Solo quien asigna leads o el gerente pueden asignarlos' };
       assigned = b.assigned_to ? Number(b.assigned_to) : null;
+      if (assigned !== lead.assigned_to && !canChangeOwner(user, lead)) return { status: 403, error: OWNER_LOCKED };
       if (assigned && !db.prepare("SELECT 1 FROM users WHERE id = ? AND active = 1").get(assigned)) {
         return { status: 400, error: 'Usuario inválido' };
       }

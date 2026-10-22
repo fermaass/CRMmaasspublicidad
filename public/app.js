@@ -505,9 +505,21 @@ async function updateTodayBadge(leads) {
   } catch { /* el aviso no es crítico */ }
 }
 
+// Contador en Equipo hoy (gerente): avisos de contactos repetidos o posibles duplicados sin ver.
+async function updateTeamBadge() {
+  const btn = $('#nav [data-view=team]');
+  if (!manages()) return;
+  try {
+    const n = (await api('/api/notifications')).unseen;
+    btn.innerHTML = `Equipo hoy${n ? ` <span class="nav-badge late">${n}</span>` : ''}`;
+    btn.title = n ? `${n} ${n === 1 ? 'aviso' : 'avisos'} de contactos repetidos` : '';
+  } catch { /* el aviso no es crítico */ }
+}
+
 async function refresh() {
   if (!state.me) return;
   updateAssignBadge();
+  updateTeamBadge();
   if (state.view !== 'today') updateTodayBadge();
   if (state.view === 'm-assign') return renderMAssign();
   if (state.view === 'm-team') return renderMTeam();
@@ -2023,8 +2035,13 @@ async function openNewLead() {
     const body = { ...rest, ...originToFields(origin) };
     try { localStorage.setItem('nl-origin', origin); localStorage.setItem('nl-source', rest.source); } catch { /* sin almacenamiento */ }
     try {
-      const { id, existing, repeat_of: repeatOf } = await api('/api/leads', { method: 'POST', body });
+      const { id, existing, repeat_of: repeatOf, taken_by: takenBy } = await api('/api/leads', { method: 'POST', body });
       refresh();
+      if (takenBy) {
+        closeDrawer();
+        await ask(`Este contacto ya lo atiende ${takenBy}, así que se queda con él. Lo que capturaste quedó en su historial y se le avisó al gerente.`, { okLabel: 'Entendido' });
+        return;
+      }
       await openLead(id);
       if (existing) {
         $('#drawer-body h2').insertAdjacentHTML('afterend',
@@ -2085,7 +2102,14 @@ async function renderTeam() {
     <ul class="ob-list">${ob.steps.map((st) => `<li class="${st.done ? 'done' : ''}"><span class="ob-dot">${st.done ? '✓' : ''}</span>
       ${st.done ? `<span>${esc(st.label)}</span>` : `<button type="button" class="link" data-ob-view="${st.view}" data-ob-tab="${st.tab || ''}">${esc(st.label)}</button>`}</li>`).join('')}</ul>
     <button type="button" class="ghost small" id="ob-hide">Ocultar</button></section>` : '';
-  $('#view-team').innerHTML = `${obCard}<div class="team">
+  // Avisos: contactos que llegaron de nuevo (se quedan con su asesor) y posibles duplicados por nombre.
+  const notes = manages() ? await api('/api/notifications').catch(() => null) : null;
+  const shown = notes ? notes.items.filter((n) => !n.seen_at || Date.now() - new Date(n.created_at) < 7 * 864e5).slice(0, 8) : [];
+  const notesCard = shown.length ? `<section class="card team-notes">${cardTitle('sparkles', 'var(--declinado)', `Avisos${notes.unseen ? ` · ${notes.unseen} sin ver` : ''}`, 'contactos repetidos: se quedan con quien ya los atendía')}
+    <ul class="notes-list">${shown.map((n) => `<li class="${n.seen_at ? '' : 'unseen'}"><span>${esc(n.text)}</span>
+      <span class="muted small">${timeAgo(n.created_at)}${n.lead_id ? ` · <button type="button" class="link" data-open="${n.lead_id}">Ver lead</button>` : ''}</span></li>`).join('')}</ul>
+    ${notes.unseen ? '<button type="button" class="ghost small" id="notes-seen">Marcar como vistos</button>' : ''}</section>` : '';
+  $('#view-team').innerHTML = `${obCard}${notesCard}<div class="team">
     <div class="today-summary">
       ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
         : `<span class="alert-pill late">${t.unassigned} sin asignar (los reparte quien asigna leads)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
@@ -2110,6 +2134,8 @@ async function renderTeam() {
     if (b.dataset.obTab) state.settingsTab = b.dataset.obTab;
     setView(b.dataset.obView);
   }));
+  $('#notes-seen')?.addEventListener('click', async () => { await api('/api/notifications/seen', { method: 'POST' }); updateTeamBadge(); renderTeam(); });
+  $('#view-team').querySelectorAll('.team-notes [data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   $('#ob-hide')?.addEventListener('click', () => { try { localStorage.setItem('onboarding-hidden', '1'); } catch { /* sin almacenamiento */ } renderTeam(); });
   $('#weekly-report').addEventListener('click', () => openReport('ventas', '7'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));

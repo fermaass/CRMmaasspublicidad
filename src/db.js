@@ -299,6 +299,15 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(leads)').all().some((c) => c.name === 'quantity')) db.exec('ALTER TABLE leads ADD COLUMN quantity REAL');
   if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'amount')) db.exec('ALTER TABLE lead_touches ADD COLUMN amount REAL');
 
+  // Avisos para el gerente: contactos repetidos (se quedan con quien ya los atiende) y posibles duplicados por nombre.
+  db.exec(`CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      seen_at TEXT
+    );`);
   // Registro técnico de fallas (servidor y navegadores) para el panel de Maass Leads. Sin datos de clientes.
   db.exec(`CREATE TABLE IF NOT EXISTS ops_errors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

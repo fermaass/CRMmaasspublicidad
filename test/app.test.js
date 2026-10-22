@@ -140,8 +140,8 @@ test('permisos: vendedor ve solo lo suyo, no toma leads; el Director solo lee', 
 
   // Si Ana registra un contacto que ya es de Beto, se le avisa sin mostrarle la ficha
   const taken = await req('/api/leads', { method: 'POST', cookie: vendedorA, body: { source: 'llamada', channel_id: 1, phone: l2.phone, email: l2.email } });
-  assert.equal(taken.status, 409);
-  assert.match(taken.json.error, /Beto/);
+  assert.equal(taken.status, 200);
+  assert.equal(taken.json.taken_by, 'Beto'); assert.equal(taken.json.id, undefined, 'no se le da la ficha');
 
   // Vendedor no reasigna
   assert.equal((await req(`/api/leads/${l2.id}`, { method: 'PATCH', cookie: vendedorB, body: { assigned_to: idA } })).status, 403);

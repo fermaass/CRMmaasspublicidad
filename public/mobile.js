@@ -113,7 +113,8 @@ async function renderMAssign() {
 // ---------- Equipo (gerente): el semáforo en tarjetas; tocar abre lo que necesita atención ----------
 async function renderMTeam() {
   const view = $('#view-m-team');
-  const t = await api('/api/team');
+  const [t, notes] = await Promise.all([api('/api/team'), manages() ? api('/api/notifications').catch(() => null) : null]);
+  const unseen = notes ? notes.items.filter((n) => !n.seen_at).slice(0, 6) : [];
   const light = (r) => (r.vencidos || r.sin_primer_toque || r.acuerdos_vencidos || r.pedidos_tarde ? 'red' : r.frias || r.incompletos.length || r.hoy > 8 ? 'yellow' : 'green');
   const order = { red: 0, yellow: 1, green: 2 };
   const rows = [...t.sellers].sort((a, b) => order[light(a)] - order[light(b)]);
@@ -123,6 +124,9 @@ async function renderMTeam() {
     ...r.alertas, ...r.incompletos.slice(0, 4),
   ];
   view.innerHTML = `<div class="m-head">${t.unassigned ? (canAssign() ? `<button type="button" class="alert-pill late" data-go-assign>${t.unassigned} sin asignar · Asignar</button>` : `<span class="alert-pill late">${t.unassigned} sin asignar</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}</div>
+    ${unseen.length ? `<h3 class="m-sub">Avisos (${notes.unseen})</h3>${unseen.map((n) => `<button type="button" class="m-card m-item" data-open="${n.lead_id}">
+        <span>${esc(n.text)}</span><span class="muted small">${timeAgo(n.created_at)}</span></button>`).join('')}
+      <button type="button" class="ghost small" data-notes-seen>Marcar como vistos</button>` : ''}
     ${rows.map((r) => `<details class="m-card m-seller ${light(r)}">
       <summary><span class="light ${light(r)}"></span><b>${esc(r.name)}</b><span class="muted small">${r.en_curso} en curso · ${r.hoy} hoy</span>
         ${r.vencidos || r.sin_primer_toque || r.frias ? `<span class="m-badges">${badge(r.vencidos, 'vencidos', true)}${badge(r.sin_primer_toque, 'sin primer toque', true)}${badge(r.frias, 'frías', false)}</span>` : ''}</summary>
@@ -136,6 +140,7 @@ async function renderMTeam() {
   wireFullSite(view);
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   $('[data-go-assign]', view)?.addEventListener('click', () => setView('m-assign'));
+  $('[data-notes-seen]', view)?.addEventListener('click', async () => { await api('/api/notifications/seen', { method: 'POST' }); renderMTeam(); });
 }
 
 // ---------- Números del mes: ventas para quien vende o dirige; campañas para marketing ----------
