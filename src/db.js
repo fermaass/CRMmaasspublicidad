@@ -5,13 +5,15 @@ const { DatabaseSync } = require('node:sqlite');
 const STATUSES = ['nuevo', 'nuevo_perfil', 'cotizando', 'declinado', 'vendido'];
 const PROFILES = ['sin_perfilar', 'cumple', 'no_cumple'];
 // Niveles (por dentro conservan su clave para no romper datos):
-//   'gerente'  = Administrador: todo (usuarios, giro, productos, campañas, inversión, cartera y respaldos).
+//   'admin'    = Administrador: todo (usuarios, giro, productos, campañas, inversión, cartera y respaldos).
+//   'gerente'  = Gerente: dirige al equipo; ve todo, corrige leads, reasigna y pide seguimientos. No configura ni da de alta usuarios.
 //   'director' = Director: solo ve (tablero, Equipo hoy, Resumen, reportes); puede pedir seguimiento y descargar su cartera.
 //   'operador' = Asignador: captura y asigna leads, corrige sus datos y ve resultados generales; no registra toques.
 //   'vendedor' = Vendedor: trabaja sus leads, su Mi día y su Resumen.
-const ROLES = ['gerente', 'director', 'operador', 'vendedor'];
-// Roles anteriores: el Gerente de marketing pasa a Administrador y el Analista (solo lectura) a Director.
-const ROLE_MIGRATION_SQL = "CASE role WHEN 'marketing' THEN 'gerente' WHEN 'analista' THEN 'director' ELSE role END";
+const ROLES = ['admin', 'gerente', 'director', 'operador', 'vendedor'];
+// Roles anteriores: el gerente de antes (que administraba todo) y el Gerente de marketing pasan a Administrador;
+// el Analista (solo lectura) a Director.
+const ROLE_MIGRATION_SQL = "CASE role WHEN 'gerente' THEN 'admin' WHEN 'marketing' THEN 'admin' WHEN 'analista' THEN 'director' ELSE role END";
 const SOURCES = ['formulario', 'whatsapp', 'llamada', 'otro'];
 // Orígenes que se capturan a mano (el formulario es el único automático).
 const MANUAL_SOURCES = ['whatsapp', 'llamada', 'otro'];
@@ -252,8 +254,8 @@ function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
   // "También atiende leads": un gerente (u otro rol) que además trabaja sus propios leads como vendedor.
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'can_sell')) db.exec('ALTER TABLE users ADD COLUMN can_sell INTEGER NOT NULL DEFAULT 0');
-  // Bases anteriores a Director/Asignador: se rehace la tabla de usuarios con los niveles nuevos (conserva ids y datos).
-  if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'users'").get().sql.includes("'director'")) {
+  // Bases anteriores a los niveles Administrador/Gerente/Director/Asignador: se rehace la tabla de usuarios (conserva ids y datos).
+  if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'users'").get().sql.includes("'admin'")) {
     db.exec('PRAGMA foreign_keys = OFF');
     try {
       db.exec(`BEGIN;

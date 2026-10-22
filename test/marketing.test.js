@@ -70,3 +70,21 @@ test('calidad por campaña: por qué se descartan, días a cerrar y audiencia pa
   assert.equal(lines[0], 'email,phone,fn,ln,country');
   assert.ok(lines.includes('laura@mail.com,+525570000010,Laura,Gómez Ruiz,MX'), csv);
 });
+
+test('el Gerente dirige: ve todo, corrige cualquier lead y reasigna; no configura ni da de alta usuarios', async () => {
+  await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Gina', email: 'gina@t.com', password: 'password123', role: 'gerente' } });
+  const g = await login('gina@t.com');
+  const beto = (await req('/api/users', { method: 'POST', cookie: gerente, body: { name: 'Beto', email: 'beto@t.com', password: 'password123', role: 'vendedor' } })).json.id;
+  const id = (await req('/api/leads', { method: 'POST', cookie: gerente, body: { source: 'whatsapp', phone: '5570000099', channel_id: 1, assigned_to: anaId } })).json.id;
+  for (const path of ['/api/team', '/api/stats', '/api/campaign-health', '/api/export/cartera.xlsx', '/api/leads.csv']) assert.equal((await req(path, { cookie: g })).status, 200, path);
+  assert.equal((await req(`/api/leads/${id}`, { method: 'PATCH', cookie: g, body: { status: 'cotizando', quote_amount: 5000 } })).status, 200);
+  assert.equal((await req(`/api/leads/${id}/assign`, { method: 'POST', cookie: g, body: { assigned_to: beto } })).status, 200);
+  assert.equal((await req(`/api/leads/${id}/request`, { method: 'POST', cookie: g, body: { text: 'Dale seguimiento hoy' } })).status, 200);
+  const l = (await req(`/api/leads/${id}`, { cookie: g })).json;
+  assert.equal(l.status, 'cotizando'); assert.equal(l.assigned_to, beto); assert.equal(l.can_edit, true);
+  assert.equal((await req('/api/users', { method: 'POST', cookie: g, body: { name: 'X', email: 'x@t.com', password: 'password123', role: 'vendedor' } })).status, 403);
+  assert.equal((await req('/api/catalog', { method: 'POST', cookie: g, body: { kind: 'producto', name: 'X' } })).status, 403);
+  assert.equal((await req('/api/company', { method: 'PATCH', cookie: g, body: { industry: 'salud' } })).status, 403);
+  assert.equal((await req(`/api/leads/${id}`, { method: 'DELETE', cookie: g })).status, 403, 'borrar leads es solo del Administrador');
+  assert.equal((await req(`/api/leads/${id}/touches`, { method: 'POST', cookie: g, body: { channel: 'llamada', outcome: 'sin_respuesta' } })).status, 403, 'los toques son del vendedor');
+});

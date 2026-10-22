@@ -128,12 +128,12 @@
       <span class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="mk3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a73e8"/><stop offset=".55" stop-color="#4a8ff2"/><stop offset="1" stop-color="#8a78e2"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#mk3)"/><path d="M9 22.5V11l7 7.2 7-7.2v11.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24.6" cy="7.6" r="3.4" fill="#34d399" stroke="#fff" stroke-width="1.6"/></svg><strong>Maass Leads</strong><span class="topbar-company"><img class="brand-logo hidden" alt=""><span class="company-name hidden"></span></span></span>
       <nav id="nav">
         <button data-view="today" data-sells-nav>Mi día</button>
-        <button data-view="team" data-role="gerente,director">Equipo hoy</button>
+        <button data-view="team" data-role="admin,gerente,director">Equipo hoy</button>
         <button data-view="board">Tablero</button>
         <button data-view="assign" data-assigner>Asignación</button>
-        <button data-view="stats" data-role="gerente,director,operador,vendedor">Resumen</button>
-        <button data-view="users" data-role="gerente">Usuarios</button>
-        <button data-view="settings" data-role="gerente">Configuración</button>
+        <button data-view="stats" data-role="admin,gerente,director,operador,vendedor">Resumen</button>
+        <button data-view="users" data-role="admin">Usuarios</button>
+        <button data-view="settings" data-role="admin">Configuración</button>
       </nav>
       <span class="spacer"></span>
       <button type="button" id="me" class="ghost me-btn" title="Cambiar mi contraseña"></button>
@@ -157,8 +157,8 @@
       <select id="f-campaign" aria-label="Campaña"><option value="">Todas las campañas</option></select>
       <button type="button" id="more-filters" class="ghost" aria-expanded="false" aria-controls="extra-filters">Más filtros</button>
       <span class="spacer"></span>
-      <button id="export" class="ghost" data-role="gerente,director">Exportar CSV</button>
-      <button id="new-lead" data-role="gerente,vendedor,operador">+ Lead</button>
+      <button id="export" class="ghost" data-role="admin,gerente,director">Exportar CSV</button>
+      <button id="new-lead" data-role="admin,gerente,vendedor,operador">+ Lead</button>
       <div id="extra-filters" class="extra-filters hidden">
         <select id="f-status" aria-label="Etapa"><option value="">Toda etapa</option></select>
         <select id="f-profile" aria-label="Perfil"><option value="">Todo perfil</option></select>

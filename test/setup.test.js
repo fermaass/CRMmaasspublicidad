@@ -24,7 +24,7 @@ test('primer uso: pide el código de instalación, se crea el gerente y solo una
   const r = await post('/api/setup', { ...data, setup_code: 'abcd 2345' });
   assert.equal(r.status, 201, 'el código acepta minúsculas y espacios');
   const cookie = r.headers.get('set-cookie').split(';')[0];
-  assert.equal((await (await fetch(`${base}/api/me`, { headers: { cookie } })).json()).role, 'gerente');
+  assert.equal((await (await fetch(`${base}/api/me`, { headers: { cookie } })).json()).role, 'admin');
 
   assert.equal((await post('/api/setup', { ...data, email: 'x@x.com', setup_code: 'ABCD-2345' })).status, 409);
   assert.deepEqual(await (await fetch(`${base}/api/setup`)).json(), { needed: false });
@@ -61,7 +61,7 @@ test('instalar para un cliente: se deja creado su gerente y sale el link para qu
   const tok = new URL(j.link).searchParams.get('acceso');
   const ok = await post(`/api/access/${tok}`, { password: 'gerenteGym1' }, null, 'POST', b);
   assert.equal(ok.status, 200);
-  assert.equal((await ok.json()).role, 'gerente');
+  assert.equal((await ok.json()).role, 'admin');
   srv.close();
 });
 

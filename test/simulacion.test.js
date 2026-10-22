@@ -55,7 +55,7 @@ test('simulación: un lead de punta a punta y el resto del equipo, de hace 80 d�
   const G = await as('fer@maass.mx');
   const ids = {};
   for (const [name, email, role] of [['Coco Ruiz', 'coco@maass.mx', 'operador'], ['Ana López', 'ana@maass.mx', 'vendedor'], ['Beto Ramírez', 'beto@maass.mx', 'vendedor'],
-    ['Mara Ortiz', 'mara@maass.mx', 'gerente'], ['Lalo Díaz', 'lalo@maass.mx', 'director']]) {
+    ['Mara Ortiz', 'mara@maass.mx', 'admin'], ['Lalo Díaz', 'lalo@maass.mx', 'director']]) {
     const r = await G('/api/users', 'POST', { name, email, password: PW, role });
     ids[name.split(' ')[0]] = r.json.id;
   }

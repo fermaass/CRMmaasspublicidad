@@ -117,8 +117,10 @@ const icon = (name, size = 20) => `<svg class="ico" width="${size}" height="${si
 // Título de tarjeta con su cuadrito de color, como en el panel de referencia.
 const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><span class="ico-badge" style="--c:${color}">${icon(ico, 18)}</span>
   <h3>${esc(title)}${sub ? ` <small>${esc(sub)}</small>` : ''}</h3></div>`;
-// Por dentro 'gerente' es el Administrador y 'operador' el Asignador (ver src/db.js).
-const ROLE_NAMES = { gerente: 'Administrador', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
+// Por dentro 'operador' es el Asignador (ver src/db.js).
+const ROLE_NAMES = { admin: 'Administrador', gerente: 'Gerente', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
+// Dirigen al equipo: corrigen cualquier lead, reasignan y piden seguimientos (igual que MANAGERS en el servidor).
+const manages = () => can('admin', 'gerente');
 const VIEW_TITLES = { 'm-assign': 'Asignar', 'm-team': 'Equipo', 'm-numbers': 'Números del mes', today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
@@ -310,7 +312,7 @@ async function start() {
   $('#f-assigned').classList.toggle('hidden', state.me.role === 'vendedor');
   [state.users, state.catalog, state.waTemplates] = await Promise.all([api('/api/users'), api('/api/catalog'), api('/api/wa-templates')]);
   fillFilters();
-  if (can('gerente')) {
+  if (can('admin')) {
     api('/api/system').then((sys) => {
       $('#storage-warning')?.remove();
       if (sys.storage_warning) {
@@ -319,8 +321,8 @@ async function start() {
       showCarteraReminder(sys.cartera);
     }).catch(() => {});
   }
-  // Cada rol arranca en lo suyo: vendedor en Mi día, Administrador y Director en Equipo hoy, Asignador en Asignación.
-  const home = { vendedor: 'today', gerente: 'team', director: 'team', operador: 'assign' };
+  // Cada rol arranca en lo suyo: vendedor en Mi día; Administrador, Gerente y Director en Equipo hoy; Asignador en Asignación.
+  const home = { vendedor: 'today', admin: 'team', gerente: 'team', director: 'team', operador: 'assign' };
   // En el celular: solo las pantallas de la barra de abajo; en la computadora, las pantallas m- no existen.
   if (setupMobile()) {
     const ok = mobileTabs().some((t) => t.view === state.view);
@@ -547,7 +549,7 @@ function timeAgo(iso) {
 
 function canEditLead(l) {
   // Avance de ventas: gerente y el vendedor dueño. Marketing solo corrige el origen desde la ficha.
-  return can('gerente') || (sells() && l.assigned_to === state.me.id);
+  return manages() || (sells() && l.assigned_to === state.me.id);
 }
 
 // ---------- Toques, cadencia y pendientes ----------
@@ -780,7 +782,7 @@ function wirePriceFields(root, amountName) {
   const sync = () => {
     const o = sel.selectedOptions[0]; const price = Number(o?.dataset.price) || 0; const fixed = o?.dataset.fixed === '1';
     const q = Number(String(qty.value).replace(',', '.')) || 1; const total = Math.round(price * q * 100) / 100;
-    if (fixed && !can('gerente')) {
+    if (fixed && !manages()) {
       amt.value = String(total); amt.readOnly = true;
       note.textContent = `Precio fijo: ${money(price)} × ${q} = ${money(total)}`;
     } else {
@@ -1080,8 +1082,8 @@ async function renderStats() {
     <div class="card chart-card">${cardTitle('tag', 'var(--nuevo_perfil)', 'Por producto', 'etapa de cada lead')}${stageRows(s.productStages)}</div>`;
   }
   const banner = seller ? sellerMonth(await api('/api/leads'), s) : tab === 'marketing' ? marketingInsight(s, health) : salesInsight(s, prev, prevQ);
-  // El Director no entra a Configuración: su cartera (sus datos) la descarga desde aquí.
-  const reportBtn = `<div class="stats-actions">${can('director') ? `<a class="button-link ghost" href="/api/export/cartera.xlsx" download id="stats-cartera">${icon('users', 16)} Descargar cartera (Excel)</a>` : ''}
+  // Gerente y Director no entran a Configuración: la cartera la descargan desde aquí.
+  const reportBtn = `<div class="stats-actions">${can('gerente', 'director') ? `<a class="button-link ghost" href="/api/export/cartera.xlsx" download id="stats-cartera">${icon('users', 16)} Descargar cartera (Excel)</a>` : ''}
     <button type="button" class="ghost" id="stats-report">${icon('file', 16)} Descargar reporte</button></div>`;
   $('#view-stats').innerHTML = `<div class="dash">${tabs}${reportBtn}${banner}${body}</div>`;
   $('#view-stats').querySelectorAll('[data-campaign-open]').forEach((b) => b.addEventListener('click', () => openCampaign(b.dataset.campaignOpen)));
@@ -1212,7 +1214,7 @@ function hours(h) {
 function sellerTable(rows) {
   if (!rows.length) return '<p class="muted">Sin datos</p>';
   const best = Math.max(...rows.filter((r) => r.id).map((r) => pctOf(r.cerrados, r.recibidos)), 0);
-  const canOpen = can('gerente', 'director');
+  const canOpen = can('admin', 'gerente', 'director');
   return `<div class="table-wrap"><table class="funnel-table sellers-table"><thead><tr>
     <th>Vendedor</th><th>Recibe</th><th>Conversión</th><th>Cierra de lo cotizado</th><th>Ticket promedio</th><th>Descuento</th><th>Primer toque</th><th>Vencidos</th>
   </tr></thead><tbody>${rows.map((r) => {
@@ -1670,8 +1672,8 @@ async function openLead(id) {
       ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
     </div>
     ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido de seguimiento:</b> ${esc(l.manager_request)}
-      <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('gerente', 'director') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
-    ${can('gerente', 'director') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
+      <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('admin', 'gerente', 'director') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
+    ${can('admin', 'gerente', 'director') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
       ? `<button type="button" class="ghost small ask-followup" id="req-ask">${icon('sparkles', 14)} Pedir seguimiento a ${esc(l.assigned_name)}</button>` : ''}
     ${quickProfileStrip(l)}
     ${apptNote(l)}
@@ -1729,7 +1731,7 @@ async function openLead(id) {
         <p class="error" id="lead-error"></p>
         <div class="actions">
           ${l.can_edit_origin ? '<button type="submit">Guardar cambios</button>' : ''}
-          ${can('gerente') ? '<button type="button" class="danger" id="delete">Eliminar lead</button>' : ''}
+          ${can('admin') ? '<button type="button" class="danger" id="delete">Eliminar lead</button>' : ''}
         </div>
       </form>
     </details>
@@ -2111,7 +2113,7 @@ async function salesReport(range, kind) {
   const seller = kind === 'vendedor';
   const [a, p, st] = await Promise.all([api(`/api/activity?${rangeQuery(range)}`), api(`/api/activity?${rangeQuery(prevRange(range))}`), api(`/api/stats?${rangeQuery(range)}`)]);
   const tot = (x, k) => x.sellers.reduce((t, r) => t + (r[k] || 0), 0);
-  const team = !seller && can('gerente', 'director') ? await api('/api/team').catch(() => null) : null;
+  const team = !seller && can('admin', 'gerente', 'director') ? await api('/api/team').catch(() => null) : null;
   const f = st.funnel;
   const myPipe = (st.pipeline || []).filter((r) => (seller ? r.id === state.me.id : r.id));
   const body = `
@@ -2325,9 +2327,10 @@ async function renderUsers() {
         crea su propia contraseña: así confirmas que el acceso le llegó a ella y nadie más la conoce. Si alguien olvida su contraseña,
         dale clic a "Link para contraseña nueva" en su renglón y mándaselo igual.</p>
       <p class="muted"><b>Administrador:</b> todo: usuarios, giro, productos, campañas, inversión, mensajes, cartera y respaldos; corrige leads y reasigna en emergencias.
+        <b>Gerente:</b> dirige al equipo: ve todo de todos, corrige cualquier lead (etapa, montos, datos), reasigna y pide seguimientos; no configura ni da de alta usuarios.
         <b>Director:</b> solo ve: Tablero, Equipo hoy, Resumen y reportes; puede pedir seguimiento a un vendedor y descargar la cartera.
         <b>Asignador:</b> captura y asigna leads, corrige sus datos y ve el Resumen y los reportes. <b>Vendedor:</b> trabaja los leads que le asignan, su Mi día y su propio Resumen.</p>
-      <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el Director en un equipo chico).
+      <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el Gerente en un equipo chico).
         Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo. <b>Si nadie asigna</b> (no hay Asignador ni nadie con esta casilla), los leads se reparten solos y parejo entre los vendedores.</p>
     </div>
     <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones extra</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
@@ -2501,17 +2504,17 @@ async function renderSettings() {
   })();
 </script>`;
 
-  const sys = can('gerente') ? await api('/api/system').catch(() => null) : null;
+  const sys = can('admin') ? await api('/api/system').catch(() => null) : null;
   const kb = (b) => (b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
   // Pestañas para no tener todo en una sola página.
-  const groups = [...(can('gerente') ? [['empresa', 'Empresa']] : []), ['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(can('gerente') ? [['datos', 'Tus datos']] : [])];
+  const groups = [...(can('admin') ? [['empresa', 'Empresa']] : []), ['campanas', 'Campañas y links'], ['canales', 'Formulario y WhatsApp'], ['listas', 'Productos y canales'], ...(can('admin') ? [['datos', 'Tus datos']] : [])];
   const active = groups.some(([k]) => k === state.settingsTab) ? state.settingsTab : groups.some(([k]) => k === pref.get('settingsTab')) ? pref.get('settingsTab') : groups[0][0];
   const co = state.company;
   const g = (k) => `data-group="${k}" class="settings-group ${k === active ? '' : 'hidden'}"`;
   $('#view-settings').innerHTML = `<div class="settings">
     <div class="tabs settings-tabs" role="tablist">${groups.map(([k, t]) => `<button type="button" role="tab" data-stab="${k}" class="${k === active ? 'active' : ''}">${t}</button>`).join('')}</div>
     <div ${g('empresa')}>
-    ${can('gerente') ? `<div class="card">
+    ${can('admin') ? `<div class="card">
       ${cardTitle('layers', 'var(--accent)', 'Tu empresa', 'aparece en la app, los mensajes de WhatsApp y los reportes')}
       <form id="company-form">
         <label>Nombre de la empresa <input name="name" value="${esc(co.name)}" required maxlength="80"></label>
@@ -2532,7 +2535,7 @@ async function renderSettings() {
     </div>` : ''}
     </div>
     <div ${g('datos')}>
-    ${can('gerente') ? `<div class="card">
+    ${can('admin') ? `<div class="card">
       ${cardTitle('file', 'var(--accent)', 'Descarga tu cartera', 'tus datos son tuyos: llévatelos cuando quieras')}
       <p class="muted">Un archivo de Excel con <b>todos tus contactos y su clasificación</b>: una hoja con toda la cartera y una por clasificación
         (clientes, cotizando, en proceso, declinados con y sin perfil), con montos, vendedor, origen y fechas. Trae también cada toque, el historial

@@ -27,10 +27,12 @@ const { transactionalRoutes } = require('./tx');
 const { snapshot, listBackups, backupDir, dailyBackup } = require('./backup');
 const fs = require('node:fs');
 
-// Configuran campañas, productos, canales, links y mensajes: el Administrador ('gerente' por dentro).
-const EDITORS = ['gerente'];
+// Configuran campañas, productos, canales, links y mensajes: el Administrador.
+const EDITORS = ['admin'];
+// Dirigen al equipo: corrigen cualquier lead, reasignan y piden seguimientos.
+const MANAGERS = ['admin', 'gerente'];
 // Ven resultados (Resumen, campañas, reportes): Administrador, Director y Asignador.
-const VIEWERS = ['gerente', 'director', 'operador'];
+const VIEWERS = ['admin', 'gerente', 'director', 'operador'];
 // La etapa que se ve (misma regla que FOLLOWUP.stageOf), para filtrar y contar en SQL. Con citas (según el giro) se agregan
 // "Cita agendada" y "Asistió" antes de cotizar.
 const APPT_SQL = `WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state = 'asistio' THEN 'asistio'
@@ -58,7 +60,7 @@ const canAssign = (user) => Boolean(user && (user.role === 'operador' || user.ca
 const assignFlag = (role, value) => (role !== 'operador' && value ? 1 : 0);
 // "También atiende leads": el vendedor ya lo hace por su rol.
 const sellFlag = (role, value) => (role !== 'vendedor' && value ? 1 : 0);
-const canReassign = (user) => Boolean(user && (user.role === 'gerente' || canAssign(user)));
+const canReassign = (user) => Boolean(user && (MANAGERS.includes(user.role) || canAssign(user)));
 const requireAssigner = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Inicia sesión' });
   if (!canAssign(req.user)) return res.status(403).json({ error: 'Solo quien asigna leads puede hacerlo' });
@@ -199,11 +201,11 @@ function createApp({ db, config }) {
     if (password !== undefined && password !== '' && String(password).length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     setSetting(db, 'company_name', String(company).trim().slice(0, 80));
     const id = Number(db.prepare('INSERT INTO users (name, email, password_hash, role, can_assign, can_sell) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', 'gerente', assignFlag('gerente', operates), sellFlag('gerente', sellsToo)).lastInsertRowid);
+      .run(String(name).trim(), String(email).trim(), password ? auth.hashPassword(String(password)) : '', 'admin', assignFlag('admin', operates), sellFlag('admin', sellsToo)).lastInsertRowid);
     db.prepare("DELETE FROM settings WHERE key = 'setup_code'").run();
     if (!password) return res.status(201).json({ invited: true, name, email, ...accessLink(req, id, 'invite') });
     startSession(req, res, id);
-    res.status(201).json({ id, name, email, role: 'gerente', can_assign: assignFlag('gerente', operates), sells: sellFlag('gerente', sellsToo) });
+    res.status(201).json({ id, name, email, role: 'admin', can_assign: assignFlag('admin', operates), sells: sellFlag('admin', sellsToo) });
   });
 
   // ---------- Sesión ----------
@@ -215,17 +217,17 @@ function createApp({ db, config }) {
     const fails = loginFails.get(key);
     if (fails && fails.until > Date.now()) {
       const min = Math.ceil((fails.until - Date.now()) / 60e3);
-      return res.status(429).json({ error: `Demasiados intentos. Espera ${min} ${min === 1 ? 'minuto' : 'minutos'} o pídele a tu gerente un link para crear una contraseña nueva.` });
+      return res.status(429).json({ error: `Demasiados intentos. Espera ${min} ${min === 1 ? 'minuto' : 'minutos'} o pídele al administrador un link para crear una contraseña nueva.` });
     }
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(String(email || '').trim());
     if (user && !user.password_hash) {
-      return res.status(401).json({ error: 'Todavía no activas tu acceso: abre el link de invitación que te mandó tu gerente.' });
+      return res.status(401).json({ error: 'Todavía no activas tu acceso: abre el link de invitación que te mandaron.' });
     }
     if (!user || !auth.verifyPassword(String(password || ''), user.password_hash)) {
       loginByIp.hit(ip);
       const n = (fails?.until && fails.until <= Date.now() ? 0 : fails?.n || 0) + 1; // si ya pasó el bloqueo, cuenta de nuevo
       loginFails.set(key, { n, until: n >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0 });
-      return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele a tu gerente un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos',
+      return res.status(401).json({ error: n >= LOGIN_MAX_FAILS ? 'Demasiados intentos. Espera 15 minutos o pídele al administrador un link para crear una contraseña nueva.' : 'Email o contraseña incorrectos',
         captcha: failed(req) || undefined });
     }
     loginFails.delete(key);
@@ -265,14 +267,14 @@ function createApp({ db, config }) {
     WHERE t.token_hash = ?`).get(sha256(token));
   app.get('/api/access/:token', (req, res) => {
     const t = findToken(req.params.token);
-    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+    if (!t || t.used_at || t.expires_at < Date.now() || !t.active) return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele al administrador uno nuevo.' });
     res.json({ name: t.name, email: t.email, kind: t.kind });
   });
   app.post('/api/access/:token', captcha, (req, res) => {
     const t = findToken(req.params.token);
     if (!t || t.used_at || t.expires_at < Date.now() || !t.active) {
       suspicious.hit(clientIp(req));
-      return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele a tu gerente uno nuevo.' });
+      return res.status(410).json({ error: 'Este link ya no sirve: venció o ya se usó. Pídele al administrador uno nuevo.' });
     }
     const password = String(req.body?.password || '');
     if (password.length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
@@ -291,7 +293,7 @@ function createApp({ db, config }) {
     term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0',
     industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1', captcha_site_key: config.turnstileSiteKey || '' });
   app.get('/api/company', (req, res) => res.json(company()));
-  app.patch('/api/company', auth.requireRole('gerente'), (req, res) => {
+  app.patch('/api/company', auth.requireRole('admin'), (req, res) => {
     let b = req.body || {};
     if (b.name !== undefined) {
       if (!String(b.name).trim()) return res.status(400).json({ error: 'Escribe el nombre de la empresa' });
@@ -329,7 +331,7 @@ function createApp({ db, config }) {
   // ---------- Configuración (solo gerente) ----------
   // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
   // Primeros pasos del gerente: cada uno se marca solo cuando ya está hecho.
-  app.get('/api/onboarding', auth.requireRole('gerente'), (req, res) => {
+  app.get('/api/onboarding', auth.requireRole('admin'), (req, res) => {
     const n = (sql, ...p) => db.prepare(sql).get(...p).n;
     const steps = [
       { key: 'empresa', label: 'Pon tu logo y cómo le llamas a lo que vendes', done: Boolean(getSetting(db, 'company_logo')), view: 'settings', tab: 'empresa' },
@@ -348,7 +350,7 @@ function createApp({ db, config }) {
     const hasLeads = Boolean(db.prepare('SELECT 1 FROM leads LIMIT 1').get());
     return { last, due: hasLeads && Boolean(since) && Date.now() - new Date(since).getTime() >= CARTERA_EVERY_DAYS * DAY_MS };
   }
-  app.get('/api/system', auth.requireRole('gerente'), (req, res) => {
+  app.get('/api/system', auth.requireRole('admin'), (req, res) => {
     const file = config.dbPath;
     const size = file && file !== ':memory:' && fs.existsSync(file) ? fs.statSync(file).size : null;
     const backups = file && file !== ':memory:' ? listBackups(file) : [];
@@ -358,7 +360,7 @@ function createApp({ db, config }) {
       cartera: carteraStatus() });
   });
   // Descarga de un respaldo completo al momento, para guardarlo fuera del servidor.
-  app.get('/api/backup', auth.requireRole('gerente'), (req, res) => {
+  app.get('/api/backup', auth.requireRole('admin'), (req, res) => {
     if (!config.dbPath || config.dbPath === ':memory:') return res.status(400).json({ error: 'No hay base de datos en disco' });
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     const tmp = path.join(backupDir(config.dbPath), `descarga-${Date.now()}.db`);
@@ -506,7 +508,7 @@ function createApp({ db, config }) {
   // ---------- Usuarios ----------
   app.get('/api/users', auth.requireUser, (req, res) => {
     // Los demás solo necesitan nombres y roles (listas de vendedores); correos y accesos son del gerente.
-    if (req.user.role !== 'gerente') return res.json(db.prepare('SELECT id, name, role, active, can_sell FROM users ORDER BY active DESC, name').all());
+    if (req.user.role !== 'admin') return res.json(db.prepare('SELECT id, name, role, active, can_sell FROM users ORDER BY active DESC, name').all());
     // pendiente = todavía no abre su invitación (no tiene contraseña).
     res.json(db.prepare(`SELECT id, name, email, role, active, can_assign, can_sell, created_at, last_login_at, password_hash = '' AS pendiente,
       (SELECT MAX(expires_at) FROM user_tokens t WHERE t.user_id = users.id AND t.used_at IS NULL) AS link_vence,
@@ -514,7 +516,7 @@ function createApp({ db, config }) {
       FROM users ORDER BY active DESC, name`).all());
   });
 
-  app.post('/api/users', auth.requireRole('gerente'), (req, res) => {
+  app.post('/api/users', auth.requireRole('admin'), (req, res) => {
     // Desde la pantalla se da de alta sin contraseña y se manda el link de invitación; con password (scripts de carga) queda activo.
     const { name, email, password, role, can_assign: operates, can_sell: sellsToo } = req.body || {};
     if (!name || !email || !ROLES.includes(role)) return res.status(400).json({ error: 'Faltan datos' });
@@ -531,20 +533,20 @@ function createApp({ db, config }) {
   });
 
   // Link de acceso: invitación (si aún no entra) o para crear una contraseña nueva (si la olvidó).
-  app.post('/api/users/:id/access-link', auth.requireRole('gerente'), (req, res) => {
+  app.post('/api/users/:id/access-link', auth.requireRole('admin'), (req, res) => {
     const user = db.prepare('SELECT id, active, password_hash FROM users WHERE id = ?').get(Number(req.params.id));
     if (!user) return res.status(404).json({ error: 'No existe' });
     if (!user.active) return res.status(400).json({ error: 'Primero reactiva al usuario' });
     res.json(accessLink(req, user.id, user.password_hash ? 'reset' : 'invite'));
   });
 
-  app.patch('/api/users/:id', auth.requireRole('gerente'), (req, res) => {
+  app.patch('/api/users/:id', auth.requireRole('admin'), (req, res) => {
     const id = Number(req.params.id);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     if (!user) return res.status(404).json({ error: 'No existe' });
     const { name, role, active, password, can_assign: operates, can_sell: sellsToo } = req.body || {};
     if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: 'Rol inválido' });
-    if (id === req.user.id && (active === false || (role && role !== 'gerente'))) {
+    if (id === req.user.id && (active === false || (role && role !== 'admin'))) {
       return res.status(400).json({ error: 'No puedes desactivarte ni quitarte el rol de Administrador' });
     }
     // El gerente no escribe contraseñas: genera un link para que cada quien elija la suya.
@@ -619,7 +621,7 @@ function createApp({ db, config }) {
   // El gerente puede corregir (etapa, montos), pero los toques solo los registra el vendedor dueño del lead.
   // Con "También atiende leads" (sells), el gerente u otro rol trabaja como vendedor los leads que tiene asignados.
   function canEdit(user, lead) {
-    if (user.role === 'gerente') return true;
+    if (MANAGERS.includes(user.role)) return true;
     return Boolean(user.sells) && lead.assigned_to === user.id;
   }
   const canTouch = (user, lead) => Boolean(user.sells) && lead.assigned_to === user.id;
@@ -650,7 +652,7 @@ function createApp({ db, config }) {
     res.json(archived === null ? leads : { leads, archived, archive_days: ARCHIVE_DAYS });
   });
 
-  app.get('/api/leads.csv', auth.requireRole('gerente', 'director'), (req, res) => {
+  app.get('/api/leads.csv', auth.requireRole(...MANAGERS, 'director'), (req, res) => {
     const { sql, params } = leadFilters(req);
     const rows = db.prepare(`${leadSelect} ${sql} ORDER BY l.created_at DESC`).all(...params);
     const cols = [['id', 'ID'], ['name', 'Nombre'], ['phone', 'Teléfono'], ['email', 'Email'], ['source', 'Origen'],
@@ -688,12 +690,12 @@ function createApp({ db, config }) {
     const free = !lead.assigned_to && ['nuevo', 'nuevo_perfil', 'cotizando'].includes(lead.status);
     res.json({ ...lead, events, can_edit: canEdit(req.user, lead), can_touch: canTouch(req.user, lead) || (free && Boolean(req.user.sells)),
       // El gerente que aún no atiende leads: se le ofrece atender este (un clic).
-      can_take: free && req.user.role === 'gerente' && !req.user.sells,
+      can_take: free && MANAGERS.includes(req.user.role) && !req.user.sells,
       can_edit_origin: canEdit(req.user, lead) || canEditOrigin(req.user), can_reassign: canReassign(req.user) });
   });
 
   app.post('/api/leads', auth.requireUser, (req, res) => {
-    if (!['gerente', 'vendedor', 'operador'].includes(req.user.role) && !canAssign(req.user) && !req.user.sells) {
+    if (![...MANAGERS, 'vendedor', 'operador'].includes(req.user.role) && !canAssign(req.user) && !req.user.sells) {
       return res.status(403).json({ error: 'No tienes permiso' });
     }
     const b = req.body || {};
@@ -785,7 +787,7 @@ function createApp({ db, config }) {
   });
 
   // "Pedir seguimiento": el gerente le deja al vendedor una instrucción sobre un lead; sale arriba en su Mi día hasta que registre un toque.
-  app.post('/api/leads/:id/request', auth.requireRole('gerente', 'director'), (req, res) => {
+  app.post('/api/leads/:id/request', auth.requireRole(...MANAGERS, 'director'), (req, res) => {
     const lead = db.prepare('SELECT id, assigned_to FROM leads WHERE id = ?').get(Number(req.params.id));
     if (!lead) return res.status(404).json({ error: 'No existe' });
     const text = String(req.body?.text || '').trim().slice(0, 300);
@@ -875,7 +877,7 @@ function createApp({ db, config }) {
 
   // Equipo hoy: una fila por vendedor con lo que requiere atención del gerente.
   const FIRST_TOUCH_HOURS = 2; const COLD_DAYS = 15;
-  app.get('/api/team', auth.requireRole('gerente', 'director'), (req, res) => {
+  app.get('/api/team', auth.requireRole(...MANAGERS, 'director'), (req, res) => {
     const nowMs = Date.now();
     const sellers = db.prepare("SELECT id, name, can_assign FROM users WHERE (role = 'vendedor' OR can_sell = 1) AND active = 1 ORDER BY name").all();
     // Vendedores que también asignan: cuántos leads repartieron en 7 días y cuántos se quedaron ellos (para que se note si se quedan de más).
@@ -1035,7 +1037,7 @@ function createApp({ db, config }) {
       }
     }
     const product = productId ? db.prepare('SELECT price, fixed_price FROM catalog_items WHERE id = ?').get(productId) : null;
-    if (product?.fixed_price && product.price > 0 && user.role !== 'gerente') {
+    if (product?.fixed_price && product.price > 0 && !MANAGERS.includes(user.role)) {
       const total = Math.round(product.price * (quantity || 1) * 100) / 100;
       const settingQuote = b.quote_amount !== undefined || b.quantity !== undefined || b.product_id !== undefined || (next.status === 'cotizando' && lead.status !== 'cotizando');
       const settingSale = b.sale_amount !== undefined || b.quantity !== undefined || b.product_id !== undefined || (next.status === 'vendido' && lead.status !== 'vendido');
@@ -1233,7 +1235,7 @@ function createApp({ db, config }) {
     if (lead.manager_request) {
       db.prepare('UPDATE leads SET manager_request = NULL, manager_request_at = NULL WHERE id = ?').run(lead.id);
       db.prepare('UPDATE manager_requests SET done_at = ? WHERE lead_id = ? AND done_at IS NULL').run(ts, lead.id);
-      addEvent(db, lead.id, req.user.id, 'estado', 'Atendió el seguimiento que pidió el gerente');
+      addEvent(db, lead.id, req.user.id, 'estado', 'Atendió el seguimiento que se le pidió');
     }
     if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);
     const noun = FOLLOWUP.apptNoun();
@@ -1278,7 +1280,7 @@ function createApp({ db, config }) {
     res.status(201).json({ ok: true });
   });
 
-  app.delete('/api/leads/:id', auth.requireRole('gerente'), (req, res) => {
+  app.delete('/api/leads/:id', auth.requireRole('admin'), (req, res) => {
     const r = db.prepare('DELETE FROM leads WHERE id = ?').run(Number(req.params.id));
     res.status(r.changes ? 200 : 404).json({ ok: r.changes > 0 });
   });
@@ -1392,7 +1394,7 @@ function createApp({ db, config }) {
     // Al vendedor: el promedio del equipo con los mismos filtros, sin nombres, para compararse. Con un solo vendedor no aplica.
     let team = null;
     if (req.user.role === 'vendedor') {
-      const all = leadFilters({ user: { role: 'gerente' }, query: { ...req.query, assigned: undefined } });
+      const all = leadFilters({ user: { role: 'admin' }, query: { ...req.query, assigned: undefined } });
       const t = db.prepare(`SELECT COUNT(DISTINCT l.assigned_to) AS vendedores, COUNT(*) AS recibidos,
           COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados, COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
           AVG(CASE WHEN l.won_at IS NOT NULL AND l.sale_amount > 0 THEN l.sale_amount END) AS ticket,
@@ -1531,7 +1533,7 @@ function createApp({ db, config }) {
 
   // ---------- Tu cartera completa en Excel: los datos son de la empresa y se los puede llevar cuando quiera ----------
   // Una hoja por clasificación, más toques, historial, productos, campañas e inversión, y el equipo. Solo el gerente.
-  app.get('/api/export/cartera.xlsx', auth.requireRole('gerente', 'director'), (req, res) => {
+  app.get('/api/export/cartera.xlsx', auth.requireRole(...MANAGERS, 'director'), (req, res) => {
     const when = (iso) => (iso ? new Date(iso).toLocaleString('sv-SE', { timeZone: 'America/Mexico_City', dateStyle: 'short', timeStyle: 'short' }) : '');
     const day = (v) => (v ? String(v).slice(0, 10) : '');
     const yes = (v) => (v ? 'Sí' : 'No');
@@ -1575,7 +1577,7 @@ function createApp({ db, config }) {
     const items = db.prepare('SELECT c.*, ch.name AS channel FROM catalog_items c LEFT JOIN catalog_items ch ON ch.id = c.channel_id ORDER BY c.kind, c.name').all();
     const budgets = db.prepare(`SELECT c.name, b.month, b.amount FROM campaign_budgets b JOIN catalog_items c ON c.id = b.campaign_id ORDER BY c.name, b.month`).all();
     const users = db.prepare('SELECT name, email, role, active FROM users ORDER BY active DESC, name').all();
-    const ROLE = { gerente: 'Gerente', marketing: 'Gerente de marketing', vendedor: 'Vendedor', analista: 'Analista', operador: 'Coordinador de leads' };
+    const ROLE = { admin: 'Administrador', gerente: 'Gerente', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
     const file = xlsx.workbook([
       { name: 'Resumen', rows: resumen },
       { name: 'Toda la cartera', rows: [head, ...leads.map(row)] },
@@ -1607,7 +1609,7 @@ function createApp({ db, config }) {
     if (!err.status || err.status >= 500) logOpsError(db, 'servidor', `${req.method} ${req.path.replace(/\/\d+/g, '/:id')}`, err.message);
     if (res.headersSent) return;
     const status = err.status && err.status < 500 ? err.status : 500;
-    const msg = status === 500 ? 'Algo salió mal y no se guardó. Intenta de nuevo; si sigue, avisa al gerente.'
+    const msg = status === 500 ? 'Algo salió mal y no se guardó. Intenta de nuevo; si sigue, avisa al administrador.'
       : err.type === 'entity.parse.failed' ? 'Datos inválidos' : err.type === 'entity.too.large' ? 'Lo que mandaste es demasiado grande' : err.message;
     res.status(status).json({ error: msg });
   });
@@ -1635,7 +1637,7 @@ function seedAdmin(db, config) {
   const count = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
   if (count > 0 || !config.adminEmail || !config.adminPassword) return false;
   db.prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-    .run(config.adminName || 'Gerente', config.adminEmail, auth.hashPassword(config.adminPassword), 'gerente');
+    .run(config.adminName || 'Administrador', config.adminEmail, auth.hashPassword(config.adminPassword), 'admin');
   return true;
 }
 
@@ -1673,7 +1675,7 @@ if (require.main === module && process.env.PANEL_INSTANCES) {
     console.error(`No se pudo restaurar el respaldo: ${err.message}`); process.exit(1);
   }
   const db = openDb(config.dbPath);
-  if (seedAdmin(db, config)) console.log(`Usuario gerente creado: ${config.adminEmail}`);
+  if (seedAdmin(db, config)) console.log(`Usuario administrador creado: ${config.adminEmail}`);
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
     console.log(`Primer uso: abre la app en el navegador. Código de instalación: ${setupCode(db, config)}`);
   }

@@ -30,7 +30,7 @@ function assess(s, majorityVersion) {
   const add = (level, text) => alerts.push({ level, text });
   if (!s.db_ok) add('red', 'La base de datos reporta problemas: restaura el último respaldo');
   if (s.storage_warning) add('red', 'Sin volumen: los datos se borrarán en la próxima actualización');
-  if (s.setup_pending) add('yellow', 'Instalación sin terminar: falta crear al gerente');
+  if (s.setup_pending) add('yellow', 'Instalación sin terminar: falta crear al Administrador');
   if (!s.captcha) add('yellow', 'Sin captcha (faltan las claves de Turnstile)');
   if (daysAgo(s.backups?.local_last) > 2) add('red', `Respaldo diario atrasado (último: ${s.backups?.local_last || 'ninguno'})`);
   const off = s.backups?.offsite || {};

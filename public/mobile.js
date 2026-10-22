@@ -9,8 +9,8 @@ function mobileTabs() {
   const tabs = [];
   if (sells()) tabs.push({ view: 'today', label: 'Mi día', ico: 'phone' });
   if (canAssign()) tabs.push({ view: 'm-assign', label: 'Asignar', ico: 'inbox' });
-  if (can('gerente', 'director')) tabs.push({ view: 'm-team', label: 'Equipo', ico: 'users' });
-  if (sells() || canAssign() || can('gerente')) tabs.push({ action: 'new', label: 'Lead', ico: 'plus' });
+  if (can('admin', 'gerente', 'director')) tabs.push({ view: 'm-team', label: 'Equipo', ico: 'users' });
+  if (sells() || canAssign() || manages()) tabs.push({ action: 'new', label: 'Lead', ico: 'plus' });
   tabs.push({ view: 'm-numbers', label: can('vendedor') ? 'Mi mes' : 'Números', ico: 'trend' });
   return tabs;
 }
@@ -142,7 +142,7 @@ async function renderMTeam() {
 async function renderMNumbers() {
   const view = $('#view-m-numbers');
   const range = periodRange('mes');
-  const mktSide = can('gerente', 'director', 'operador');
+  const mktSide = can('admin', 'gerente', 'director', 'operador');
   const [act, st, health] = await Promise.all([
     api(`/api/activity?${rangeQuery(range)}`).catch(() => null), // todos ven ventas (el vendedor, solo las suyas)
     mktSide || F.appointments() ? api(`/api/stats?${rangeQuery(range)}`).catch(() => null) : null,
@@ -154,7 +154,7 @@ async function renderMNumbers() {
   let html = `<p class="muted small m-period">Del 1 de ${esc(month)} a hoy</p>`;
   if (act && act.ventas) {
     html += `<div class="m-tiles">
-      ${tile(act.recibidos.n, sells() && !can('gerente') ? 'leads asignados' : 'leads recibidos')}
+      ${tile(act.recibidos.n, sells() && !manages() ? 'leads asignados' : 'leads recibidos')}
       ${F.appointments() && st ? tile(st.funnel.citas, `${F.apptPlural()} agendadas`, `llegaron ${st.funnel.asistieron}`) : ''}
       ${tile(act.cotizaciones.length, 'cotizaciones', money(sum(act.cotizaciones)))}
       ${tile(act.ventas.length, 'ventas', money(sum(act.ventas)))}

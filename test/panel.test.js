@@ -27,7 +27,7 @@ test('estado técnico: solo con la clave del panel y sin datos de los clientes',
   const st = await r.json(); const text = JSON.stringify(st);
   assert.equal(st.company, 'Cliente Uno'); assert.equal(st.db_ok, true);
   assert.equal(st.activity.leads_total, 1); assert.equal(st.activity.users_active, 1);
-  assert.equal(st.errors.last_24h, 1); assert.equal(st.errors.recent[0].place, 'board (gerente)');
+  assert.equal(st.errors.last_24h, 1); assert.equal(st.errors.recent[0].place, 'board (admin)');
   for (const secret of ['Laura', 'privada', '5511112222', 'secreto@cliente.mx', 'Gerente Secreto']) assert.ok(!text.includes(secret), `no debe incluir ${secret}`);
   s.close();
 });
