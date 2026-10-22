@@ -54,12 +54,14 @@ const TOUCH_OUTCOMES = {
 // Qué resultados tienen sentido según la etapa (con citas cambian: FOLLOWUP.outcomesFor).
 const OUTCOMES_BY_STATUS = FOLLOWUP.OUTCOMES;
 const NO_ANSWER = 'No contestó (5 toques)';
-const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
+const POSTPONED = FOLLOWUP.POSTPONED;
 // Perfil rápido: tres preguntas de un toque, todas opcionales. Lo que se pregunta cambia por giro (FOLLOWUP.quickProfile).
 const QUICK_PROFILE = FOLLOWUP.INDUSTRIES.general.profile;
 // Contestó en algún momento pero dejó de responder: 3 seguimientos seguidos sin respuesta (FOLLOWUP.SILENT_MAX).
 const GHOSTED = 'Dejó de contestar';
 const DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Eligió a otro proveedor', POSTPONED, 'Otro'];
+// Bienes raíces: Descartado es solo para quien no tiene caso volver a llamar (lo que se pospone va a Nutrición).
+const RE_DECLINE_REASONS = [NO_ANSWER, GHOSTED, 'No cumple perfil', 'Precio', 'Ubicación', 'Compró con otro', 'Solo curioseaba'];
 const MILESTONES = ['assigned_at', 'contacted_at', 'profiled_at', 'quoted_at', 'won_at', 'declined_at'];
 // Canales iniciales; se editan desde Configuración.
 const DEFAULT_CHANNELS = ['Facebook', 'Instagram', 'Google', 'TikTok', 'Recomendación', 'Otro'];
@@ -192,8 +194,20 @@ function openDb(dbPath) {
     ['manager_request', 'TEXT'], ['manager_request_at', 'TEXT'], // "Pedir seguimiento" del gerente al vendedor
     ['campaign_end', 'TEXT'], ['postsale_at', 'TEXT'], ['renewal_for', 'TEXT'], ['renewal_amount', 'REAL NOT NULL DEFAULT 0'],
     // Cita (giros que se miden en citas): cuándo es, cómo va (agendada, confirmada, asistio, no_asistio) y hitos del embudo.
-    ['appt_at', 'TEXT'], ['appt_state', 'TEXT'], ['appt_set_at', 'TEXT'], ['appt_done_at', 'TEXT']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
+    ['appt_at', 'TEXT'], ['appt_state', 'TEXT'], ['appt_set_at', 'TEXT'], ['appt_done_at', 'TEXT'],
+    // Bienes raíces: perfil inmobiliario, cita (confirmación, recordatorio y conteos), apartado y trámite, nutrición y cierre.
+    ['credit_types', 'TEXT'], ['credit_status', 'TEXT'], ['budget_amount', 'REAL'], ['down_payment', 'REAL'], ['purpose', 'TEXT'], ['co_decider', 'TEXT'],
+    ['appt_confirmed_at', 'TEXT'], ['appt_reminded_at', 'TEXT'], ['appt_visits', 'INTEGER NOT NULL DEFAULT 0'],
+    ['appt_noshows', 'INTEGER NOT NULL DEFAULT 0'], ['appt_reschedules', 'INTEGER NOT NULL DEFAULT 0'],
+    ['apartado_at', 'TEXT'], ['apartado_amount', 'REAL'], ['tramite', 'TEXT'], ['nurture_reason', 'TEXT'], ['sale_method', 'TEXT'], ['unit', 'TEXT']]) { // silent_streak: toques seguidos sin respuesta desde la última vez que contestó
     if (!leadCols.includes(col)) db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
+  }
+  // Bienes raíces: lo que ya se había contestado con el perfil anterior ("¿Cómo va a pagar?") pasa al perfil nuevo.
+  if (!leadCols.includes('credit_types')) {
+    db.exec(`UPDATE leads SET credit_types = 'contado' WHERE decision_maker = 'contado';
+      UPDATE leads SET credit_status = 'aprobado' WHERE decision_maker = 'credito';
+      UPDATE leads SET credit_status = 'no_sabe' WHERE decision_maker = 'tramite';
+      UPDATE leads SET appt_visits = 1 WHERE appt_done_at IS NOT NULL;`);
   }
   // Inversión de cada campaña por mes ('AAAA-MM').
   db.exec(`CREATE TABLE IF NOT EXISTS campaign_budgets (
@@ -344,12 +358,18 @@ const WA_TEMPLATES = {
   recontacto: 'Hola {nombre}, soy {vendedor} de {empresa}. Quedamos de retomar lo de {producto}. ¿Cómo vas con tus planes?',
   postventa: 'Hola {nombre}, soy {vendedor} de {empresa}. ¿Cómo va tu {servicio}? Si conoces a alguien a quien le pueda servir, con gusto lo atendemos.',
   renovacion: 'Hola {nombre}, soy {vendedor} de {empresa}. Tu {servicio} está por terminar; ¿te ayudo a renovar para el siguiente periodo?',
+  recordatorio: 'Hola {nombre}, te recuerdo tu cita de hoy {fecha}. Aquí te espero; cualquier cosa me escribes.',
   cita: 'Hola {nombre}, soy {vendedor} de {empresa}. Te confirmo tu {cita} el {fecha}. ¿Sigue en pie?',
   reagendar: 'Hola {nombre}, soy {vendedor} de {empresa}. Te esperábamos en tu {cita}; ¿te parece si la reagendamos? Dime qué día te queda mejor.',
 };
 
+// Bienes raíces: en el primer contacto se manda precio y ficha.
+const RE_WA_TEMPLATES = {
+  cadencia: 'Hola {nombre}, soy {vendedor} de {empresa}. Gracias por tu interés en {producto}. Te comparto precio y ficha técnica; ¿te gustaría agendar una visita para conocerla?',
+};
+
 module.exports = {
-  WA_TEMPLATES,
+  WA_TEMPLATES, RE_WA_TEMPLATES, RE_DECLINE_REASONS,
   openDb, phoneKey, getSetting, setSetting, ensureSettings, CATALOG_KINDS,
   MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, QUICK_PROFILE, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, STATUSES, PROFILES, ROLES, SOURCES, MANUAL_SOURCES, LABELS,
 };

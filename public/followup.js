@@ -61,8 +61,10 @@
     servicios: { name: 'Servicios', term: 'servicio', renewals: true, appointments: true, appt: 'reunión', profile: GENERAL_PROFILE,
       help: 'Agencias, despachos y consultorías: se mide en reuniones y se ofrece la renovación a tiempo.' },
   };
-  const config = { term: 'campana', renewals: true, industry: 'general', appointments: false };
+  const config = { term: 'campana', renewals: true, industry: 'general', appointments: false,
+    hours: { days: [1, 2, 3, 4, 5, 6], start: 9 * 60, end: 19 * 60 } };
   function configure(opts = {}) {
+    if (opts.hours && Array.isArray(opts.hours.days)) config.hours = opts.hours;
     if (Object.prototype.hasOwnProperty.call(TERMS, opts.term)) config.term = opts.term;
     if (opts.renewals !== undefined) config.renewals = Boolean(opts.renewals);
     if (Object.prototype.hasOwnProperty.call(INDUSTRIES, opts.industry)) config.industry = opts.industry;
@@ -71,7 +73,9 @@
   const term = () => TERMS[config.term][0];
   const theTerm = () => `${TERMS[config.term][1]} ${TERMS[config.term][0]}`;
   const industry = () => INDUSTRIES[config.industry];
-  const appointments = () => config.appointments;
+  // Bienes raíces trae su propio tablero (Perfil, Cita, Apartado, Nutrición, Descartado); siempre se mide en citas.
+  const realEstate = () => config.industry === 'bienes_raices';
+  const appointments = () => config.appointments || realEstate();
   // Cómo se le llama a la cita en este giro (cita, valoración, prueba de manejo, reunión). Todas son "la".
   const apptNoun = () => industry().appt || 'cita';
   const PLURAL = { cita: 'citas', valoración: 'valoraciones', 'prueba de manejo': 'pruebas de manejo', reunión: 'reuniones' };
@@ -94,11 +98,13 @@
   //   Los declinados se separan en con perfil (base para campañas futuras) y sin perfil.
   const STAGES = ['nuevo', 'contactando', 'contesto', 'nuevo_perfil', 'cotizando', 'vendido', 'declinado_perfil', 'declinado_sin'];
   const APPT_STAGES = ['nuevo', 'contactando', 'contesto', 'nuevo_perfil', 'cita', 'asistio', 'cotizando', 'vendido', 'declinado_perfil', 'declinado_sin'];
-  const stages = () => (config.appointments ? APPT_STAGES : STAGES);
+  const RE_STAGES = ['nuevo', 'contactando', 'perfil', 'cita', 'cotizando', 'apartado', 'vendido', 'nutricion', 'descartado'];
+  const stages = () => (realEstate() ? RE_STAGES : appointments() ? APPT_STAGES : STAGES);
   const OPEN = ['nuevo', 'nuevo_perfil'];
   const SCHEDULED = ['agendada', 'confirmada'];
   function stageOf(l) {
-    if (config.appointments && OPEN.includes(l.status) && l.appt_state) {
+    if (realEstate()) return reStage(l);
+    if (appointments() && OPEN.includes(l.status) && l.appt_state) {
       if (l.appt_state === 'asistio') return 'asistio';
       return 'cita'; // agendada, confirmada o no llegó (toca reagendar)
     }
@@ -106,10 +112,83 @@
     if (l.status === 'declinado') return l.profile === 'cumple' ? 'declinado_perfil' : 'declinado_sin';
     return l.status;
   }
+  // ---------- Bienes raíces ----------
+  //   Nuevo (meta: contacto en 15 min de horario de atención) · Contactando (5 toques) · Perfil (se califica) · Cita
+  //   · Cotizando · Apartado (avance del trámite) · Vendido. Aparte: Nutrición (cumple pero no es ahora; vuelve sola en
+  //   su fecha) y Descartado (no tiene caso volver a llamar).
+  const POSTPONED = 'Lo pospuso / sin presupuesto ahora';
+  const CREDIT_TYPES = { infonavit: 'Infonavit', bancario: 'Bancario', cofinavit: 'Cofinavit', fovissste: 'Fovissste', contado: 'Contado', otros: 'Otros' };
+  // Perfil inmobiliario: todo de un toque salvo presupuesto y enganche. "Cuándo quiere mudarse" usa la columna start_window.
+  const RE_PROFILE = {
+    credit_types: { label: 'Tipo de crédito', multi: true, options: CREDIT_TYPES },
+    credit_status: { label: 'Estatus del crédito', options: { no_sabe: 'No sabe', tramite: 'En trámite', precalificado: 'Precalificado', aprobado: 'Aprobado' } },
+    budget_amount: { label: 'Presupuesto', money: true },
+    down_payment: { label: 'Enganche', money: true },
+    purpose: { label: 'Uso', options: { vivir: 'Para vivir', invertir: 'Para invertir' } },
+    start_window: { label: '¿Cuándo quiere mudarse?', options: { mes: 'Este mes', trimestre: '1 a 3 meses', despues: 'Más adelante' } },
+    co_decider: { label: '¿Quién más decide?', options: { solo: 'Solo él/ella', pareja: 'Pareja', familia: 'Familia', socio: 'Socio' } },
+  };
+  const reMissing = (l) => Object.keys(RE_PROFILE).filter((k) => l[k] == null || l[k] === '');
+  // Cumple: crédito precalificado o aprobado (o paga de contado) y ya dijo su presupuesto.
+  const reQualifies = (l) => (['precalificado', 'aprobado'].includes(l.credit_status) || String(l.credit_types || '').split(',').includes('contado'))
+    && Number(l.budget_amount) > 0;
+  const NURTURE = { momento: 'No es el momento', credito: 'Crédito no aprobado', enfrio: 'Se enfrió tras cotizar' };
+  const TRAMITE = { expediente: 'Integrando expediente', revision: 'Crédito en revisión', aprobado: 'Crédito aprobado', rechazado: 'Crédito rechazado' };
+  function reStage(l) {
+    if (l.status === 'vendido') return 'vendido';
+    if (l.status === 'declinado') return l.nurture_reason || l.decline_reason === POSTPONED ? 'nutricion' : 'descartado';
+    if (l.status === 'cotizando' && l.apartado_at) return 'apartado';
+    if (l.status === 'cotizando' || l.appt_state === 'asistio') return 'cotizando'; // "Sí vino" pasa a Cotizando
+    if (l.appt_state) return 'cita'; // agendada, confirmada o no vino (toca reagendar)
+    if (l.contacted_at || l.status === 'nuevo_perfil') return 'perfil';
+    return (l.touch_count || 0) > 0 ? 'contactando' : 'nuevo';
+  }
+  const ymdOf = (d) => { const x = new Date(d); return `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`; };
+  // El día de la cita, si la confirmó antes de ese día, toca recordársela.
+  const reminderDue = (l) => l.appt_state === 'confirmada' && !l.appt_reminded_at && l.appt_at && Date.now() < ms(l.appt_at)
+    && ymdOf(l.appt_at) === ymdOf(Date.now()) && (!l.appt_confirmed_at || ymdOf(l.appt_confirmed_at) !== ymdOf(l.appt_at));
+  function reOutcomes(l) {
+    const st = reStage(l);
+    const appt = SCHEDULED.includes(l.appt_state)
+      ? [...(l.appt_state === 'agendada' ? ['confirmo'] : reminderDue(l) ? ['recordo'] : []), 'asistio', 'no_asistio', 'reagendo'] : [];
+    if (st === 'apartado') {
+      return [...(l.tramite === 'expediente' ? ['tramite_revision'] : []), ...(l.tramite !== 'aprobado' ? ['tramite_aprobado'] : []),
+        'vendido', 'credito_rechazado', 'sin_respuesta', 'rechazo'];
+    }
+    if (st === 'cotizando') {
+      return [...appt, ...(l.status !== 'cotizando' ? ['cotizado'] : []), 'aparto', 'seguimiento', ...(appt.length ? [] : ['segunda_visita']),
+        'sin_respuesta', 'nutricion', 'rechazo', 'vendido'];
+    }
+    if (st === 'cita') return l.appt_state === 'no_asistio' ? ['cita_agendada', 'sin_respuesta', 'nutricion', 'rechazo'] : [...appt, 'sin_respuesta', 'nutricion', 'rechazo'];
+    if (st === 'perfil') return ['cita_agendada', 'sin_respuesta', 'seguimiento', 'nutricion', 'cotizado', 'no_cumple', 'rechazo'];
+    return ['sin_respuesta', 'conversacion', 'cita_agendada', 'rechazo', 'nutricion', 'cotizado', 'no_cumple'];
+  }
+  // Minutos dentro del horario de atención desde que llegó el lead (para el semáforo de 15 minutos).
+  const SLA_MINUTES = 15;
+  function businessMinutes(fromIso, now = Date.now()) {
+    const { days, start, end } = config.hours;
+    let total = 0;
+    const d = new Date(fromIso); d.setHours(0, 0, 0, 0);
+    for (let i = 0; i < 31 && d.getTime() <= now; i++, d.setDate(d.getDate() + 1)) {
+      if (!days.includes(d.getDay())) continue;
+      const a = Math.max(d.getTime() + start * 60e3, ms(fromIso));
+      const b = Math.min(d.getTime() + end * 60e3, now);
+      if (b > a) total += (b - a) / 60e3;
+    }
+    return Math.floor(total);
+  }
+  const slaLate = (l) => realEstate() && reStage(l) === 'nuevo' && businessMinutes(l.created_at) > SLA_MINUTES;
+
   // Nombres de las etapas y resultados de toque que dependen del giro.
   const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
-  const apptLabels = () => ({ cita: `${cap(apptNoun())} agendada`, asistio: 'Asistió' });
-  const apptOutcomes = () => ({ cita_agendada: `Agendó ${apptNoun()}`, confirmo: `Confirmó la ${apptNoun()}`, asistio: 'Asistió', no_asistio: 'No llegó', reagendo: 'Cambió la fecha' });
+  const apptLabels = () => (realEstate()
+    ? { perfil: 'Perfil', cita: 'Cita', cotizando: 'Cotizando', apartado: 'Apartado', nutricion: 'Nutrición', descartado: 'Descartado' }
+    : { cita: `${cap(apptNoun())} agendada`, asistio: 'Asistió' });
+  const apptOutcomes = () => (realEstate()
+    ? { conversacion: 'Contestó', cita_agendada: 'Agendó cita', confirmo: 'Confirmó la cita', recordo: 'Le recordé la cita', asistio: 'Sí vino',
+      no_asistio: 'No vino', reagendo: 'Reprogramó', segunda_visita: 'Segunda visita', aparto: 'Apartó', tramite_revision: 'Crédito en revisión',
+      tramite_aprobado: 'Crédito aprobado', credito_rechazado: 'Crédito rechazado', nutricion: 'A nutrición', vendido: 'Firmó (vendido)' }
+    : { cita_agendada: `Agendó ${apptNoun()}`, confirmo: `Confirmó la ${apptNoun()}`, asistio: 'Asistió', no_asistio: 'No llegó', reagendo: 'Cambió la fecha' });
 
   // Resultados posibles del siguiente toque según la etapa (los primeros cuatro son los que se ven en Mi día).
   const OUTCOMES = {
@@ -126,7 +205,8 @@
       const k = nextAction(l)?.kind;
       return k === 'postventa' ? ['referidos'] : k === 'renovacion' ? ['renovo', 'no_renueva'] : [];
     }
-    if (!config.appointments || !OPEN.includes(l.status)) return OUTCOMES[l.status];
+    if (realEstate()) return reOutcomes(l);
+    if (!appointments() || !OPEN.includes(l.status)) return OUTCOMES[l.status];
     if (SCHEDULED.includes(l.appt_state)) {
       return [...(l.appt_state === 'agendada' ? ['confirmo'] : []), 'asistio', 'no_asistio', 'reagendo', 'sin_respuesta', 'cotizado', 'rechazo', 'vendido'];
     }
@@ -159,15 +239,20 @@
     }
     const done = l.touch_count || 0;
     const n = done + 1;
-    // Cita agendada: confirmarla un día antes y, ya pasada la hora, anotar si llegó. Manda sobre lo demás.
-    const appt = config.appointments && OPEN.includes(l.status);
+    // Cita agendada: confirmarla un día antes (en bienes raíces, también recordarla el mismo día) y, ya pasada la hora,
+    // anotar si llegó. Manda sobre lo demás. En bienes raíces también aplica a la segunda visita de quien ya cotiza.
+    const appt = appointments() && (OPEN.includes(l.status) || (realEstate() && l.status === 'cotizando'));
     if (appt && SCHEDULED.includes(l.appt_state) && l.appt_at) {
       const at = ms(l.appt_at);
-      const when = `${fmtDay(new Date(at))} ${new Date(at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}`;
+      const hh = new Date(at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      const when = `${fmtDay(new Date(at))} ${hh}`;
+      const incomplete = realEstate() && reMissing(l).length ? ' · completa el perfil' : '';
       if (l.appt_state === 'agendada' && Date.now() < at) {
         return { kind: 'cita', n, due: new Date(Math.max(at - DAY, ms(l.last_touch_at || l.created_at))),
-          label: `Confirmar la ${apptNoun()} del ${when}` };
+          label: `Confirmar la ${apptNoun()} del ${when}${incomplete}` };
       }
+      if (realEstate() && reminderDue(l)) return { kind: 'recordatorio', n, due: new Date(at - 3 * 3600e3), label: `Hoy: recordarle la cita de las ${hh}${incomplete}` };
+      if (realEstate()) return { kind: 'asistencia', n, due: new Date(at), agreed: true, label: '¿Vino a la cita?' };
       // agreed: se muestra la hora de la cita junto al día.
       return { kind: 'asistencia', n, due: new Date(at), agreed: true, label: `¿Llegó a la ${apptNoun()}?` };
     }
@@ -182,7 +267,11 @@
     }
     // No llegó a la cita: reagendarla al día siguiente.
     if (appt && l.appt_state === 'no_asistio') {
-      return { kind: 'reagendar', n, due: new Date(ms(l.last_touch_at || l.created_at) + DAY), label: `No llegó: reagendar la ${apptNoun()}${lastTry(l)}` };
+      return { kind: 'reagendar', n, due: new Date(ms(l.last_touch_at || l.created_at) + DAY), label: `No ${realEstate() ? 'vino' : 'llegó'}: reagendar la ${apptNoun()}${lastTry(l)}` };
+    }
+    // Apartado: seguimiento del trámite cada semana.
+    if (realEstate() && l.status === 'cotizando' && l.apartado_at) {
+      return { kind: 'tramite', n, due: new Date(ms(l.last_touch_at || l.apartado_at) + AFTER_QUOTE_EVERY * DAY), label: `Trámite: ${TRAMITE[l.tramite] || 'en proceso'}${lastTry(l)}` };
     }
     if (l.status === 'cotizando' && l.quoted_at) {
       const since = Math.max(0, done - (l.quote_touch ?? 0)); // seguimientos hechos desde la cotización
@@ -239,7 +328,8 @@
     return `https://wa.me/${n}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
   }
 
-  const api = { TERMS, INDUSTRIES, configure, term, theTerm, industry, appointments, apptNoun, apptPlural, quickProfile, answerLabel, qualifies, stages, apptLabels, apptOutcomes, OUTCOMES, outcomesFor, apptWhen, DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, STAGES, stageOf, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
+  const api = { POSTPONED, CREDIT_TYPES, RE_PROFILE, NURTURE, TRAMITE, realEstate, reMissing, reQualifies, businessMinutes, slaLate, SLA_MINUTES,
+    TERMS, INDUSTRIES, configure, term, theTerm, industry, appointments, apptNoun, apptPlural, quickProfile, answerLabel, qualifies, stages, apptLabels, apptOutcomes, OUTCOMES, outcomesFor, apptWhen, DAY, MAX, CADENCE, FOLLOW_EVERY, QUOTE_CADENCE, AFTER_QUOTE_EVERY, STAGES, stageOf, SILENT_MAX, REFERRAL_AFTER, RENEW_BEFORE, nextAction, dayDiff, waNumber, waLink };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CRMFollowup = api;
 })(this);

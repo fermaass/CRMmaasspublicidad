@@ -10,7 +10,7 @@ const canAssign = () => Boolean(state.me && (state.me.role === 'operador' || sta
 // Atiende leads: el vendedor, o cualquier otro con "También atiende leads" (por ejemplo, el gerente de un equipo chico).
 const sells = () => Boolean(state.me && (state.me.role === 'vendedor' || state.me.sells));
 // Colores con poco contraste para texto blanco: llevan texto oscuro.
-const DARK_TEXT = new Set(['cotizando', 'declinado_sin', 'cita']);
+const DARK_TEXT = new Set(['cotizando', 'declinado_sin', 'cita', 'nutricion', 'descartado']);
 const stageOf = (l) => F.stageOf(l);
 const colorVar = (key) => `--c: var(--${key})`;
 const textClass = (key) => (DARK_TEXT.has(key) ? 'dark-text' : '');
@@ -21,7 +21,7 @@ const money = (v) => (v == null ? '—' : Number(v).toLocaleString('es-MX', { st
 const PLATFORM = 'Maass Leads';
 function applyCompany(c) {
   state.company = c;
-  F.configure({ term: c.term, renewals: c.renewals, industry: c.industry, appointments: c.appointments });
+  F.configure({ term: c.term, renewals: c.renewals, industry: c.industry, appointments: c.appointments, hours: c.work_hours });
   document.querySelectorAll('.brand-logo').forEach((img) => { img.classList.toggle('hidden', !c.logo); if (c.logo) img.src = c.logo; else img.removeAttribute('src'); });
   // Con logo, arriba se ve el logo; sin logo, el nombre. En la entrada se ven los dos.
   document.querySelectorAll('.company-name').forEach((el) => {
@@ -533,8 +533,14 @@ function cardHtml(l) {
   const owner = l.assigned_name
     ? `<span class="avatar" title="${esc(l.assigned_name)}">${esc(initials(l.assigned_name))}</span>`
     : '<span class="avatar none" title="Sin asignar">?</span>';
-  return `<div class="lead-card compact" draggable="${canEditLead(l)}" data-id="${l.id}">
+  // Bienes raíces: rojo si pasan 15 minutos (de horario de atención) sin contacto; aviso si al perfil le faltan datos.
+  const late = F.slaLate(l);
+  const st = stageOf(l);
+  const missing = F.realEstate() && ['perfil', 'cita', 'cotizando'].includes(st) ? F.reMissing(l).length : 0;
+  return `<div class="lead-card compact ${late ? 'sla-late' : ''}" draggable="${canEditLead(l)}" data-id="${l.id}">
     <div class="card-top"><span class="name">${esc(l.name || l.phone || l.email)}</span>${owner}</div>
+    ${late ? `<span class="touch-badge late sla-pill">${icon('clock', 13)} Sin contacto · ${F.businessMinutes(l.created_at)} min</span>` : ''}
+    ${missing ? `<span class="touch-badge incomplete">Perfil incompleto · faltan ${missing}</span>` : ''}
     <div class="card-bottom">${cardAction(l)}<span class="ago">${timeAgo(l.updated_at)}</span></div>
   </div>`;
 }
@@ -610,7 +616,7 @@ function touchBadge(l) {
     if (l.response_touch) return `<span class="touch-badge ok">${icon('chat', 13)} Respondió en el toque ${l.response_touch}</span>`;
     return l.touch_count ? `<span class="touch-badge">${l.touch_count} ${l.touch_count === 1 ? 'toque' : 'toques'}</span>` : '';
   }
-  return `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${icon(a.kind === 'cotizacion' ? 'file' : ['cita', 'asistencia', 'reagendar'].includes(a.kind) ? 'calendar' : 'phone', 13)} ${esc(a.label)} · ${whenLabel(a)}</span>`;
+  return `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${icon(['cotizacion', 'tramite'].includes(a.kind) ? 'file' : ['cita', 'asistencia', 'reagendar', 'recordatorio'].includes(a.kind) ? 'calendar' : 'phone', 13)} ${esc(a.label)} · ${whenLabel(a)}</span>`;
 }
 
 // Aviso arriba del tablero con lo vencido y lo de hoy (toques, seguimientos y cotizaciones).
@@ -652,6 +658,15 @@ function renderToday() {
     vendido: `Clientes: preguntar cómo va ${F.theTerm()} y pedir referidos${renewals() ? '; ofrecer la renovación a tiempo' : ''}`,
     declinado_perfil: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
     declinado_sin: 'Lo pospusieron y ya llegó la fecha de volver a contactarlos',
+    ...(F.realEstate() ? {
+      nuevo: `Recién llegados: la meta es contactarlos en menos de ${F.SLA_MINUTES} minutos (en rojo los que ya pasaron)`,
+      contactando: 'Ya se intentó y aún no contestan: 5 toques en 12 días. Manda precio y ficha',
+      perfil: 'Contestaron: califícalos (crédito, presupuesto, enganche…) y agenda la cita; no hace falta el perfil completo para agendar',
+      cita: 'Confirmar un día antes, recordar el mismo día y, pasada la hora, anotar si vino. Si no vino, reagendar',
+      cotizando: 'Ya vinieron o tienen cotización: seguimiento hasta el apartado',
+      apartado: 'Apartaron: seguimiento del trámite de crédito cada semana hasta la firma',
+      nutricion: 'Cumplen perfil pero no era el momento: ya llegó su fecha de volver a contactarlos',
+    } : {}),
   };
   const canTouch = (l) => sells() && l.assigned_to === state.me.id; // igual que el servidor
   const row = ({ l, a, req }) => {
@@ -662,6 +677,7 @@ function renderToday() {
         <button type="button" class="link name" data-open="${l.id}">${esc(l.name || l.phone || l.email)}</button>
         ${req ? `<span class="request-pill">${icon('sparkles', 13)} Pedido de seguimiento: ${esc(l.manager_request)}</span>`
           : `<span class="touch-badge ${whenClass(a.days)} ${a.agreed ? 'agreed' : ''}">${esc(a.label)} · ${whenLabel(a)}</span>`}
+        ${F.slaLate(l) ? `<span class="touch-badge late">${icon('clock', 13)} Sin contacto · ${F.businessMinutes(l.created_at)} min</span>` : ''}
         ${l.quote_amount && l.status === 'cotizando' ? `<span class="muted num">${money(l.quote_amount)}</span>` : ''}
         ${state.me.role !== 'vendedor' ? `<span class="muted">${esc(l.assigned_name || 'Sin asignar')}</span>` : ''}
         ${l.phone ? `<span class="muted">${esc(l.phone)}</span>` : ''}
@@ -741,9 +757,33 @@ function renderToday() {
 // Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
 // Perfil rápido en la ficha: tres preguntas, un toque cada una (otro toque en la misma respuesta la borra).
 function quickProfileStrip(l) {
+  if (F.realEstate()) return reProfileStrip(l);
   if (!['nuevo', 'nuevo_perfil', 'cotizando'].includes(l.status) && !Object.keys(state.meta.quickProfile).some((k) => l[k])) return '';
   return `<div class="quick-profile">${Object.entries(state.meta.quickProfile).map(([k, q]) => `<div class="qp-row"><span class="qp-q">${esc(q.label)}</span>
     ${Object.entries(q.options).map(([v, t]) => `<button type="button" class="qp ${l[k] === v ? 'on' : ''}" data-qp="${k}" data-v="${v}" ${l.can_edit ? '' : 'disabled'}>${esc(t)}</button>`).join('')}</div>`).join('')}</div>`;
+}
+
+// Horario de atención (bienes raíces): el semáforo de 15 minutos solo cuenta dentro de este horario.
+const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const hhmmOf = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+function hoursFields(h) {
+  return `<fieldset class="plain hours-fields"><legend>Horario de atención <span class="muted small">(el aviso en rojo de ${F.SLA_MINUTES} minutos solo cuenta en este horario)</span></legend>
+    <div class="seg-group">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="seg"><input type="checkbox" name="work_day" value="${d}" ${h.days.includes(d) ? 'checked' : ''}><span>${DAY_NAMES[d]}</span></label>`).join('')}</div>
+    <div class="row"><label>De <input type="time" name="work_start" value="${hhmmOf(h.start)}"></label><label>A <input type="time" name="work_end" value="${hhmmOf(h.end)}"></label></div></fieldset>`;
+}
+
+// Perfil inmobiliario: botones de un toque (tipo de crédito admite varios) y dos montos que se guardan al salir del campo.
+function reProfileStrip(l) {
+  const missing = F.reMissing(l).length;
+  const dis = l.can_edit ? '' : 'disabled';
+  const rows = Object.entries(F.RE_PROFILE).map(([k, q]) => {
+    if (q.money) return `<div class="qp-row"><span class="qp-q">${esc(q.label)}</span><input class="qp-money" data-qpmoney="${k}" inputmode="decimal" placeholder="$" value="${l[k] ?? ''}" ${dis}></div>`;
+    const on = (v) => (q.multi ? String(l[k] || '').split(',').includes(v) : l[k] === v);
+    return `<div class="qp-row"><span class="qp-q">${esc(q.label)}${q.multi ? ' <small class="muted">(varios)</small>' : ''}</span>
+      ${Object.entries(q.options).map(([v, t]) => `<button type="button" class="qp ${on(v) ? 'on' : ''}" ${q.multi ? 'data-qpm' : 'data-qp'}="${k}" data-v="${v}" ${dis}>${esc(t)}</button>`).join('')}</div>`;
+  }).join('');
+  return `<div class="quick-profile re-profile"><div class="qp-head"><b>Perfil</b>
+    <span class="touch-badge ${missing ? 'incomplete' : 'ok'}">${missing ? `Incompleto · faltan ${missing} de ${Object.keys(F.RE_PROFILE).length}` : 'Completo'}</span></div>${rows}</div>`;
 }
 
 // Campos de captura: todos opcionales y lo más cortos posible.
@@ -761,6 +801,19 @@ function wireQuickDates(root) {
 }
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
+// Nutrición: motivo y cuándo volver (3 o 6 meses, o la fecha que se elija).
+const recontactField = (months) => { const d = new Date(); d.setMonth(d.getMonth() + months);
+  return `<label>¿Cuándo lo volvemos a contactar?<input type="date" name="recontact_at" required value="${d.toISOString().slice(0, 10)}"></label>
+  <div class="quick-dates">${[[3, 'En 3 meses'], [6, 'En 6 meses']].map(([m, t]) => `<button type="button" class="ghost small ${m === months ? 'on' : ''}" data-in-months="${m}">${t}</button>`).join('')}</div>`; };
+const nurtureFields = () => `<fieldset class="plain"><legend>¿Por qué?</legend><div class="seg-group">${Object.entries(F.NURTURE)
+  .map(([v, t]) => `<label class="seg"><input type="radio" name="nurture_reason" value="${v}" required><span>${esc(t)}</span></label>`).join('')}</div></fieldset>${recontactField(3)}`;
+function wireRecontact(root) {
+  root.querySelectorAll('[data-in-months]').forEach((b) => b.addEventListener('click', () => {
+    const d = new Date(); d.setMonth(d.getMonth() + Number(b.dataset.inMonths));
+    $('[name=recontact_at]', root).value = d.toISOString().slice(0, 10);
+    root.querySelectorAll('[data-in-months]').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+}
 // Fecha y hora de la cita, con botones rápidos (mañana o pasado a las 10:00, se puede cambiar).
 const apptField = (required, text = `¿Cuándo es la ${F.apptNoun()}?`, note = true) => `<label>${esc(text)}<input type="datetime-local" name="appt_at" ${required ? 'required' : ''}></label>
   ${note ? '<label>Nota (opcional)<input name="note" maxlength="300" placeholder="Lo que conviene recordar para ese día"></label>' : ''}`;
@@ -833,6 +886,17 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
     reagendo: ['Nueva fecha', apptField(true)],
     no_asistio: [`No llegó a la ${F.apptNoun()}`, `${apptField(false, 'Si ya la reagendaste, ¿para cuándo quedó? (si no, déjalo vacío y mañana te toca reagendar)', false)}<label>¿Qué te dijo?<input name="note" maxlength="300" placeholder="Ej. Se le complicó, pide otro día"></label>`],
     asistio: [`Llegó a la ${F.apptNoun()}`, agreementFields()],
+    ...(F.realEstate() ? {
+      asistio: ['Sí vino a la cita', agreementFields()],
+      segunda_visita: ['Segunda visita', apptField(true, '¿Cuándo es la segunda visita?')],
+      nutricion: ['Pasa a Nutrición', `${nurtureFields()}<label>Nota (opcional)<input name="note" maxlength="300" placeholder="Ej. Le pagan su aguinaldo en diciembre"></label>`],
+      aparto: ['¡Apartó!', `${l.status === 'cotizando' ? '' : priceFields(l, 'quote_amount', '¿Cuál es el precio?')}
+        ${moneyField('apartado_amount', '¿Con cuánto apartó? (opcional)')}<label>Unidad (opcional)<input name="unit" maxlength="80" placeholder="Ej. Casa 14, Depto 302" value="${esc(l.unit || '')}"></label>`],
+      credito_rechazado: ['Crédito rechazado: pasa a Nutrición', `${recontactField(3)}<label>Nota (opcional)<input name="note" maxlength="300" placeholder="Ej. Le faltan puntos; volver a intentar en marzo"></label>`],
+      vendido: ['¡Firmó!', `<fieldset class="plain"><legend>¿Por qué medio se vendió?</legend><div class="seg-group">${Object.entries(F.CREDIT_TYPES)
+        .map(([v, t]) => `<label class="seg"><input type="radio" name="sale_method" value="${v}" required ${String(l.credit_types || '').split(',').length === 1 && l.credit_types === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>
+        ${priceFields(l, 'sale_amount', '¿De cuánto fue la venta?')}<label>Unidad<input name="unit" maxlength="80" placeholder="Ej. Casa 14" value="${esc(l.unit || '')}"></label>`],
+    } : {}),
   };
   if (forms[outcome]) {
     const pending = askForm(forms[outcome][0], forms[outcome][1]);
@@ -842,7 +906,8 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
       const radio = $(`#modal-extra input[type=radio][name="${k}"][value="${val}"]`); if (radio) radio.checked = true;
     }
     wireQuickDates($('#modal-extra'));
-    if (outcome === 'cotizado') wirePriceFields($('#modal-extra'), 'quote_amount');
+    if (outcome === 'cotizado' || outcome === 'aparto') wirePriceFields($('#modal-extra'), 'quote_amount');
+    wireRecontact($('#modal-extra'));
     if (outcome === 'vendido') {
       // Lo normal es cerrar por lo que se cotizó: el monto viene puesto (se puede cambiar).
       if (l.quote_amount && !$('#modal-extra [name=sale_amount]').value) $('#modal-extra [name=sale_amount]').value = String(l.quote_amount);
@@ -929,7 +994,9 @@ function renderBoard() {
       const id = e.dataTransfer.getData('text/plain');
       const lead = state.leads.find((l) => String(l.id) === id);
       // Nuevo, Contactando y Contestó las definen los toques; a mano solo se corrige hacia las etapas de adelante.
-      const target = { nuevo_perfil: 'nuevo_perfil', cotizando: 'cotizando', vendido: 'vendido', declinado_perfil: 'declinado', declinado_sin: 'declinado' }[col.dataset.stage];
+      // En bienes raíces, apartar, firmar (con su medio de venta) y pasar a Nutrición se registran con un toque; a mano solo Descartado.
+      const target = (F.realEstate() ? { descartado: 'declinado' }
+        : { nuevo_perfil: 'nuevo_perfil', cotizando: 'cotizando', vendido: 'vendido', declinado_perfil: 'declinado', declinado_sin: 'declinado' })[col.dataset.stage];
       if (!lead || stageOf(lead) === col.dataset.stage) return;
       if (!target) { toast('Esa columna se llena sola con los toques: registra el toque en la ficha del lead.'); return; }
       if (lead.status === target) return;
@@ -1067,6 +1134,7 @@ async function renderStats() {
       <p class="muted" style="margin-bottom:0">${n(s.byStage, 'nuevo')} sin tocar; ${n(s.byStage, 'declinado_perfil')} ${n(s.byStage, 'declinado_perfil') === 1 ? 'declinado' : 'declinados'} con perfil para campañas futuras.</p></div>
     <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card">${cardTitle('money', 'var(--f-cotizados)', 'Pipeline', 'cotizaciones abiertas hoy y venta esperada')}${pipelineTable(s.pipeline)}</div>
+    ${s.re ? reCards(s.re) : ''}
     <div class="card chart-card span-6">${cardTitle('target', 'var(--declinado)', '¿Por qué se pierden?', 'motivo de los declinados')}${reasonBars(s.touches.declineReasons)}</div>
     <details class="card chart-card fold-card span-6"><summary>${cardTitle('phone', 'var(--f-contactados)', '¿En qué toque responden?', 'para afinar la cadencia; ábrelo cuando lo necesites')}</summary>
       ${touchBars(s.touches.response, s.touches.noAnswer, 'f-contactados', 'respondieron')}</details>`;
@@ -1184,7 +1252,9 @@ const FUNNEL_BASE = [
   ['recibidos', 'Recibidos'], ['contactados', 'Contestaron'], ['perfilados', 'Perfilados'], ['cotizados', 'Cotizados'], ['cerrados', 'Cerrados'],
 ];
 // Con citas: Recibidos, Contestaron, Agendaron, Llegaron, Cotizados, Cerrados.
-const funnelSteps = () => (F.appointments()
+const funnelSteps = () => (F.realEstate()
+  ? [FUNNEL_BASE[0], FUNNEL_BASE[1], ['citas', 'Agendaron cita'], ['asistieron', 'Vinieron'], FUNNEL_BASE[3], ['apartados', 'Apartaron'], ['cerrados', 'Vendidos']]
+  : F.appointments()
   ? [FUNNEL_BASE[0], FUNNEL_BASE[1], ['citas', `Agendaron ${F.apptNoun()}`], ['asistieron', 'Llegaron'], FUNNEL_BASE[3], FUNNEL_BASE[4]]
   : FUNNEL_BASE);
 const pctOf = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -1437,6 +1507,22 @@ function touchBars(rows, never, colorKey, verb) {
     ${total ? `<p class="muted small-note">El ${pctOf(within, total)}% de los que ${verb} lo hizo en los primeros 3 toques.</p>` : ''}`;
 }
 
+// Bienes raíces: citas que se caen, apartados y su trámite, ventas por medio y por qué se pausan (Nutrición).
+function reCards(re) {
+  const c = re.citas;
+  const bars = (rows, labels, color) => (rows.length ? `<div class="brows">${rows.map((r) => `<div class="brow"><span class="k">${esc(labels[r.key] || r.key)}</span>
+    <div class="battery thin" style="background:transparent"><div class="seg" style="--w:${(r.n / Math.max(...rows.map((x) => x.n))) * 100}%; --c:${color}; border-radius:4px"></div></div>
+    <span class="n">${r.n}</span></div>`).join('')}</div>` : '<p class="muted">Aún no hay datos.</p>');
+  return `<div class="card chart-card span-6">${cardTitle('calendar', 'var(--cita)', 'Citas', 'cuántas se caen y cuántos regresan')}
+      <div class="mini-kpis">${[['Agendadas', c.agendadas], ['Visitas', c.visitas], ['No vinieron', c.no_vinieron], ['Reprogramaciones', c.reprogramaciones], ['Segundas visitas', c.segundas_visitas]]
+        .map(([t, v]) => `<div><b>${v}</b><span>${t}</span></div>`).join('')}</div>
+      <p class="muted small-note">Citas que se caen: ${pctOf(c.no_vinieron + c.reprogramaciones, c.agendadas + c.reprogramaciones)}% de las agendadas (no vino o reprogramó).</p></div>
+    <div class="card chart-card span-6">${cardTitle('file', 'var(--apartado)', 'Apartados en trámite', `${re.rechazados} ${re.rechazados === 1 ? 'crédito rechazado' : 'créditos rechazados'} en el periodo`)}
+      ${bars(re.tramite, F.TRAMITE, 'var(--apartado)')}</div>
+    <div class="card chart-card span-6">${cardTitle('check', 'var(--vendido)', 'Ventas por medio', 'con qué se pagó lo que se firmó')}${bars(re.porMedio, F.CREDIT_TYPES, 'var(--vendido)')}</div>
+    <div class="card chart-card span-6">${cardTitle('clock', 'var(--nutricion)', 'En nutrición', 'cumplen perfil pero no es ahora')}${bars(re.nutricion, F.NURTURE, 'var(--nutricion)')}</div>`;
+}
+
 function reasonBars(rows) {
   if (!rows.length) return '<p class="muted">Sin leads declinados con estos filtros.</p>';
   const top = Math.max(...rows.map((r) => r.n));
@@ -1611,6 +1697,12 @@ function milestones(l) {
     dates = [dates[0], dates[1], l.appt_set_at, l.appt_done_at, dates[3], dates[4]];
     names = [names[0], names[1], ['citas', `${cap(F.apptNoun())}`], ['asistieron', 'Llegó'], names[3], names[4]];
   }
+  if (F.realEstate()) {
+    reached = [...reached.slice(0, 5), !!(l.apartado_at || l.won_at), !!l.won_at];
+    dates = [...dates.slice(0, 5), l.apartado_at, l.won_at];
+    names = [...names.slice(0, 3), ['asistieron', 'Vino'], ['cotizados', 'Cotizado'], ['apartados', 'Apartado'], ['cerrados', 'Vendido']];
+    reached[4] = !!(l.quoted_at || l.won_at); dates[4] = l.quoted_at;
+  }
   const steps = names.map(([k, name], i) => [k, name, reached[i] && (dates[i] || true)]);
   return `<div class="tracker">${steps.map(([k, name, at]) => `<div class="t-step ${at ? 'done' : ''}" style="--c:var(--f-${k})">
       <span class="t-dot">${at ? '✓' : ''}</span><span class="t-name">${name}</span>
@@ -1684,6 +1776,12 @@ async function openLead(id) {
       ${l.sale_amount ? `<span class="tag cumple">Vendido ${money(l.sale_amount)}</span>` : ''}
       ${l.campaign_end ? `<span class="tag">${esc(cap(F.term()))} hasta el ${shortDate(`${l.campaign_end}T12:00:00`)}</span>` : ''}
       ${l.renewal_amount ? `<span class="tag cumple">Renovaciones ${money(l.renewal_amount)}</span>` : ''}
+      ${F.realEstate() && l.unit ? `<span class="tag">Unidad ${esc(l.unit)}</span>` : ''}
+      ${F.realEstate() && l.apartado_amount ? `<span class="tag">Apartado ${money(l.apartado_amount)}</span>` : ''}
+      ${F.realEstate() && l.tramite ? `<span class="tag ${l.tramite === 'rechazado' ? 'no_cumple' : l.tramite === 'aprobado' ? 'cumple' : ''}">${esc(F.TRAMITE[l.tramite])}</span>` : ''}
+      ${F.realEstate() && l.sale_method ? `<span class="tag cumple">Vendido por ${esc(F.CREDIT_TYPES[l.sale_method])}</span>` : ''}
+      ${F.realEstate() && l.nurture_reason ? `<span class="tag">Nutrición: ${esc(F.NURTURE[l.nurture_reason])}</span>` : ''}
+      ${F.realEstate() && (l.appt_visits || l.appt_noshows || l.appt_reschedules) ? `<span class="tag">Visitas ${l.appt_visits || 0} · no vino ${l.appt_noshows || 0} · reprogramó ${l.appt_reschedules || 0}</span>` : ''}
     </div>
     ${l.manager_request ? `<p class="request-note">${icon('sparkles', 15)} <span><b>Pedido de seguimiento:</b> ${esc(l.manager_request)}
       <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('admin', 'gerente', 'director') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
@@ -1790,6 +1888,17 @@ async function openLead(id) {
       openLead(l.id); refresh();
     } catch (err) { toast(err.message, 'error'); }
   }));
+  // Perfil inmobiliario: tipo de crédito (varios) y montos.
+  const saveProfile = async (body) => {
+    if (l.can_touch && !l.contacted_at && l.status === 'nuevo') { if (await registerTouch(l, touchChannel(), 'conversacion', body)) openLead(l.id); return; }
+    try { await api(`/api/leads/${l.id}`, { method: 'PATCH', body }); openLead(l.id); refresh(); } catch (err) { toast(err.message, 'error'); }
+  };
+  document.querySelectorAll('#drawer-body [data-qpm]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.qpm; const cur = String(l[k] || '').split(',').filter(Boolean);
+    const next = cur.includes(b.dataset.v) ? cur.filter((v) => v !== b.dataset.v) : [...cur, b.dataset.v];
+    saveProfile({ [k]: next.join(',') || null });
+  }));
+  document.querySelectorAll('#drawer-body [data-qpmoney]').forEach((i) => i.addEventListener('change', () => saveProfile({ [i.dataset.qpmoney]: i.value.trim() || null })));
   // Al llamar o escribir, el medio queda elegido y la ficha lleva al recuadro del toque para anotar cómo te fue.
   const toTouch = (ch) => {
     const r = $(`#drawer-body input[name=touch-channel][value=${ch}]`); if (r) r.checked = true;
@@ -2540,6 +2649,7 @@ async function renderSettings() {
           <select name="industry" id="industry-select">${state.meta.industries.map((g) => `<option value="${g.key}" ${g.key === (co.industry || 'general') ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
         <p class="muted small-note" id="industry-help"></p>
         <label class="inline-check"><input type="checkbox" name="appointments" ${co.appointments ? 'checked' : ''}> Mido mis ventas en citas: el vendedor agenda, se le recuerda confirmar un día antes, anota si llegó y el Resumen muestra cuántos agendan, cuántos llegan y cuánto cuesta cada cita</label>
+        ${co.industry === 'bienes_raices' ? hoursFields(co.work_hours) : ''}
         <label>¿Cómo le llamas a lo que vendes y se renueva?
           <select name="term">${Object.entries(F.TERMS).map(([k, [w]]) => `<option value="${k}" ${k === co.term ? 'selected' : ''}>${esc(cap(w))}</option>`).join('')}</select></label>
         <label class="inline-check"><input type="checkbox" name="renewals" ${co.renewals ? 'checked' : ''}> Mis clientes renuevan: al cerrar una venta se pregunta cuándo termina y se avisa al vendedor 30 días antes para ofrecer la renovación</label>
@@ -2581,7 +2691,8 @@ async function renderSettings() {
         Se reemplazan solos: <code>{nombre}</code> (primer nombre del cliente), <code>{vendedor}</code>, <code>{producto}</code>, <code>{empresa}</code> y <code>{servicio}</code> (${esc(F.term())})${F.appointments() ? `, <code>{cita}</code> (${esc(F.apptNoun())}) y <code>{fecha}</code>` : ''}.</p>
       <form id="wa-form" class="wa-form">
         ${[['cadencia', 'Primer contacto (aún no contesta)'], ['seguimiento', 'Ya contestó: perfilar o cotizar'], ['cotizacion', 'Seguimiento de la cotización'], ['recontacto', 'Volver a contactar (lo pospuso)'], ['postventa', `Cliente: cómo va ${F.theTerm()} y referidos`], ...(renewals() ? [['renovacion', 'Cliente: ofrecer la renovación']] : []),
-          ...(F.appointments() ? [['cita', `Confirmar la ${F.apptNoun()} ({fecha}: cuándo es)`], ['reagendar', `No llegó: reagendar la ${F.apptNoun()}`]] : [])]
+          ...(F.appointments() ? [['cita', `Confirmar la ${F.apptNoun()} ({fecha}: cuándo es)`], ['reagendar', `No llegó: reagendar la ${F.apptNoun()}`]] : []),
+          ...(F.realEstate() ? [['recordatorio', 'Recordatorio el mismo día de la cita']] : [])]
           .map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000">${esc(s.wa_templates[k])}</textarea></label>`).join('')}
         <p class="muted small-note">Si dejas uno vacío, vuelve al mensaje de fábrica.</p>
         <button type="submit">Guardar mensajes</button>
@@ -2703,8 +2814,11 @@ async function renderSettings() {
       if (ok === null) { renderSettings(); return; } // se cancela: el formulario vuelve a como estaba guardado
     }
     try {
+      const toMin = (v) => { const [hh, mm] = String(v).split(':').map(Number); return hh * 60 + mm; };
+      const hours = f.elements.work_start ? { work_hours: { days: [...f.querySelectorAll('[name=work_day]:checked')].map((x) => Number(x.value)),
+        start: toMin(f.elements.work_start.value), end: toMin(f.elements.work_end.value) } } : {};
       applyCompany(await api('/api/company', { method: 'PATCH', body: { name: f.elements.name.value, industry: f.elements.industry.value,
-        appointments: f.elements.appointments.checked, term: f.elements.term.value, renewals: f.elements.renewals.checked } }));
+        appointments: f.elements.appointments.checked, term: f.elements.term.value, renewals: f.elements.renewals.checked, ...hours } }));
       // Etapas, preguntas del perfil y nombres dependen del giro.
       state.meta = await api('/api/meta');
       toast('Datos de la empresa guardados', 'ok');

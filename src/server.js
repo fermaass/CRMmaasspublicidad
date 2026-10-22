@@ -3,6 +3,7 @@ const express = require('express');
 const {
   openDb, ROLES, STATUSES, PROFILES, SOURCES, MANUAL_SOURCES, LABELS, CATALOG_KINDS, phoneKey, getSetting, setSetting, ensureSettings,
   MAX_TOUCHES, CADENCE_DAYS, TOUCH_CHANNELS, TOUCH_OUTCOMES, OUTCOMES_BY_STATUS, QUICK_PROFILE, NO_ANSWER, GHOSTED, POSTPONED, DECLINE_REASONS, FOLLOWUP, WA_TEMPLATES,
+  RE_WA_TEMPLATES, RE_DECLINE_REASONS,
 } = require('./db');
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
@@ -37,14 +38,35 @@ const VIEWERS = ['admin', 'gerente', 'director', 'operador'];
 // "Cita agendada" y "Asistió" antes de cotizar.
 const APPT_SQL = `WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state = 'asistio' THEN 'asistio'
   WHEN l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state IS NOT NULL THEN 'cita'`;
-const stageSql = () => `CASE ${FOLLOWUP.appointments() ? APPT_SQL : ''}
+// Bienes raíces: Nuevo, Contactando, Perfil, Cita, Cotizando, Apartado, Vendido, Nutrición y Descartado.
+const RE_STAGE_SQL = `CASE WHEN l.status = 'vendido' THEN 'vendido'
+  WHEN l.status = 'declinado' AND (l.nurture_reason IS NOT NULL OR l.decline_reason = '${POSTPONED.replace(/'/g, "''")}') THEN 'nutricion'
+  WHEN l.status = 'declinado' THEN 'descartado'
+  WHEN l.status = 'cotizando' AND l.apartado_at IS NOT NULL THEN 'apartado'
+  WHEN l.status = 'cotizando' OR l.appt_state = 'asistio' THEN 'cotizando'
+  WHEN l.appt_state IS NOT NULL THEN 'cita'
+  WHEN l.contacted_at IS NOT NULL OR l.status = 'nuevo_perfil' THEN 'perfil'
+  WHEN l.touch_count > 0 THEN 'contactando' ELSE 'nuevo' END`;
+const stageSql = () => (FOLLOWUP.realEstate() ? RE_STAGE_SQL : `CASE ${FOLLOWUP.appointments() ? APPT_SQL : ''}
   WHEN l.status = 'nuevo' AND l.contacted_at IS NOT NULL THEN 'contesto'
   WHEN l.status = 'nuevo' AND l.touch_count > 0 THEN 'contactando'
   WHEN l.status = 'declinado' AND l.profile = 'cumple' THEN 'declinado_perfil'
-  WHEN l.status = 'declinado' THEN 'declinado_sin' ELSE l.status END`;
+  WHEN l.status = 'declinado' THEN 'declinado_sin' ELSE l.status END`);
+const declineReasons = () => (FOLLOWUP.realEstate() ? RE_DECLINE_REASONS : DECLINE_REASONS);
 // Nombres de etapas y resultados de toque con los del giro (cita, valoración, prueba de manejo…).
 const labels = () => ({ ...LABELS, ...(FOLLOWUP.appointments() ? FOLLOWUP.apptLabels() : {}) });
 const outcomeLabels = () => ({ ...TOUCH_OUTCOMES, ...FOLLOWUP.apptOutcomes() });
+// Horario de atención (para el semáforo de 15 minutos de bienes raíces): días 0-6 (domingo = 0) y horas de inicio y fin.
+const DEFAULT_HOURS = { days: [1, 2, 3, 4, 5, 6], start: 9 * 60, end: 19 * 60 };
+function parseHours(v) {
+  try {
+    const h = typeof v === 'string' ? JSON.parse(v) : v;
+    const days = [...new Set((h.days || []).map(Number))].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+    const start = Number(h.start); const end = Number(h.end);
+    if (days.length && start >= 0 && end <= 24 * 60 && start < end) return { days, start, end };
+  } catch { /* se usa el de fábrica */ }
+  return null;
+}
 // Audiencias para remarketing. Los que nunca contestaron no entran: no vale la pena volver a buscarlos.
 const AUDIENCES = {
   perfil: ["l.status = 'declinado' AND l.profile = 'cumple'", []],
@@ -114,7 +136,8 @@ const normCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 function createApp({ db, config }) {
   ensureSettings(db, config);
   FOLLOWUP.configure({ term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0',
-    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1' });
+    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1',
+    hours: parseHours(getSetting(db, 'work_hours')) || DEFAULT_HOURS });
   const loginFails = new Map();
   const loginByIp = rateLimiter(30, 15 * 60e3); // 30 intentos fallidos por IP en 15 min
   const setupTries = rateLimiter(10, 15 * 60e3);
@@ -294,7 +317,8 @@ function createApp({ db, config }) {
   // ---------- Empresa: nombre, logo y cómo se llama lo que vende (cada instalación es de una empresa) ----------
   const company = () => ({ name: getSetting(db, 'company_name') || '', logo: getSetting(db, 'company_logo') || '',
     term: getSetting(db, 'service_term') || 'campana', renewals: getSetting(db, 'renewals') !== '0',
-    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1', captcha_site_key: config.turnstileSiteKey || '' });
+    industry: getSetting(db, 'industry') || 'general', appointments: getSetting(db, 'appointments') === '1',
+    work_hours: parseHours(getSetting(db, 'work_hours')) || DEFAULT_HOURS, captcha_site_key: config.turnstileSiteKey || '' });
   app.get('/api/company', (req, res) => res.json(company()));
   app.patch('/api/company', auth.requireRole('admin'), (req, res) => {
     let b = req.body || {};
@@ -316,6 +340,11 @@ function createApp({ db, config }) {
       if (b.industry !== (getSetting(db, 'industry') || 'general')) b = { term: g.term, renewals: g.renewals, appointments: g.appointments, ...b };
       setSetting(db, 'industry', b.industry); FOLLOWUP.configure({ industry: b.industry });
     }
+    if (b.work_hours !== undefined) {
+      const h = parseHours(b.work_hours);
+      if (!h) return res.status(400).json({ error: 'Revisa el horario: elige al menos un día y que la hora de inicio sea antes que la de fin' });
+      setSetting(db, 'work_hours', JSON.stringify(h)); FOLLOWUP.configure({ hours: h });
+    }
     if (b.appointments !== undefined) { setSetting(db, 'appointments', b.appointments ? '1' : '0'); FOLLOWUP.configure({ appointments: Boolean(b.appointments) }); }
     if (b.term !== undefined) {
       if (!Object.hasOwn(FOLLOWUP.TERMS, String(b.term))) return res.status(400).json({ error: 'Opción inválida' });
@@ -329,7 +358,7 @@ function createApp({ db, config }) {
   app.get('/api/meta', (req, res) => res.json({ statuses: STATUSES, profiles: PROFILES, roles: ROLES, sources: SOURCES, manualSources: MANUAL_SOURCES, labels: labels(),
     touches: { max: MAX_TOUCHES, cadence: CADENCE_DAYS, channels: TOUCH_CHANNELS, outcomes: outcomeLabels(), byStatus: OUTCOMES_BY_STATUS },
     quickProfile: FOLLOWUP.quickProfile(), stages: FOLLOWUP.stages(),
-    industries: Object.entries(FOLLOWUP.INDUSTRIES).map(([k, g]) => ({ key: k, name: g.name, help: g.help, term: g.term, renewals: g.renewals, appointments: g.appointments, appt: g.appt || 'cita' })), declineReasons: DECLINE_REASONS, postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
+    industries: Object.entries(FOLLOWUP.INDUSTRIES).map(([k, g]) => ({ key: k, name: g.name, help: g.help, term: g.term, renewals: g.renewals, appointments: g.appointments, appt: g.appt || 'cita' })), declineReasons: declineReasons(), postponed: POSTPONED, noAnswer: NO_ANSWER, ghosted: GHOSTED, silentMax: FOLLOWUP.SILENT_MAX }));
 
   // ---------- Configuración (solo gerente) ----------
   // Estado de los datos: si la base está en disco persistente y los respaldos (solo gerente).
@@ -384,7 +413,8 @@ function createApp({ db, config }) {
   function waTemplates() {
     let saved = {};
     try { saved = JSON.parse(getSetting(db, 'wa_templates') || '{}'); } catch { /* se usan las de fábrica */ }
-    return Object.fromEntries(Object.keys(WA_TEMPLATES).map((k) => [k, typeof saved[k] === 'string' && saved[k].trim() ? saved[k] : WA_TEMPLATES[k]]));
+    const defaults = { ...WA_TEMPLATES, ...(FOLLOWUP.realEstate() ? RE_WA_TEMPLATES : {}) };
+    return Object.fromEntries(Object.keys(WA_TEMPLATES).map((k) => [k, typeof saved[k] === 'string' && saved[k].trim() ? saved[k] : defaults[k]]));
   }
   app.get('/api/wa-templates', auth.requireUser, (req, res) => res.json(waTemplates()));
 
@@ -974,6 +1004,10 @@ function createApp({ db, config }) {
   function saveExtras(user, lead, b, status) {
     const set = {};
     for (const k of Object.keys(QUICK_PROFILE)) if (b[k] !== undefined) set[k] = b[k] || null;
+    for (const k of Object.keys(FOLLOWUP.RE_PROFILE)) if (b[k] !== undefined) set[k] = b[k] ?? null;
+    // Nutrición: el motivo solo vale mientras el lead esté en pausa; al reactivarlo se quita.
+    if (status !== 'declinado' && lead.nurture_reason) set.nurture_reason = null;
+    else if (status === 'declinado' && b.nurture_reason !== undefined) set.nurture_reason = b.nurture_reason || null;
     if (b.campaign_end !== undefined) set.campaign_end = b.campaign_end || null;
     if (b.next_step !== undefined) set.next_step = String(b.next_step || '').trim().slice(0, 300) || null;
     if (b.next_step_at !== undefined) set.next_step_at = b.next_step_at ? new Date(b.next_step_at).toISOString() : null;
@@ -982,7 +1016,10 @@ function createApp({ db, config }) {
     const keys = Object.keys(set);
     if (!keys.length) return;
     db.prepare(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => set[k]), lead.id);
-    const answers = Object.keys(QUICK_PROFILE).filter((k) => set[k] && set[k] !== lead[k]).map((k) => FOLLOWUP.answerLabel(k, set[k]));
+    const reLabel = (k, v) => { const q = FOLLOWUP.RE_PROFILE[k]; return q.money ? `${q.label} $${Number(v).toLocaleString('es-MX')}` : String(v).split(',').map((x) => q.options[x] || x).join(', '); };
+    const answers = FOLLOWUP.realEstate()
+      ? Object.keys(FOLLOWUP.RE_PROFILE).filter((k) => set[k] != null && set[k] !== lead[k]).map((k) => reLabel(k, set[k]))
+      : Object.keys(QUICK_PROFILE).filter((k) => set[k] && set[k] !== lead[k]).map((k) => FOLLOWUP.answerLabel(k, set[k]));
     if (answers.length) addEvent(db, lead.id, user.id, 'perfil', `Perfil: ${answers.join(' · ')}`);
     if (set.campaign_end && set.campaign_end !== lead.campaign_end) addEvent(db, lead.id, user.id, 'estado', `La campaña termina el ${set.campaign_end}`);
     if (set.next_step_at) {
@@ -994,6 +1031,7 @@ function createApp({ db, config }) {
   // Por qué pasó solo a "Cumple perfil", con las respuestas del giro.
   function profiledWhy(lead, b) {
     if ((getSetting(db, 'industry') || 'general') === 'general') return 'habla con quien decide y tiene presupuesto';
+    if (FOLLOWUP.realEstate()) return 'su crédito califica y dio su presupuesto';
     const a = (k) => FOLLOWUP.answerLabel(k, b[k] !== undefined ? b[k] : lead[k]);
     return `${a('decision_maker')} y ${a('budget_status').toLowerCase()}`;
   }
@@ -1010,17 +1048,30 @@ function createApp({ db, config }) {
       for (const k of Object.keys(QUICK_PROFILE)) {
         if (b[k] && !Object.hasOwn(FOLLOWUP.quickProfile()[k].options, String(b[k]))) throw new Error('Respuesta de perfil inválida');
       }
+      // Perfil inmobiliario: varias opciones en tipo de crédito, una en las demás; presupuesto y enganche son montos.
+      for (const [k, q] of Object.entries(FOLLOWUP.RE_PROFILE)) {
+        if (b[k] === undefined || b[k] === null || b[k] === '' || k === 'start_window') continue;
+        if (q.money) b = { ...b, [k]: money(b[k]) };
+        else if (q.multi) {
+          const vals = [...new Set(String(b[k]).split(',').map((v) => v.trim()).filter(Boolean))];
+          if (vals.some((v) => !Object.hasOwn(q.options, v))) throw new Error('Respuesta de perfil inválida');
+          b = { ...b, [k]: vals.join(',') || null };
+        } else if (!Object.hasOwn(q.options, String(b[k]))) throw new Error('Respuesta de perfil inválida');
+      }
+      if (b.nurture_reason && !Object.hasOwn(FOLLOWUP.NURTURE, String(b.nurture_reason))) throw new Error('Motivo de nutrición inválido');
       campaign = b.campaign !== undefined ? campaignName(db, b.campaign) : lead.campaign;
       saleAmount = b.sale_amount !== undefined ? money(b.sale_amount) : lead.sale_amount;
       next = resolveStatusProfile(lead, { status: b.status, profile: b.profile });
       // Si se capturan respuestas del perfil rápido es porque se habló con el cliente: cuenta como que contestó.
-      const answering = Object.keys(QUICK_PROFILE).some((k) => b[k]);
+      const answering = [...Object.keys(QUICK_PROFILE), ...Object.keys(FOLLOWUP.RE_PROFILE)].some((k) => b[k]);
       if (answering && !lead.contacted_at && b.contacted === undefined) b = { ...b, contacted: true };
       // Las dos primeras respuestas califican (p. ej. habla con quien decide y tiene presupuesto): cumple perfil y pasa
       // a esa etapa sola (se puede corregir a mano).
       const ans = (k) => (b[k] !== undefined ? b[k] : lead[k]);
-      if (answering && next.status === 'nuevo' && next.profile === 'sin_perfilar' && b.profile === undefined
-        && FOLLOWUP.qualifies({ decision_maker: ans('decision_maker'), budget_status: ans('budget_status') })) {
+      const qualifies = FOLLOWUP.realEstate()
+        ? FOLLOWUP.reQualifies(Object.fromEntries(Object.keys(FOLLOWUP.RE_PROFILE).map((k) => [k, ans(k)])))
+        : FOLLOWUP.qualifies({ decision_maker: ans('decision_maker'), budget_status: ans('budget_status') });
+      if (answering && next.status === 'nuevo' && next.profile === 'sin_perfilar' && b.profile === undefined && qualifies) {
         next = resolveStatusProfile(lead, { profile: 'cumple' });
         autoProfiled = true;
       }
@@ -1185,7 +1236,15 @@ function createApp({ db, config }) {
     }
     // Cita: al agendarla o cambiarla se pide cuándo es; "No llegó" puede traer ya la nueva fecha.
     const apptAt = req.body.appt_at || null;
-    if (['cita_agendada', 'reagendo'].includes(outcome) && !apptAt) return res.status(400).json({ error: `Indica cuándo es la ${FOLLOWUP.apptNoun()}` });
+    if (['cita_agendada', 'reagendo', 'segunda_visita'].includes(outcome) && !apptAt) return res.status(400).json({ error: `Indica cuándo es la ${FOLLOWUP.apptNoun()}` });
+    // Bienes raíces: Nutrición y crédito rechazado llevan motivo y fecha para volver; al firmar, por qué medio se vendió.
+    const re = req.body;
+    if (outcome === 'nutricion' && !Object.hasOwn(FOLLOWUP.NURTURE, String(re.nurture_reason))) return res.status(400).json({ error: 'Elige por qué pasa a Nutrición' });
+    if (['nutricion', 'credito_rechazado'].includes(outcome) && !isDate(re.recontact_at)) return res.status(400).json({ error: 'Elige cuándo volver a contactarlo' });
+    if (outcome === 'vendido' && FOLLOWUP.realEstate() && !Object.hasOwn(FOLLOWUP.CREDIT_TYPES, String(re.sale_method))) return res.status(400).json({ error: 'Elige por qué medio se vendió' });
+    let apartadoAmount = null;
+    try { apartadoAmount = outcome === 'aparto' && re.apartado_amount ? money(re.apartado_amount) : null; } catch (e) { return res.status(400).json({ error: e.message }); }
+    const unit = String(re.unit || '').trim().slice(0, 80) || null;
     if (apptAt && !isDateTime(apptAt)) return res.status(400).json({ error: `Fecha de la ${FOLLOWUP.apptNoun()} inválida` });
     let renewalAmount = null;
     try { renewalAmount = outcome === 'renovo' ? money(req.body.renewal_amount) : null; } catch (e) { return res.status(400).json({ error: e.message }); }
@@ -1214,7 +1273,7 @@ function createApp({ db, config }) {
       if (req.body.quantity !== undefined && req.body.quantity !== '') changes.quantity = req.body.quantity;
     }
     if (outcome === 'rechazo') {
-      if (!DECLINE_REASONS.includes(req.body.decline_reason)) return res.status(400).json({ error: 'Elige el motivo' });
+      if (!declineReasons().includes(req.body.decline_reason)) return res.status(400).json({ error: 'Elige el motivo' });
       Object.assign(changes, { status: 'declinado', decline_reason: req.body.decline_reason });
       if (req.body.decline_reason === POSTPONED && req.body.recontact_at) changes.recontact_at = req.body.recontact_at;
     }
@@ -1226,6 +1285,22 @@ function createApp({ db, config }) {
     const wentSilent = outcome === 'sin_respuesta' && Boolean(lead.contacted_at) && streak >= FOLLOWUP.SILENT_MAX;
     const autoDecline = neverAnswered || wentSilent;
     if (autoDecline) Object.assign(changes, { status: 'declinado', decline_reason: neverAnswered ? NO_ANSWER : GHOSTED });
+    // Bienes raíces: si ya cumplía perfil o tenía cotización y deja de contestar, no se descarta: pasa a Nutrición en 3 meses.
+    const cooled = wentSilent && FOLLOWUP.realEstate() && (lead.profile === 'cumple' || lead.status === 'cotizando');
+    if (cooled) {
+      const d = new Date(); d.setMonth(d.getMonth() + 3);
+      Object.assign(changes, { decline_reason: FOLLOWUP.NURTURE.enfrio, nurture_reason: 'enfrio', recontact_at: d.toISOString().slice(0, 10) });
+    }
+    if (outcome === 'nutricion' || outcome === 'credito_rechazado') {
+      const reason = outcome === 'nutricion' ? re.nurture_reason : 'credito';
+      Object.assign(changes, { status: 'declinado', decline_reason: FOLLOWUP.NURTURE[reason], nurture_reason: reason, recontact_at: re.recontact_at });
+    }
+    if (outcome === 'aparto') {
+      changes.status = 'cotizando';
+      if (re.quote_amount != null && re.quote_amount !== '') changes.quote_amount = re.quote_amount;
+      if (re.product_id) changes.product_id = re.product_id;
+      if (lead.profile === 'sin_perfilar') changes.profile = 'cumple';
+    }
 
     const ts = now();
     db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -1243,16 +1318,36 @@ function createApp({ db, config }) {
     if (outcome === 'referidos') db.prepare('UPDATE leads SET postsale_at = ? WHERE id = ?').run(ts, lead.id);
     const noun = FOLLOWUP.apptNoun();
     const apptText = (iso) => new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Mexico_City' });
-    if (['cita_agendada', 'reagendo'].includes(outcome) || (outcome === 'no_asistio' && apptAt)) {
+    const Noun = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`;
+    // Reprogramar (o "no vino" con nueva fecha) cuenta como cita caída; la segunda visita se cuenta aparte, en visitas.
+    if (outcome === 'no_asistio') db.prepare('UPDATE leads SET appt_noshows = appt_noshows + 1 WHERE id = ?').run(lead.id);
+    if (['cita_agendada', 'reagendo', 'segunda_visita'].includes(outcome) || (outcome === 'no_asistio' && apptAt)) {
       const at = new Date(apptAt).toISOString();
-      db.prepare("UPDATE leads SET appt_at = ?, appt_state = 'agendada', appt_set_at = COALESCE(appt_set_at, ?) WHERE id = ?").run(at, ts, lead.id);
-      addEvent(db, lead.id, req.user.id, 'estado', `${outcome === 'cita_agendada' ? `${noun.charAt(0).toUpperCase()}${noun.slice(1)} agendada` : `${noun.charAt(0).toUpperCase()}${noun.slice(1)} reagendada`} para el ${apptText(at)}`);
+      const rescheduled = outcome === 'reagendo' || outcome === 'no_asistio' ? 1 : 0;
+      db.prepare(`UPDATE leads SET appt_at = ?, appt_state = 'agendada', appt_set_at = COALESCE(appt_set_at, ?), appt_confirmed_at = NULL,
+        appt_reminded_at = NULL, appt_reschedules = appt_reschedules + ? WHERE id = ?`).run(at, ts, rescheduled, lead.id);
+      const what = outcome === 'segunda_visita' ? 'Segunda visita agendada' : outcome === 'cita_agendada' ? `${Noun} agendada` : `${Noun} reprogramada`;
+      addEvent(db, lead.id, req.user.id, 'estado', `${what} para el ${apptText(at)}`);
     } else if (outcome === 'confirmo') {
-      db.prepare("UPDATE leads SET appt_state = 'confirmada' WHERE id = ?").run(lead.id);
+      db.prepare("UPDATE leads SET appt_state = 'confirmada', appt_confirmed_at = ? WHERE id = ?").run(ts, lead.id);
+    } else if (outcome === 'recordo') {
+      db.prepare('UPDATE leads SET appt_reminded_at = ? WHERE id = ?').run(ts, lead.id);
     } else if (outcome === 'asistio') {
-      db.prepare("UPDATE leads SET appt_state = 'asistio', appt_done_at = COALESCE(appt_done_at, ?) WHERE id = ?").run(ts, lead.id);
+      db.prepare("UPDATE leads SET appt_state = 'asistio', appt_done_at = COALESCE(appt_done_at, ?), appt_visits = appt_visits + 1 WHERE id = ?").run(ts, lead.id);
     } else if (outcome === 'no_asistio') {
       db.prepare("UPDATE leads SET appt_state = 'no_asistio' WHERE id = ?").run(lead.id);
+    }
+    // Apartado y avance del trámite de crédito.
+    if (outcome === 'aparto') {
+      db.prepare("UPDATE leads SET apartado_at = COALESCE(apartado_at, ?), tramite = 'expediente', apartado_amount = COALESCE(?, apartado_amount), unit = COALESCE(?, unit) WHERE id = ?")
+        .run(ts, apartadoAmount, unit, lead.id);
+      addEvent(db, lead.id, req.user.id, 'estado', `Apartó${unit ? ` la unidad ${unit}` : ''}${apartadoAmount ? ` con $${apartadoAmount.toLocaleString('es-MX')}` : ''}`);
+    }
+    const tramite = { tramite_revision: 'revision', tramite_aprobado: 'aprobado', credito_rechazado: 'rechazado' }[outcome];
+    if (tramite) db.prepare('UPDATE leads SET tramite = ? WHERE id = ?').run(tramite, lead.id);
+    if (outcome === 'vendido' && FOLLOWUP.realEstate()) {
+      db.prepare('UPDATE leads SET sale_method = ?, unit = COALESCE(?, unit) WHERE id = ?').run(re.sale_method, unit, lead.id);
+      addEvent(db, lead.id, req.user.id, 'estado', `Vendido por ${FOLLOWUP.CREDIT_TYPES[re.sale_method]}${unit ? ` · unidad ${unit}` : ''}`);
     }
     if (outcome === 'no_renueva') db.prepare('UPDATE leads SET renewal_for = campaign_end WHERE id = ?').run(lead.id);
     if (outcome === 'renovo') {
@@ -1316,6 +1411,7 @@ function createApp({ db, config }) {
       COALESCE(SUM(COALESCE(l.quoted_at, l.won_at) IS NOT NULL), 0) AS cotizados,
       COALESCE(SUM(COALESCE(l.appt_set_at, l.appt_done_at) IS NOT NULL), 0) AS citas,
       COALESCE(SUM(l.appt_done_at IS NOT NULL), 0) AS asistieron,
+      COALESCE(SUM(l.apartado_at IS NOT NULL), 0) AS apartados,
       COALESCE(SUM(l.won_at IS NOT NULL), 0) AS cerrados,
       COALESCE(SUM(l.status = 'declinado'), 0) AS declinados,
       COALESCE(SUM(l.sale_amount), 0) AS ingresos,
@@ -1435,8 +1531,26 @@ function createApp({ db, config }) {
       sellerStages: byStage("COALESCE(u.name, 'Sin asignar')", 'LEFT JOIN users u ON u.id = l.assigned_to'),
       total, byStatus: group('l.status'), byStage: group(stageSql()), byProfile: group('l.profile'), bySource: group('l.source'), bySeller, byCampaign,
       byChannel: byItem(CHANNEL_EXPR, 'Sin dato'), byProduct: byItem('l.product_id', 'Sin producto'),
+      re: FOLLOWUP.realEstate() ? realEstateStats(sql, params) : null,
     });
   });
+
+  // Bienes raíces: cuántas citas se caen, segundas visitas, apartados y su trámite, por qué se pausan y con qué se vende.
+  function realEstateStats(sql, params) {
+    const and = sql ? `${sql} AND` : 'WHERE';
+    const citas = db.prepare(`SELECT COALESCE(SUM(l.appt_set_at IS NOT NULL), 0) AS agendadas, COALESCE(SUM(l.appt_visits), 0) AS visitas,
+        COALESCE(SUM(l.appt_noshows), 0) AS no_vinieron, COALESCE(SUM(l.appt_reschedules), 0) AS reprogramaciones,
+        COALESCE(SUM(l.appt_visits >= 2), 0) AS segundas_visitas FROM leads l ${sql}`).get(...params);
+    const group = (col, where) => db.prepare(`SELECT ${col} AS key, COUNT(*) AS n, COALESCE(SUM(l.sale_amount), 0) AS monto FROM leads l
+      ${and} ${where} GROUP BY 1 ORDER BY n DESC`).all(...params);
+    return {
+      citas,
+      tramite: group('l.tramite', "l.status = 'cotizando' AND l.apartado_at IS NOT NULL"),
+      rechazados: db.prepare(`SELECT COUNT(*) AS n FROM leads l ${and} l.tramite = 'rechazado'`).get(...params).n,
+      porMedio: group('l.sale_method', "l.status = 'vendido' AND l.sale_method IS NOT NULL"),
+      nutricion: group('l.nurture_reason', "l.status = 'declinado' AND l.nurture_reason IS NOT NULL"),
+    };
+  }
 
   // ---------- Fallas del navegador: la app las reporta sola para el panel de Maass Leads ----------
   const clientErrors = rateLimiter(20, 60 * 60e3);
@@ -1555,10 +1669,23 @@ function createApp({ db, config }) {
       l.utm_content || '', answer(l, 'decision_maker'), answer(l, 'budget_status'), answer(l, 'start_window'),
       l.touch_count || 0, when(l.last_touch_at), l.next_step || '', when(l.next_step_at), when(l.created_at), when(l.contacted_at), when(l.quoted_at),
       when(l.won_at), l.message || '', l.last_note || ''];
-    const groups = [
-      ['Clientes', ['vendido']], ['Cotizando', ['cotizando']], ['En proceso', ['nuevo', 'contactando', 'contesto', 'nuevo_perfil']],
-      ['Declinados con perfil', ['declinado_perfil']], ['Declinados sin perfil', ['declinado_sin']],
-    ].map(([name, stages]) => ({ name, list: leads.filter((l) => stages.includes(FOLLOWUP.stageOf(l))) }));
+    // Bienes raíces: perfil inmobiliario, citas, apartado y cierre.
+    const RE = FOLLOWUP.realEstate();
+    const reAnswer = (k, v) => { const q = FOLLOWUP.RE_PROFILE[k]; return v == null || v === '' ? '' : q.money ? v : String(v).split(',').map((x) => q.options[x] || x).join(', '); };
+    const reHead = RE ? [...Object.values(FOLLOWUP.RE_PROFILE).map((q) => q.label), 'Cita', 'Visitas', 'No vino', 'Reprogramaciones', 'Apartado',
+      'Monto del apartado', 'Trámite', 'Medio de venta', 'Unidad', 'Motivo de nutrición'] : [];
+    const reRow = (l) => (RE ? [...Object.keys(FOLLOWUP.RE_PROFILE).map((k) => reAnswer(k, l[k])), when(l.appt_at), l.appt_visits || 0, l.appt_noshows || 0,
+      l.appt_reschedules || 0, when(l.apartado_at), l.apartado_amount ?? '', FOLLOWUP.TRAMITE[l.tramite] || '', FOLLOWUP.CREDIT_TYPES[l.sale_method] || '',
+      l.unit || '', FOLLOWUP.NURTURE[l.nurture_reason] || ''] : []);
+    head.push(...reHead);
+    const fullRow = (l) => [...row(l), ...reRow(l)];
+    // Una hoja por clasificación; lo que no es cliente, cotización ni cerrado va en "En proceso" (incluye etapas de cita).
+    const closedGroups = RE
+      ? [['Clientes', ['vendido']], ['Apartados', ['apartado']], ['Cotizando', ['cotizando']], ['Nutrición', ['nutricion']], ['Descartados', ['descartado']]]
+      : [['Clientes', ['vendido']], ['Cotizando', ['cotizando']], ['Declinados con perfil', ['declinado_perfil']], ['Declinados sin perfil', ['declinado_sin']]];
+    const listed = closedGroups.flatMap(([, st]) => st);
+    const groups = [...closedGroups.slice(0, RE ? 3 : 2), ['En proceso', null], ...closedGroups.slice(RE ? 3 : 2)]
+      .map(([name, stages]) => ({ name, list: leads.filter((l) => (stages ? stages.includes(FOLLOWUP.stageOf(l)) : !listed.includes(FOLLOWUP.stageOf(l)))) }));
     const sum = (list, k) => list.reduce((t, l) => t + (l[k] || 0), 0);
     const resumen = [
       ['Cartera de', company], ['Descargada el', when(new Date().toISOString())], ['Descargó', req.user.name], [],
@@ -1583,8 +1710,8 @@ function createApp({ db, config }) {
     const ROLE = { admin: 'Administrador', gerente: 'Gerente', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
     const file = xlsx.workbook([
       { name: 'Resumen', rows: resumen },
-      { name: 'Toda la cartera', rows: [head, ...leads.map(row)] },
-      ...groups.map((g) => ({ name: g.name, rows: [head, ...g.list.map(row)] })),
+      { name: 'Toda la cartera', rows: [head, ...leads.map(fullRow)] },
+      ...groups.map((g) => ({ name: g.name, rows: [head, ...g.list.map(fullRow)] })),
       { name: 'Toques', rows: [['Fecha', 'ID', 'Contacto', 'Toque', 'Medio', 'Resultado', 'Monto', 'Registró'],
         ...touches.map((t) => [when(t.created_at), t.lead_id, t.lead || '', t.n, LABELS[t.channel] || t.channel, outcomeLabels()[t.outcome] || t.outcome, t.amount ?? '', t.who || ''])] },
       { name: 'Historial', rows: [['Fecha', 'ID', 'Contacto', 'Tipo', 'Detalle', 'Usuario'],
