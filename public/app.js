@@ -475,7 +475,7 @@ function setView(view) {
   $('.toolbar').classList.toggle('hidden', ['users', 'settings', 'today', 'assign', 'team', 'seller', 'campaign'].includes(view) || view.startsWith('m-'));
   $('#f-status').classList.toggle('hidden', view === 'board');
   updateMoreFiltersLabel();
-  if (view !== 'board') { $('#board-alert').classList.add('hidden'); $('#board-archived')?.classList.add('hidden'); }
+  if (view !== 'board') { $('#board-alert').classList.add('hidden'); $('#board-archived')?.classList.add('hidden'); $('#board-discarded')?.classList.add('hidden'); }
   refresh();
 }
 
@@ -726,6 +726,7 @@ function renderToday() {
       ${sells() ? '<button type="button" id="today-new">+ Lead</button>' : ''}
     </div>
     <div id="today-results" class="today-results hidden" role="region" aria-live="polite" aria-label="Resultados de la búsqueda"></div>
+    ${myApptsToday()}
     ${requested.length ? `<section class="card today-group requests">${cardTitle('sparkles', 'var(--accent)', `Pedidos de seguimiento (${requested.length})`,
       'Se quitan solos al registrar el toque')}${requested.map(row).join('')}</section>` : ''}
     ${items.length ? sections : requested.length ? '' : `<div class="card empty-today">${icon('check', 28)}<h3>Estás al día</h3><p class="muted">No hay toques ni seguimientos pendientes para hoy.</p></div>`}`;
@@ -764,6 +765,32 @@ function renderToday() {
     $('[data-wa]', r)?.addEventListener('click', () => { const sel = $('[data-channel]', r); if (sel) sel.value = 'whatsapp'; });
     $('[data-call]', r)?.addEventListener('click', () => { const sel = $('[data-channel]', r); if (sel) sel.value = 'llamada'; });
   });
+}
+
+// Equipo hoy: las citas de hoy de cada vendedor, por hora.
+async function teamApptsToday() {
+  if (!F.appointments()) return '';
+  const [from, to] = dayRange(new Date());
+  const list = await api(`/api/appointments?from=${from.toISOString()}&to=${to.toISOString()}`).catch(() => []);
+  if (!list.length) return `<section class="card appts-today">${cardTitle('calendar', 'var(--cita)', 'Citas de hoy', 'nadie tiene citas hoy')}</section>`;
+  const by = {};
+  for (const c of list) (by[c.seller || 'Sin asignar'] ||= []).push(c);
+  return `<section class="card appts-today">${cardTitle('calendar', 'var(--cita)', `Citas de hoy (${list.length})`, 'de cada vendedor, por hora')}
+    ${Object.entries(by).map(([seller, cs]) => `<div class="appt-seller"><b>${esc(seller)}</b> <span class="muted small">${cs.length} ${cs.length === 1 ? 'cita' : 'citas'}</span>
+      ${cs.map((c) => `<button type="button" class="appt-line" data-open="${c.id}"><b>${hhmm(c.appt_at)}</b><span>${esc(c.name)}</span>
+        <span class="touch-badge ${c.appt_state === 'confirmada' || c.appt_state === 'asistio' ? 'ok' : c.appt_state === 'no_asistio' ? 'late' : 'today'}">${STATE_TEXT[c.appt_state]}</span></button>`).join('')}</div>`).join('')}</section>`;
+}
+
+// Mi día: mis citas de hoy, por hora (solo en giros que se miden en citas).
+function myApptsToday() {
+  if (!F.appointments()) return '';
+  const [from, to] = dayRange(new Date());
+  const list = state.leads.filter((l) => l.assigned_to === state.me.id && l.appt_at && l.appt_state && l.status !== 'declinado')
+    .filter((l) => new Date(l.appt_at) >= from && new Date(l.appt_at) < to).sort((a, b) => new Date(a.appt_at) - new Date(b.appt_at));
+  if (!list.length) return '';
+  return `<section class="card today-group appts-today">${cardTitle('calendar', 'var(--cita)', `Mis citas de hoy (${list.length})`, 'por hora')}
+    ${list.map((l) => `<button type="button" class="appt-line" data-open="${l.id}"><b>${hhmm(l.appt_at)}</b><span>${esc(l.name || l.phone)}</span>
+      <span class="muted">${esc(l.phone || '')}</span><span class="touch-badge ${l.appt_state === 'confirmada' || l.appt_state === 'asistio' ? 'ok' : l.appt_state === 'no_asistio' ? 'late' : 'today'}">${STATE_TEXT[l.appt_state]}</span></button>`).join('')}</section>`;
 }
 
 // Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
@@ -822,6 +849,29 @@ function wireQuickDates(root) {
 }
 const quickProfileFields = (l = {}) => Object.entries(state.meta.quickProfile).map(([k, q]) => `<fieldset class="plain"><legend>${esc(q.label)}</legend>
   <div class="seg-group">${Object.entries(q.options).map(([v, t]) => `<label class="seg"><input type="radio" name="${k}" value="${v}" ${l[k] === v ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>`).join('');
+// Al elegir día y hora de una cita: las citas que ya tiene ese día quien atiende el lead, y aviso si se empalma (menos de 1 h).
+const STATE_TEXT = { agendada: 'falta confirmar', confirmada: 'confirmada', asistio: 'vino', no_asistio: 'no vino' };
+const dayRange = (d) => { const a = new Date(d); a.setHours(0, 0, 0, 0); const b = new Date(a); b.setDate(b.getDate() + 1); return [a, b]; };
+function wireApptDay(root, l) {
+  const input = $('[name=appt_at]', root);
+  if (!input) return;
+  input.insertAdjacentHTML('afterend', '<div class="appt-day muted small-note"></div>');
+  const box = $('.appt-day', root);
+  const sellerId = l.assigned_to || state.me.id;
+  const who = sellerId === state.me.id ? 'Tus citas' : `Citas de ${l.assigned_name || 'quien lo atiende'}`;
+  input.addEventListener('change', async () => {
+    if (!input.value) { box.innerHTML = ''; return; }
+    const at = new Date(input.value);
+    const [from, to] = dayRange(at);
+    try {
+      const list = (await api(`/api/appointments?from=${from.toISOString()}&to=${to.toISOString()}&seller=${sellerId}`)).filter((c) => c.id !== l.id);
+      const clash = list.find((c) => Math.abs(new Date(c.appt_at) - at) < 3600e3);
+      box.innerHTML = `${clash ? `<p class="warn">Se empalma con la cita de ${esc(clash.name)} a las ${hhmm(clash.appt_at)}.</p>` : ''}
+        <b>${who} ese día:</b> ${list.length ? list.map((c) => `${hhmm(c.appt_at)} ${esc(c.name)}`).join(' · ') : 'ninguna'}`;
+    } catch { box.innerHTML = ''; }
+  });
+}
+
 // Nutrición: motivo y cuándo volver (3 o 6 meses, o la fecha que se elija).
 const recontactField = (months) => { const d = new Date(); d.setMonth(d.getMonth() + months);
   return `<label>¿Cuándo lo volvemos a contactar?<input type="date" name="recontact_at" required value="${d.toISOString().slice(0, 10)}"></label>
@@ -928,6 +978,7 @@ async function registerTouchOnce(l, channel, outcome, extra = {}) {
     }
     wireQuickDates($('#modal-extra'));
     if (outcome === 'cotizado' || outcome === 'aparto') wirePriceFields($('#modal-extra'), 'quote_amount');
+    wireApptDay($('#modal-extra'), l);
     wireRecontact($('#modal-extra'));
     if (outcome === 'vendido') {
       // Lo normal es cerrar por lo que se cotizó: el monto viene puesto (se puede cambiar).
@@ -987,7 +1038,17 @@ function renderArchivedNote() {
 function renderBoard() {
   renderArchivedNote();
   const board = $('#view-board');
-  board.innerHTML = state.meta.stages.map((s) => {
+  // Los descartados (los que ya no se van a trabajar) no ocupan columna; se ven con un botón cuando hace falta.
+  const hideKey = F.realEstate() ? 'descartado' : 'declinado_sin';
+  const nHidden = state.leads.filter((l) => stageOf(l) === hideKey).length;
+  const note = $('#board-discarded');
+  note.classList.toggle('hidden', state.view !== 'board' || (!nHidden && !state.showDiscarded));
+  const what = (n) => (F.realEstate() ? (n === 1 ? 'descartado' : 'descartados') : (n === 1 ? 'declinado sin perfil' : 'declinados sin perfil'));
+  note.innerHTML = `<span>${state.showDiscarded ? `Estás viendo los ${what(2)}.` : `${nHidden} ${what(nHidden)} no ${nHidden === 1 ? 'se muestra' : 'se muestran'} en el tablero.`}</span>
+    <button type="button" class="ghost small" id="discarded-toggle">${state.showDiscarded ? 'Ocultarlos' : 'Verlos'}</button>`;
+  $('#discarded-toggle').onclick = () => { state.showDiscarded = !state.showDiscarded; renderBoard(); };
+  const shown = state.meta.stages.filter((s) => s !== hideKey || state.showDiscarded);
+  board.innerHTML = shown.map((s) => {
     let items = state.leads.filter((l) => stageOf(l) === s);
     // Los que nunca contestaron no se muestran: no vale la pena volver a buscarlos. Siguen contando en el Resumen.
     let hidden = 0;
@@ -2119,7 +2180,7 @@ async function renderTeam() {
     <ul class="notes-list">${shown.map((n) => `<li class="${n.seen_at ? '' : 'unseen'}"><span>${esc(n.text)}</span>
       <span class="muted small">${timeAgo(n.created_at)}${n.lead_id ? ` · <button type="button" class="link" data-open="${n.lead_id}">Ver lead</button>` : ''}</span></li>`).join('')}</ul>
     ${notes.unseen ? '<button type="button" class="ghost small" id="notes-seen">Marcar como vistos</button>' : ''}</section>` : '';
-  $('#view-team').innerHTML = `${obCard}${notesCard}<div class="team">
+  $('#view-team').innerHTML = `${obCard}${notesCard}${await teamApptsToday()}<div class="team">
     <div class="today-summary">
       ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
         : `<span class="alert-pill late">${t.unassigned} sin asignar (los reparte quien asigna leads)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
@@ -2145,7 +2206,7 @@ async function renderTeam() {
     setView(b.dataset.obView);
   }));
   $('#notes-seen')?.addEventListener('click', async () => { await api('/api/notifications/seen', { method: 'POST' }); updateTeamBadge(); renderTeam(); });
-  $('#view-team').querySelectorAll('.team-notes [data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  $('#view-team').querySelectorAll('.team-notes [data-open], .appts-today [data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
   $('#ob-hide')?.addEventListener('click', () => { try { localStorage.setItem('onboarding-hidden', '1'); } catch { /* sin almacenamiento */ } renderTeam(); });
   $('#weekly-report').addEventListener('click', () => openReport('ventas', '7'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
@@ -2298,6 +2359,8 @@ async function salesReport(range, kind) {
     <p class="muted">Comparado con el periodo anterior del mismo largo. Cada venta cuenta el día que se cerró y cada cotización el día que se envió, sin importar cuándo llegó el lead.</p>
     ${seller ? '' : `<h2>Por vendedor</h2>${rTable(['Vendedor', 'Leads asignados', 'Primer toque', 'Toques', 'Cotizaciones', 'Cotizado', 'Ventas', 'Vendido', ...(renewals() ? ['Renovado'] : []), 'Declinados'],
       a.sellers.map((r) => `<tr>${rCell(esc(r.name))}${rCell(r.asignados)}${rCell(hours(r.horas_primer_toque))}${rCell(r.toques)}${rCell(r.cotizaciones)}${rCell(money(r.cotizado))}${rCell(r.ventas)}${rCell(money(r.vendido))}${renewals() ? rCell(money(r.renovado)) : ''}${rCell(r.declinados)}</tr>`))}`}
+    ${F.appointments() && a.citas ? `<h2>Citas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Cómo va', 'Visitas', 'No vino', 'Reprogramó'],
+      a.citas.map((x) => `<tr>${rCell(`${rDay(x.at)} ${hhmm(x.at)}`)}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(STATE_TEXT[x.state] || '—')}${rCell(x.visitas || 0)}${rCell(x.no_vino || 0)}${rCell(x.reprogramo || 0)}</tr>`), 'Sin citas en el periodo')}` : ''}
     <h2>Ventas cerradas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Producto', 'Cantidad', 'Monto'],
       a.ventas.map((x) => `<tr>${rCell(rDay(x.at))}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(esc(x.product || '—'))}${rCell(x.quantity ?? '—')}${rCell(money(x.amount))}</tr>`))}
     <h2>Cotizaciones enviadas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Producto', 'Monto', 'Cómo va'],

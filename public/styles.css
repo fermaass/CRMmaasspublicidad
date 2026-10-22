@@ -777,3 +777,12 @@ button.outcome.credito_rechazado { background: linear-gradient(135deg, #d9304e, 
 .notes-list li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); font-size: 13px; }
 .notes-list li.unseen { border-color: #f0a0b4; background: #fff5f8; }
 .small-note button.link { display: inline; font-size: inherit; font-weight: 600; color: var(--accent); padding: 0; margin: 0 0 0 4px; vertical-align: baseline; }
+/* Citas del día (Mi día, Equipo hoy y al agendar) */
+.appt-line { display: grid; grid-template-columns: 64px 1fr auto auto; gap: 10px; align-items: center; width: 100%; padding: 8px 4px; border: 0; border-top: 1px solid var(--line);
+  background: none; box-shadow: none; color: var(--text); text-align: left; font-size: 14px; font-weight: 400; border-radius: 0; }
+.appt-line:hover { background: var(--hover); filter: none; }
+.appt-line .touch-badge { margin: 0; }
+.appt-seller { margin-top: 8px; }
+.appt-day { margin-top: -4px; }
+.appt-day .warn { margin: 0 0 4px; }
+@media (max-width: 560px) { .appt-line { grid-template-columns: 54px 1fr auto; } .appt-line > .muted { display: none; } }

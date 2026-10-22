@@ -127,6 +127,7 @@ async function renderMTeam() {
     ${unseen.length ? `<h3 class="m-sub">Avisos (${notes.unseen})</h3>${unseen.map((n) => `<button type="button" class="m-card m-item" data-open="${n.lead_id}">
         <span>${esc(n.text)}</span><span class="muted small">${timeAgo(n.created_at)}</span></button>`).join('')}
       <button type="button" class="ghost small" data-notes-seen>Marcar como vistos</button>` : ''}
+    ${await teamApptsToday()}
     ${rows.map((r) => `<details class="m-card m-seller ${light(r)}">
       <summary><span class="light ${light(r)}"></span><b>${esc(r.name)}</b><span class="muted small">${r.en_curso} en curso · ${r.hoy} hoy</span>
         ${r.vencidos || r.sin_primer_toque || r.frias ? `<span class="m-badges">${badge(r.vencidos, 'vencidos', true)}${badge(r.sin_primer_toque, 'sin primer toque', true)}${badge(r.frias, 'frías', false)}</span>` : ''}</summary>

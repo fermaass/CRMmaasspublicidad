@@ -129,3 +129,34 @@ test('semáforo de 15 minutos: solo cuenta el horario de atención', () => {
   assert.equal(F.slaLate(recien), false);
   F.configure({ industry: 'general' });
 });
+
+test('agenda de citas: cada vendedor ve las suyas, el gerente las de todos, y el reporte trae las del periodo', async () => {
+  const db = openDb(':memory:');
+  const { s, url } = await listen(createApp({ db, config: { setupCode: 'AGEN-1234', formApiKey: 'k' } }));
+  const call = async (method, path, body, cookie) => {
+    const r = await fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json().catch(() => null), headers: r.headers };
+  };
+  const ck = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'AGEN-1234', can_assign: '1' })).headers.get('set-cookie').split(';')[0];
+  await call('PATCH', '/api/company', { industry: 'bienes_raices' }, ck);
+  const ids = {}; const cks = {};
+  for (const [n, e] of [['Ana', 'a@x.mx'], ['Beto', 'b@x.mx']]) {
+    ids[n] = (await call('POST', '/api/users', { name: n, email: e, password: 'clave12345', role: 'vendedor' }, ck)).json.id;
+    cks[n] = (await call('POST', '/api/login', { email: e, password: 'clave12345' })).headers.get('set-cookie').split(';')[0];
+  }
+  const at = new Date(Date.now() + 2 * 3600e3).toISOString();
+  for (const [n, tel] of [['Ana', '5560000001'], ['Beto', '5560000002']]) {
+    const id = (await call('POST', '/webhooks/form?key=k', { nombre: `Cliente de ${n}`, telefono: tel })).json.id;
+    await call('POST', `/api/leads/${id}/assign`, { assigned_to: ids[n] }, ck);
+    await call('POST', `/api/leads/${id}/touches`, { channel: 'llamada', outcome: 'cita_agendada', appt_at: at }, cks[n]);
+  }
+  const from = new Date(Date.now() - 864e5).toISOString(); const to = new Date(Date.now() + 864e5).toISOString();
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  assert.deepEqual((await call('GET', `/api/appointments?${q}`, null, cks.Ana)).json.map((c) => c.seller), ['Ana']);
+  assert.deepEqual((await call('GET', `/api/appointments?${q}&seller=${ids.Ana}`, null, cks.Beto)).json.map((c) => c.seller), ['Beto'], 'aunque pida otro, ve solo las suyas');
+  assert.equal((await call('GET', `/api/appointments?${q}`, null, ck)).json.length, 2);
+  assert.equal((await call('GET', '/api/appointments?from=x', null, ck)).status, 400);
+  const act = (await call('GET', `/api/activity?${q}`, null, ck)).json;
+  assert.equal(act.citas.length, 2); assert.equal(act.citas[0].state, 'agendada');
+  s.close();
+});

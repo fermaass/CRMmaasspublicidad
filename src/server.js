@@ -830,6 +830,18 @@ function createApp({ db, config }) {
     res.json({ ok: true });
   });
 
+  // Citas en un rango (agenda del día, Mi día, Equipo hoy y para no empalmar al agendar). El vendedor solo ve las suyas.
+  app.get('/api/appointments', auth.requireUser, (req, res) => {
+    const from = new Date(String(req.query.from || '')); const to = new Date(String(req.query.to || ''));
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) return res.status(400).json({ error: 'Periodo inválido' });
+    const own = req.user.role === 'vendedor';
+    const seller = own ? req.user.id : req.query.seller ? Number(req.query.seller) : null;
+    res.json(db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, l.phone, l.appt_at, l.appt_state, l.assigned_to, u.name AS seller
+      FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+      WHERE l.appt_at >= ? AND l.appt_at < ? AND l.appt_state IS NOT NULL AND l.status != 'declinado' ${seller ? 'AND l.assigned_to = ?' : ''}
+      ORDER BY l.appt_at`).all(from.toISOString(), to.toISOString(), ...(seller ? [seller] : [])));
+  });
+
   // Avisos para el gerente: contactos repetidos y posibles duplicados. Se marcan como vistos de una vez.
   app.get('/api/notifications', auth.requireRole(...MANAGERS), (req, res) => {
     const items = db.prepare(`SELECT n.*, COALESCE(l.name, l.phone, l.email) AS lead_name FROM notifications n
@@ -1668,6 +1680,10 @@ function createApp({ db, config }) {
       WHERE t.outcome = 'renovo' AND t.created_at >= ? AND t.created_at < ? AND t.user_id ${inIds} ORDER BY t.created_at`).all(F, T, ...ids);
     out.motivos = db.prepare(`SELECT COALESCE(decline_reason, 'Sin motivo') AS key, COUNT(*) AS n FROM leads
       WHERE status = 'declinado' AND declined_at >= ? AND declined_at < ? AND assigned_to ${inIds} GROUP BY 1 ORDER BY n DESC`).all(F, T, ...ids);
+    // Citas del periodo (por la fecha de la cita) con su resultado.
+    out.citas = db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, u.name AS seller, l.appt_at AS at, l.appt_state AS state,
+        l.appt_visits AS visitas, l.appt_noshows AS no_vino, l.appt_reschedules AS reprogramo FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+      WHERE l.appt_at >= ? AND l.appt_at < ? AND l.assigned_to ${inIds} ORDER BY l.appt_at`).all(F, T, ...ids);
     res.json(out);
   });
 
