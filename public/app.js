@@ -1998,9 +1998,10 @@ async function openNewLead() {
   if (canAssign()) {
     const w = await api('/api/workload');
     const sug = w.sellers.find((u) => u.id === w.suggested);
+    // Si no eliges a nadie, el lead queda en Asignación para repartirlo después.
     pick = w.sellers.length ? `<label>¿Quién le da seguimiento? <select name="assigned_to">
-        ${w.sellers.map((u) => `<option value="${u.id}" ${u.id === w.suggested ? 'selected' : ''}>${esc(u.name)} · ${u.activos} en curso</option>`).join('')}
-        <option value="">Sin asignar por ahora</option></select></label>
+        <option value="">Sin asignar · queda en Asignación</option>
+        ${w.sellers.map((u) => `<option value="${u.id}">${esc(u.name)} · ${u.activos} en curso${u.id === w.suggested ? ' (sugerido)' : ''}</option>`).join('')}</select></label>
       ${sug ? `<p class="muted small-note" style="margin-top:-6px">Sugerido: ${esc(sug.name)}, es quien tiene menos leads en curso.</p>` : ''}` : '';
   }
   openDrawer(`

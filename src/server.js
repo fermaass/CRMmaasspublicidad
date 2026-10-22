@@ -758,17 +758,21 @@ function createApp({ db, config }) {
           return res.json({ existing: true, taken_by: owner.name });
         }
         if (seller && !owner.assigned_to) assignLead(result.id, seller, req.user.id);
-        else if (req.user.sells && !owner.assigned_to) assignLead(result.id, req.user, req.user.id);
-        else autoAssign(db, result.id);
+        else if (req.user.sells && !canAssign(req.user) && !owner.assigned_to) assignLead(result.id, req.user, req.user.id);
+        else if (!canAssign(req.user) || getSetting(db, 'auto_assign') === '1') autoAssign(db, result.id);
         return res.json({ id: result.id, existing: true });
       }
+      // Quien asigna decide en el formulario a quién va; si no elige, queda en Asignación (no se lo queda él),
+      // salvo que el reparto automático esté encendido.
+      // Un vendedor que captura se queda con su lead.
       if (seller) assignLead(result.id, seller, req.user.id);
-      else if (req.user.sells) {
+      else if (req.user.sells && !canAssign(req.user)) {
         db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = created_at WHERE id = ?').run(req.user.id, result.id);
-      } else autoAssign(db, result.id);
-      // Quien atiende captura a alguien que le escribió o le llamó: ya está en conversación, el toque 1 queda registrado solo.
+      } else if (!canAssign(req.user) || getSetting(db, 'auto_assign') === '1') autoAssign(db, result.id);
+      // Quien atiende captura a alguien con quien ya habló por teléfono: el toque 1 ("Contestó") queda registrado solo.
+      // Por WhatsApp no: el cliente escribió pero falta contestarle, así que entra como Nuevo (y corre el reloj de 15 min).
       const created = getLead(req, result.id);
-      if (created && canTouch(req.user, created) && ['whatsapp', 'llamada'].includes(b.source)) {
+      if (created && canTouch(req.user, created) && b.source === 'llamada') {
         const ts = now();
         db.prepare("INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at) VALUES (?, 1, ?, ?, 'conversacion', ?)")
           .run(result.id, req.user.id, b.source, ts);

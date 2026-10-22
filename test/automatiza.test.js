@@ -6,7 +6,7 @@ const F = require('../public/followup.js');
 
 const listen = async (app) => { const s = app.listen(0); await new Promise((r) => s.once('listening', r)); return { s, url: `http://127.0.0.1:${s.address().port}` }; };
 
-test('una sola persona atiende leads: los del formulario se le asignan solos; lo que captura por WhatsApp ya cuenta como toque 1', async () => {
+test('una sola persona atiende leads: los del formulario se le asignan solos; lo que captura de una llamada ya cuenta como toque 1', async () => {
   const db = openDb(':memory:');
   const { s, url } = await listen(createApp({ db, config: { setupCode: 'AUTO-1234', formApiKey: 'k' } }));
   const post = (path, body, cookie) => fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
@@ -18,13 +18,18 @@ test('una sola persona atiende leads: los del formulario se le asignan solos; lo
   let l = await get(f.id);
   assert.equal(l.assigned_name, 'Fer'); assert.equal(F.stageOf(l), 'nuevo');
 
-  // Captura manual de alguien que le escribió por WhatsApp: toque 1 "Contestó" y etapa Contestó.
+  // Captura manual de alguien que le llamó: ya hablaron, así que el toque 1 "Contestó" queda solo.
   const fb = db.prepare("SELECT id FROM catalog_items WHERE kind = 'canal' LIMIT 1").get().id;
-  const m = await (await post('/api/leads', { source: 'whatsapp', phone: '5533334444', name: 'Pedro', channel_id: String(fb) }, ck)).json();
+  const m = await (await post('/api/leads', { source: 'llamada', phone: '5533334444', name: 'Pedro', channel_id: String(fb) }, ck)).json();
   l = await get(m.id);
   assert.equal(l.assigned_name, 'Fer'); assert.equal(l.touch_count, 1); assert.ok(l.contacted_at); assert.equal(F.stageOf(l), 'contesto');
   const t = await (await fetch(`${url}/api/leads/${m.id}/touches`, { headers: { cookie: ck } })).json();
-  assert.equal(t[0].channel, 'whatsapp'); assert.equal(t[0].outcome, 'conversacion');
+  assert.equal(t[0].channel, 'llamada'); assert.equal(t[0].outcome, 'conversacion');
+
+  // Por WhatsApp el cliente escribió pero falta contestarle: entra como Nuevo, sin toques.
+  const w = await (await post('/api/leads', { source: 'whatsapp', phone: '5533335555', name: 'Lupe', channel_id: String(fb) }, ck)).json();
+  l = await get(w.id);
+  assert.equal(l.assigned_name, 'Fer'); assert.equal(l.touch_count, 0); assert.equal(F.stageOf(l), 'nuevo');
 
   // "Otro" origen no se toma como conversación.
   const o = await (await post('/api/leads', { source: 'otro', phone: '5555556666', name: 'Rita', channel_id: String(fb) }, ck)).json();
@@ -106,5 +111,22 @@ test('si nadie tiene la función de asignar, los leads se reparten solos entre l
   await call('POST', '/api/users', { name: 'Oscar', email: 'o@x.mx', password: 'password123', role: 'operador' }, g);
   const id = (await (await call('POST', '/webhooks/form?key=k', { nombre: 'Lead', telefono: '5519191913' })).json()).id;
   assert.equal((await (await call('GET', `/api/leads/${id}`, null, g)).json()).assigned_to, null);
+  s.close();
+});
+
+test('quien asigna y captura un lead no se lo queda: si no elige vendedor, queda en Asignación', async () => {
+  const db = openDb(':memory:');
+  const { s, url } = await listen(createApp({ db, config: { setupCode: 'ASIG-1234', formApiKey: 'k' } }));
+  const call = async (method, path, body, cookie) => { const r = await fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { r, json: await r.json().catch(() => null) }; };
+  // El Administrador asigna y también atiende leads (como en un equipo chico).
+  const ck = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'ASIG-1234', can_assign: '1', can_sell: '1' })).r.headers.get('set-cookie').split(';')[0];
+  const ana = (await call('POST', '/api/users', { name: 'Ana', email: 'a@x.mx', password: 'password123', role: 'vendedor' }, ck)).json.id;
+  const fb = db.prepare("SELECT id FROM catalog_items WHERE kind = 'canal' LIMIT 1").get().id;
+  const sinElegir = (await call('POST', '/api/leads', { source: 'llamada', phone: '5577770001', channel_id: String(fb), assigned_to: '' }, ck)).json.id;
+  const paraAna = (await call('POST', '/api/leads', { source: 'llamada', phone: '5577770002', channel_id: String(fb), assigned_to: String(ana) }, ck)).json.id;
+  const get = async (id) => (await call('GET', `/api/leads/${id}`, null, ck)).json;
+  assert.equal((await get(sinElegir)).assigned_to, null, 'queda en Asignación');
+  assert.equal((await get(sinElegir)).touch_count, 0);
+  assert.equal((await get(paraAna)).assigned_to, ana);
   s.close();
 });
