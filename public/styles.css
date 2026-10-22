@@ -757,3 +757,18 @@ button.outcome.aparto, button.outcome.tramite_aprobado { background: linear-grad
 button.outcome.tramite_revision, button.outcome.segunda_visita, button.outcome.recordo { background: linear-gradient(135deg, #0077b0, #1d9ad6); }
 button.outcome.nutricion { background: linear-gradient(135deg, #e07b10, #ff9f40); }
 button.outcome.credito_rechazado { background: linear-gradient(135deg, #d9304e, #f0607a); }
+/* Perfil inmobiliario: pregunta a la izquierda, opciones alineadas a la derecha */
+.re-profile { gap: 0; padding: 12px 14px; }
+.re-profile .qp-head { padding-bottom: 8px; }
+.re-row { display: grid; grid-template-columns: 132px 1fr; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.re-q { color: var(--muted); padding-top: 5px; }
+.re-q small { display: block; font-size: 11px; opacity: .8; }
+.re-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.re-opts .qp { margin: 0; }
+.re-moneys { gap: 12px; }
+.re-money { display: grid; gap: 3px; margin: 0; font-size: 12px; color: var(--muted); }
+.re-money input { width: 118px; margin: 0; padding: 6px 8px; font-size: 13px; }
+@media (max-width: 560px) {
+  .re-row { grid-template-columns: 1fr; gap: 6px; }
+  .re-q { padding-top: 0; }
+}

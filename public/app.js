@@ -776,14 +776,20 @@ function hoursFields(h) {
 function reProfileStrip(l) {
   const missing = F.reMissing(l).length;
   const dis = l.can_edit ? '' : 'disabled';
-  const rows = Object.entries(F.RE_PROFILE).map(([k, q]) => {
-    if (q.money) return `<div class="qp-row"><span class="qp-q">${esc(q.label)}</span><input class="qp-money" data-qpmoney="${k}" inputmode="decimal" placeholder="$" value="${l[k] ?? ''}" ${dis}></div>`;
+  const entries = Object.entries(F.RE_PROFILE);
+  const chips = ([k, q]) => {
     const on = (v) => (q.multi ? String(l[k] || '').split(',').includes(v) : l[k] === v);
-    return `<div class="qp-row"><span class="qp-q">${esc(q.label)}${q.multi ? ' <small class="muted">(varios)</small>' : ''}</span>
-      ${Object.entries(q.options).map(([v, t]) => `<button type="button" class="qp ${on(v) ? 'on' : ''}" ${q.multi ? 'data-qpm' : 'data-qp'}="${k}" data-v="${v}" ${dis}>${esc(t)}</button>`).join('')}</div>`;
-  }).join('');
+    return `<div class="re-row"><span class="re-q">${esc(q.label)}${q.multi ? '<small>puedes elegir varios</small>' : ''}</span><div class="re-opts">
+      ${Object.entries(q.options).map(([v, t]) => `<button type="button" class="qp ${on(v) ? 'on' : ''}" ${q.multi ? 'data-qpm' : 'data-qp'}="${k}" data-v="${v}" ${dis}>${esc(t)}</button>`).join('')}</div></div>`;
+  };
+  // Presupuesto y enganche van juntos en un renglón.
+  const moneys = entries.filter(([, q]) => q.money).map(([k, q]) => `<label class="re-money"><span>${esc(q.label)}</span>
+    <input data-qpmoney="${k}" inputmode="decimal" placeholder="$ 0" value="${l[k] ?? ''}" ${dis}></label>`).join('');
   return `<div class="quick-profile re-profile"><div class="qp-head"><b>Perfil</b>
-    <span class="touch-badge ${missing ? 'incomplete' : 'ok'}">${missing ? `Incompleto · faltan ${missing} de ${Object.keys(F.RE_PROFILE).length}` : 'Completo'}</span></div>${rows}</div>`;
+    <span class="touch-badge ${missing ? 'incomplete' : 'ok'}">${missing ? `Faltan ${missing} de ${entries.length}` : 'Completo'}</span></div>
+    ${entries.filter(([, q]) => !q.money).slice(0, 2).map(chips).join('')}
+    <div class="re-row"><span class="re-q">Montos</span><div class="re-opts re-moneys">${moneys}</div></div>
+    ${entries.filter(([, q]) => !q.money).slice(2).map(chips).join('')}</div>`;
 }
 
 // Campos de captura: todos opcionales y lo más cortos posible.
@@ -1791,7 +1797,7 @@ async function openLead(id) {
     ${apptNote(l)}
     ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
       ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
-    <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${adLine ? ` · ${esc(adLine)}` : ''}</p>
+    <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${l.can_reassign ? ' <button type="button" class="link" id="owner-change">Cambiar</button>' : ''}${adLine ? ` · ${esc(adLine)}` : ''}</p>
     ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
       ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
     ${milestones(l)}
@@ -1908,6 +1914,11 @@ async function openLead(id) {
   $('#drawer-body [data-wa]')?.addEventListener('click', () => toTouch('whatsapp'));
   $('#drawer-body [data-call]')?.addEventListener('click', () => toTouch('llamada'));
   const form = $('#lead-form');
+  // Atajo: abre "Datos del lead" y lleva al campo Vendedor.
+  $('#owner-change')?.addEventListener('click', () => {
+    $('#drawer-body details.lead-data').open = true;
+    form.assigned_to.scrollIntoView({ behavior: 'smooth', block: 'center' }); form.assigned_to.focus();
+  });
   // El vendedor se cambia al momento, aparte de "Guardar": quien asigna no siempre edita el lead.
   form.assigned_to.addEventListener('change', async () => {
     try {
