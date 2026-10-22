@@ -1604,7 +1604,13 @@ function createApp({ db, config }) {
   });
 
   // Que el navegador (sobre todo en celular) pregunte siempre si hay versión nueva: así cada actualización se ve al recargar.
-  app.use(express.static(path.join(__dirname, '..', 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
+  // La página se arma con la versión en el nombre de sus archivos (app.js?v=...): así ni Cloudflare ni el navegador
+  // pueden dar una pantalla vieja después de una actualización. La página misma no se guarda en caché.
+  const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8')
+    .replace(/(src|href)="(styles\.css|followup\.js|app\.js|mobile\.js)"/g, `$1="$2?v=${encodeURIComponent(appVersion)}"`);
+  const sendIndex = (req, res) => res.set('Cache-Control', 'no-store').type('html').send(indexHtml);
+  app.get(['/', '/index.html'], sendIndex);
+  app.use(express.static(path.join(__dirname, '..', 'public'), { index: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
   app.use('/api', (req, res) => res.status(404).json({ error: 'No existe' }));
   // Cualquier falla inesperada: se registra en el servidor y al usuario se le dice algo claro, sin detalles internos.
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
