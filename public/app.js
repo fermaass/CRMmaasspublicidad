@@ -1215,7 +1215,8 @@ async function renderStats() {
     <div class="card chart-card span-8">${cardTitle('funnel', 'var(--accent)', 'Embudo de conversión', 'cuántos llegan a cada paso')}${funnelChart(f)}</div>
     <div class="card chart-card span-4">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', 'etapa actual')}
       ${battery(stages, s.total, true)}${legend(stages, s.total)}
-      <p class="muted" style="margin-bottom:0">${n(s.byStage, 'nuevo')} sin tocar; ${n(s.byStage, 'declinado_perfil')} ${n(s.byStage, 'declinado_perfil') === 1 ? 'declinado' : 'declinados'} con perfil para campañas futuras.</p></div>
+      <p class="muted" style="margin-bottom:0">${n(s.byStage, 'nuevo')} sin tocar; ${F.realEstate() ? `${n(s.byStage, 'nutricion')} en nutrición para volver a contactarlos.`
+        : `${n(s.byStage, 'declinado_perfil')} ${n(s.byStage, 'declinado_perfil') === 1 ? 'declinado' : 'declinados'} con perfil para campañas futuras.`}</p></div>
     <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Eficiencia por vendedor', 'de lo que recibe cada uno, cuánto avanza')}${sellerTable(s.sellerFunnel)}</div>
     <div class="card chart-card">${cardTitle('money', 'var(--f-cotizados)', 'Pipeline', 'cotizaciones abiertas hoy y venta esperada')}${pipelineTable(s.pipeline)}</div>
     ${s.re ? reCards(s.re) : ''}
@@ -1249,9 +1250,9 @@ async function renderStats() {
   }
   const banner = seller ? sellerMonth(await api('/api/leads'), s) : tab === 'marketing' ? marketingInsight(s, health) : salesInsight(s, prev, prevQ);
   // Gerente y Director no entran a Configuración: la cartera la descargan desde aquí.
-  const reportBtn = `<div class="stats-actions">${can('gerente', 'director') ? `<a class="button-link ghost" href="/api/export/cartera.xlsx" download id="stats-cartera">${icon('users', 16)} Descargar cartera (Excel)</a>` : ''}
+  const reportBtn = `<div class="stats-actions head-row">${tabs}<span class="spacer"></span>${can('gerente', 'director') ? `<a class="button-link ghost" href="/api/export/cartera.xlsx" download id="stats-cartera">${icon('users', 16)} Descargar cartera (Excel)</a>` : ''}
     <button type="button" class="ghost" id="stats-report">${icon('file', 16)} Descargar reporte</button></div>`;
-  $('#view-stats').innerHTML = `<div class="dash">${tabs}${reportBtn}${banner}${body}</div>`;
+  $('#view-stats').innerHTML = `<div class="dash">${reportBtn}${banner}${body}</div>`;
   $('#view-stats').querySelectorAll('[data-campaign-open]').forEach((b) => b.addEventListener('click', () => openCampaign(b.dataset.campaignOpen)));
   $('#monthly-report')?.addEventListener('click', () => openReport('marketing', 'mes_pasado'));
   $('#stats-report').addEventListener('click', () => openReport(seller ? 'vendedor' : tab === 'marketing' ? 'marketing' : 'ventas'));
@@ -2483,7 +2484,7 @@ async function renderAssign() {
   const sug = w.sellers.find((u) => u.id === w.suggested);
   const load = w.sellers.length ? `<div class="brows load-rows">${w.sellers.map((u) => `<div class="load-row">
       <span class="k"><span class="avatar" aria-hidden="true">${esc(initials(u.name))}</span><strong>${esc(u.name)}</strong>
-        ${u.id === w.suggested ? '<span class="conv top">le toca</span>' : ''}</span>
+        ${u.id === w.suggested ? '<span class="conv top nowrap">le toca</span>' : ''}</span>
       <div class="battery thin load-bar" role="img" aria-label="${esc(`${u.name}: ${u.por_cotizar} por cotizar, ${u.cotizando} cotizando`)}">
         ${u.por_cotizar ? `<div class="seg" style="--w:${(u.por_cotizar / max) * 100}%; --c:var(--nuevo)" data-tip="${esc(`${u.por_cotizar} por cotizar`)}"></div>` : ''}
         ${u.cotizando ? `<div class="seg dark-text" style="--w:${(u.cotizando / max) * 100}%; --c:var(--cotizando)" data-tip="${esc(`${u.cotizando} cotizando`)}"></div>` : ''}
@@ -2506,10 +2507,10 @@ async function renderAssign() {
     </div>`).join('');
 
   $('#view-assign').innerHTML = `<div class="assign">
-    <div class="stats-actions"><button type="button" class="ghost" id="assign-report">${icon('file', 16)} Reporte de asignación</button></div>
-    <label class="switch-row card compact-card"><input type="checkbox" id="auto-assign" ${w.auto_assign ? 'checked' : ''}>
+    <div class="assign-top"><label class="switch-row card compact-card"><input type="checkbox" id="auto-assign" ${w.auto_assign ? 'checked' : ''}>
       <span><strong>Asignar automáticamente al vendedor con menos carga</strong><br>
       <span class="muted">Apagado, asignas tú cada lead aquí o al capturarlo, con la sugerencia de a quién le toca. Encendido, cada lead que llega sin vendedor se asigna solo.</span></span></label>
+      <button type="button" class="ghost" id="assign-report">${icon('file', 16)} Reporte de asignación</button></div>
     <section class="card">${cardTitle('users', 'var(--f-contactados)', 'Carga por vendedor', 'leads en curso de cada uno: nuevos, perfilados y cotizando')}
       ${load}
       ${sug ? `<p class="muted small-note">Sugerencia: el siguiente lead a <strong>${esc(sug.name)}</strong>, que tiene menos leads en curso${w.sellers.filter((u) => u.activos === sug.activos).length > 1 ? ' (y recibió menos esta semana)' : ''}. Tú decides; la sugerencia solo viene preseleccionada.</p>` : ''}
@@ -2562,39 +2563,61 @@ async function renderUsers() {
     }
     return `<span class="muted user-status">${u.last_login_at ? `Último acceso ${timeAgo(u.last_login_at)}` : 'Activo'}</span>`;
   };
-  $('#view-users').innerHTML = `
-    <div class="card" style="margin: 12px 0">
-      <h3 style="margin-top:0">Agregar usuario</h3>
-      <form id="user-form" class="row" style="flex-wrap:wrap; align-items:end">
-        <label>Nombre <input name="name" required></label>
-        <label>Email <input name="email" type="email" required></label>
-        <label>Rol <select name="role">${roleOpts('vendedor')}</select></label>
-        <label class="inline-check" id="op-question"><input type="checkbox" name="can_assign" value="1"> También asigna leads</label>
-        <label class="inline-check" id="sell-question"><input type="checkbox" name="can_sell" value="1"> También atiende leads</label>
-        <button type="submit" style="flex:0 0 auto">Crear e invitar</button>
-      </form>
-      <p class="error" id="user-error"></p>
-      <p class="muted">Al crearlo se genera un <b>link de invitación</b> (vence en 72 horas) para mandárselo por WhatsApp o correo. Con ese link la persona
-        crea su propia contraseña: así confirmas que el acceso le llegó a ella y nadie más la conoce. Si alguien olvida su contraseña,
-        dale clic a "Link para contraseña nueva" en su renglón y mándaselo igual.</p>
-      <p class="muted"><b>Administrador:</b> todo: usuarios, giro, productos, campañas, inversión, mensajes, cartera y respaldos; corrige leads y reasigna en emergencias.
-        <b>Gerente:</b> dirige al equipo: ve todo de todos, corrige cualquier lead (etapa, montos, datos), reasigna y pide seguimientos; no configura ni da de alta usuarios.
-        <b>Director:</b> solo ve: Tablero, Equipo hoy, Resumen y reportes; puede pedir seguimiento a un vendedor y descargar la cartera.
-        <b>Asignador:</b> captura y asigna leads, corrige sus datos y ve el Resumen y los reportes. <b>Vendedor:</b> trabaja los leads que le asignan, su Mi día y su propio Resumen.</p>
-      <p class="muted"><b>También asigna leads:</b> cualquier usuario puede tener además la pestaña Asignación (por ejemplo, el Gerente en un equipo chico).
-        Si se la das a un vendedor, en Equipo hoy verás cuántos leads se asignó a sí mismo. <b>Si nadie asigna</b> (no hay Asignador ni nadie con esta casilla), los leads se reparten solos y parejo entre los vendedores.</p>
+  // Orden: activos primero, por nivel y nombre.
+  const ORDER = { admin: 0, gerente: 1, director: 2, operador: 3, vendedor: 4 };
+  const users = [...state.users].sort((a, b) => (b.active - a.active) || ((ORDER[a.role] ?? 9) - (ORDER[b.role] ?? 9)) || a.name.localeCompare(b.name));
+  const active = state.users.filter((u) => u.active);
+  const pending = active.filter((u) => u.pendiente).length;
+  const sellersN = active.filter((u) => u.role === 'vendedor' || u.can_sell).length;
+  const assignersN = active.filter((u) => u.role === 'operador' || u.can_assign).length;
+  const ROLE_HELP = {
+    admin: 'Todo: usuarios, giro, productos, campañas, inversión, mensajes, cartera y respaldos.',
+    gerente: 'Dirige al equipo: ve todo, corrige cualquier lead, reasigna y pide seguimientos. No configura.',
+    director: 'Solo ve: Tablero, Equipo hoy, Resumen y reportes. Puede pedir seguimiento y descargar la cartera.',
+    operador: 'Captura y reparte los leads sin asesor; ve el Resumen y los reportes.',
+    vendedor: 'Trabaja sus leads: Mi día, sus toques y su propio Resumen.',
+  };
+  $('#view-users').innerHTML = `<div class="users-page">
+    <div class="kpis" style="--cols:4">
+      ${textKpi('users', 'Usuarios activos', String(active.length), `${state.users.length - active.length} desactivados`, 'var(--accent)')}
+      ${textKpi('sparkles', 'Invitaciones pendientes', String(pending), pending ? 'aún no crean su contraseña' : 'todos ya entraron', pending ? 'var(--cotizando)' : 'var(--cumple)')}
+      ${textKpi('phone', 'Atienden leads', String(sellersN), 'vendedores y quien también vende', 'var(--f-contactados)')}
+      ${textKpi('inbox', 'Asignan leads', String(assignersN), assignersN ? 'reparten los leads sin asesor' : 'nadie: se reparten solos', 'var(--apartado)')}
     </div>
-    <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Funciones extra</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
-    ${state.users.map((u) => `<tr data-id="${u.id}">
-      <td>${esc(u.name)}${(u.role === 'vendedor' || u.can_sell) && u.active ? ` <span class="muted small">· ${u.en_curso} en curso</span>` : ''}</td><td>${esc(u.email)}</td>
-      <td><select data-f="role" aria-label="Rol">${roleOpts(u.role)}</select></td>
-      <td>${u.role === 'operador' ? '<span class="muted">Asignar es su trabajo</span>' : `<label class="inline-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}> También asigna leads</label>`}
-        ${u.role === 'vendedor' ? '' : `<br><label class="inline-check"><input type="checkbox" data-f="can_sell" ${u.can_sell ? 'checked' : ''}> También atiende leads</label>`}</td>
+    <div class="team-duo">
+      <section class="card">${cardTitle('plus', 'var(--accent)', 'Agregar usuario', 'le llega un link para crear su propia contraseña')}
+        <form id="user-form" class="user-form">
+          <label>Nombre <input name="name" required placeholder="Ej. Ana Pérez"></label>
+          <label>Email <input name="email" type="email" required placeholder="ana@empresa.com"></label>
+          <label>Nivel <select name="role">${roleOpts('vendedor')}</select></label>
+          <div class="user-extras">
+            <label class="inline-check" id="op-question"><input type="checkbox" name="can_assign" value="1"> También asigna leads</label>
+            <label class="inline-check" id="sell-question"><input type="checkbox" name="can_sell" value="1"> También atiende leads</label>
+          </div>
+          <button type="submit">Crear e invitar</button>
+        </form>
+        <p class="error" id="user-error"></p>
+        <p class="muted small-note">El link vence en 72 horas; mándaselo por WhatsApp o correo. Si alguien olvida su contraseña, usa "Link para contraseña nueva" en su renglón.</p>
+      </section>
+      <section class="card">${cardTitle('layers', 'var(--nuevo_perfil)', '¿Qué hace cada nivel?')}
+        ${Object.entries(ROLE_HELP).map(([r, t]) => `<div class="role-line"><span class="role-chip ${r}">${esc(ROLE_NAMES[r])}</span><span>${esc(t)}</span></div>`).join('')}
+        <p class="muted small-note"><b>También asigna</b> / <b>también atiende</b>: funciones extra para cualquier nivel (por ejemplo, un Gerente que reparte o vende en un equipo chico).
+          Si nadie asigna, los leads se reparten solos y parejo.</p>
+      </section>
+    </div>
+    <section class="card">${cardTitle('users', 'var(--f-contactados)', `Tu equipo (${active.length})`, 'cambia el nivel, las funciones o desactiva desde aquí')}
+    <div class="table-wrap"><table class="users-table"><thead><tr><th>Persona</th><th>Nivel</th><th>Funciones extra</th><th>En curso</th><th>Acceso</th><th>Activo</th><th></th></tr></thead><tbody>
+    ${users.map((u) => `<tr data-id="${u.id}" class="${u.active ? '' : 'inactive'}">
+      <td><div class="person"><span class="avatar">${esc(initials(u.name))}</span><span><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span></div></td>
+      <td><select data-f="role" aria-label="Nivel" class="role-select ${u.role}">${roleOpts(u.role)}</select></td>
+      <td><div class="extras">${u.role === 'operador' ? '<span class="muted small">Asignar es su trabajo</span>' : `<label class="pill-check"><input type="checkbox" data-f="can_assign" ${u.can_assign ? 'checked' : ''}><span>Asigna</span></label>`}
+        ${u.role === 'vendedor' ? '' : `<label class="pill-check"><input type="checkbox" data-f="can_sell" ${u.can_sell ? 'checked' : ''}><span>Atiende leads</span></label>`}</div></td>
+      <td class="num">${(u.role === 'vendedor' || u.can_sell) && u.active ? `<b>${u.en_curso}</b>` : '<span class="muted">—</span>'}</td>
       <td>${status(u)}</td>
-      <td><input type="checkbox" data-f="active" aria-label="Activo" ${u.active ? 'checked' : ''}></td>
+      <td><label class="switch"><input type="checkbox" data-f="active" aria-label="Activo" ${u.active ? 'checked' : ''}><span></span></label></td>
       <td>${u.active && u.id !== state.me.id ? `<button class="ghost small" data-f="link">${u.pendiente ? 'Reenviar invitación' : 'Link para contraseña nueva'}</button>` : ''}</td>
     </tr>`).join('')}
-    </tbody></table></div>`;
+    </tbody></table></div></section></div>`;
 
   // Al Asignador no se le pregunta: asignar ya es su trabajo.
   const roleSel = $('#user-form [name=role]');
@@ -2959,7 +2982,7 @@ async function renderSettings() {
     const f = indSel.form;
     const help = () => {
       const g = state.meta.industries.find((x) => x.key === indSel.value);
-      const qp = F.INDUSTRIES[indSel.value].profile;
+      const qp = indSel.value === 'bienes_raices' ? F.RE_PROFILE : F.INDUSTRIES[indSel.value].profile;
       $('#industry-help').innerHTML = `${esc(g.help)} Cambiarlo no borra nada de lo que ya capturaste.<br>Para perfilar se pregunta: ${Object.values(qp).map((q) => esc(q.label)).join(' · ')}`;
     };
     indSel.addEventListener('change', () => {

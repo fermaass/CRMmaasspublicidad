@@ -375,8 +375,8 @@ td.status-cell span.dark-text { color: var(--text); }
 .touch-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .touch-head .touch-badge { margin: 0; }
 .seg-group { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
-.seg { margin: 0; }
-.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg { position: relative; margin: 0; }
+.seg input { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .seg span { display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1.5px solid #d5dae6; color: var(--text); font-size: 13px;
   cursor: pointer; background: #fff; }
 .seg input:checked + span { background: var(--grad); color: #fff; border-color: transparent; }
@@ -522,8 +522,8 @@ code { background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; fon
 
 /* ---------- Asignación ---------- */
 .assign { display: grid; gap: 14px; max-width: 1100px; }
-.load-row { display: grid; grid-template-columns: minmax(150px, 220px) 1fr auto auto; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
-.load-row .k { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.load-row { display: grid; grid-template-columns: minmax(200px, 300px) 1fr auto auto; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.load-row .k { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
 .load-row .n { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .load-extra { white-space: nowrap; font-size: 13px; }
 .load-bar { gap: 2px; }
@@ -809,3 +809,60 @@ button.outcome.credito_rechazado { background: linear-gradient(135deg, #d9304e, 
 .note-line .ghost.small { padding: 4px 10px; }
 button.link.small-link { font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 8px; }
 @media (max-width: 760px) { .team-duo { grid-template-columns: 1fr; } .appt-chip { grid-template-columns: auto 1fr auto; } .appt-chip .avatar { display: none; } }
+
+/* ---------- Ajustes generales de acomodo ---------- */
+/* Barra superior: todo el menú del Administrador cabe en un renglón; en pantallas medianas el nombre se reduce a la inicial. */
+.topbar { flex-wrap: nowrap; gap: 10px; }
+.topbar nav { flex-wrap: nowrap; gap: 2px; min-width: 0; }
+.topbar nav button { padding: 8px 11px; white-space: nowrap; }
+#logout { padding: 7px 12px; white-space: nowrap; }
+@media (max-width: 1560px) { #me { font-size: 0; padding: 4px; gap: 0; } #me .avatar { font-size: 11px; } }
+@media (max-width: 1280px) { .topbar-company { display: none; } .topbar nav button { padding: 7px 8px; font-size: 13px; } }
+@media (max-width: 1000px) { .topbar { flex-wrap: wrap; } .topbar nav { flex-wrap: wrap; } }
+/* Mismo ancho de trabajo en todas las pantallas. */
+#view-today, .assign { max-width: none; }
+.settings { max-width: 1100px; }
+/* Botones de cada pantalla en el mismo renglón que sus pestañas, no sueltos. */
+.stats-actions.head-row { align-items: center; justify-content: flex-start; }
+.stats-actions.head-row .tabs { margin: 0; }
+.assign-top { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; }
+.assign-top .card { margin: 0; }
+@media (max-width: 760px) { .assign-top { grid-template-columns: 1fr; } }
+/* Avisos del tablero en un solo renglón. */
+.board-alert, .board-archived { display: inline-flex; margin-right: 14px; }
+/* Horario de atención compacto. */
+.hours-fields .row label { flex: 0 0 auto; }
+.hours-fields input[type=time] { width: 150px; }
+/* Usuarios */
+.users-page { display: grid; gap: 14px; }
+.users-page .team-duo { margin: 0; }
+.user-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; align-items: end; }
+.user-form label { margin: 0; }
+.user-form .user-extras { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; min-height: 38px; }
+.user-form button { justify-self: start; }
+.role-line { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.role-chip { display: inline-block; text-align: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #fff; background: var(--accent); }
+.role-chip.gerente { background: #9d50dd; } .role-chip.director { background: #00a39b; } .role-chip.operador { background: #ff7a00; } .role-chip.vendedor { background: #037f4c; }
+.users-table td { vertical-align: middle; }
+.users-table tr.inactive { opacity: .55; }
+.person { display: flex; align-items: center; gap: 10px; }
+.person .avatar { width: 32px; height: 32px; font-size: 12px; flex: none; }
+.person small { display: block; color: var(--muted); font-size: 12px; }
+.role-select { font-weight: 600; min-width: 140px; }
+.extras { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill-check { position: relative; display: inline-flex; margin: 0; cursor: pointer; }
+.pill-check input { position: absolute; opacity: 0; }
+.pill-check span { padding: 4px 11px; border-radius: 999px; border: 1.5px solid #d5dae6; font-size: 12px; font-weight: 600; color: var(--muted); background: #fff; }
+.pill-check input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.pill-check input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; margin: 0; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: #d5dae6; transition: background .15s; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.switch input:checked + span { background: var(--cumple); }
+.switch input:checked + span::after { transform: translateX(16px); }
+@media (max-width: 760px) { .user-form { grid-template-columns: 1fr; } .role-line { grid-template-columns: 1fr; } }
+/* Botones de reporte: ícono y texto en un renglón; "le toca" sin partir el nombre. */
+.stats-actions button, .stats-actions .button-link, #assign-report { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.stats-actions .ico, #assign-report .ico { margin: 0; }
+.conv.nowrap { white-space: nowrap; }
