@@ -786,3 +786,26 @@ button.outcome.credito_rechazado { background: linear-gradient(135deg, #d9304e, 
 .appt-day { margin-top: -4px; }
 .appt-day .warn { margin: 0 0 4px; }
 @media (max-width: 560px) { .appt-line { grid-template-columns: 54px 1fr auto; } .appt-line > .muted { display: none; } }
+/* Equipo hoy: números arriba (clic lleva a lo suyo), avisos y citas lado a lado */
+.team-kpis { margin-bottom: 14px; }
+.kpi-link { display: block; width: 100%; padding: 0; border: 0; background: none; box-shadow: none; text-align: left; color: inherit; font: inherit; cursor: pointer; border-radius: var(--radius-lg); }
+.kpi-link:hover { filter: none; transform: translateY(-1px); }
+.kpi-link .kpi-tile { height: 100%; }
+.team-duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; margin-bottom: 14px; align-items: start; }
+.team-duo .card { margin: 0; }
+.compact-list .card-title, .compact-list h3 { margin-bottom: 6px; }
+.appt-chip { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; width: 100%; padding: 8px 6px; border: 0; border-top: 1px solid var(--line);
+  border-radius: 0; background: none; box-shadow: none; color: var(--text); font-size: 14px; font-weight: 500; text-align: left; }
+.appt-chip:hover { background: var(--hover); filter: none; }
+.appt-time { white-space: nowrap; font-weight: 700; font-size: 13px; padding: 3px 9px; border-radius: 999px; background: #fff6cc; color: #7a5c00; font-variant-numeric: tabular-nums; }
+.appt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.appt-chip .touch-badge { margin: 0; }
+.avatar.small { width: 22px; height: 22px; font-size: 10px; margin: 0; }
+.note-line { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center; padding: 8px 4px; border-top: 1px solid var(--line); font-size: 13px; }
+.note-ico { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #ffe3ec; color: #c21e56; }
+.note-text small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.note-line.seen { opacity: .6; }
+.note-line.seen .note-ico { background: var(--hover); color: var(--muted); }
+.note-line .ghost.small { padding: 4px 10px; }
+button.link.small-link { font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 8px; }
+@media (max-width: 760px) { .team-duo { grid-template-columns: 1fr; } .appt-chip { grid-template-columns: auto 1fr auto; } .appt-chip .avatar { display: none; } }

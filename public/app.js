@@ -767,19 +767,21 @@ function renderToday() {
   });
 }
 
-// Equipo hoy: las citas de hoy de cada vendedor, por hora.
-async function teamApptsToday() {
-  if (!F.appointments()) return '';
+// Equipo hoy: las citas de hoy de todo el equipo, como agenda (hora, cliente, quién la atiende y cómo va).
+const hourShort = (d) => new Date(d).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' });
+const apptBadge = (st) => `<span class="touch-badge ${st === 'confirmada' || st === 'asistio' ? 'ok' : st === 'no_asistio' ? 'late' : 'today'}">${STATE_TEXT[st]}</span>`;
+async function fetchTodayAppts() {
+  if (!F.appointments()) return null;
   const [from, to] = dayRange(new Date());
-  const list = await api(`/api/appointments?from=${from.toISOString()}&to=${to.toISOString()}`).catch(() => []);
-  if (!list.length) return `<section class="card appts-today">${cardTitle('calendar', 'var(--cita)', 'Citas de hoy', 'nadie tiene citas hoy')}</section>`;
-  const by = {};
-  for (const c of list) (by[c.seller || 'Sin asignar'] ||= []).push(c);
-  return `<section class="card appts-today">${cardTitle('calendar', 'var(--cita)', `Citas de hoy (${list.length})`, 'de cada vendedor, por hora')}
-    ${Object.entries(by).map(([seller, cs]) => `<div class="appt-seller"><b>${esc(seller)}</b> <span class="muted small">${cs.length} ${cs.length === 1 ? 'cita' : 'citas'}</span>
-      ${cs.map((c) => `<button type="button" class="appt-line" data-open="${c.id}"><b>${hhmm(c.appt_at)}</b><span>${esc(c.name)}</span>
-        <span class="touch-badge ${c.appt_state === 'confirmada' || c.appt_state === 'asistio' ? 'ok' : c.appt_state === 'no_asistio' ? 'late' : 'today'}">${STATE_TEXT[c.appt_state]}</span></button>`).join('')}</div>`).join('')}</section>`;
+  return api(`/api/appointments?from=${from.toISOString()}&to=${to.toISOString()}`).catch(() => []);
 }
+function apptsCard(list) {
+  if (!list) return '';
+  return `<section class="card appts-today compact-list" id="team-appts">${cardTitle('calendar', 'var(--cita)', 'Citas de hoy', list.length ? `${list.length} en el equipo` : 'nadie tiene citas hoy')}
+    ${list.map((c) => `<button type="button" class="appt-chip" data-open="${c.id}"><span class="appt-time">${hourShort(c.appt_at)}</span>
+      <span class="appt-name">${esc(c.name)}</span>${c.seller ? `<span class="avatar small" title="${esc(c.seller)}">${esc(initials(c.seller))}</span>` : ''}${apptBadge(c.appt_state)}</button>`).join('')}</section>`;
+}
+const teamApptsToday = async () => apptsCard(await fetchTodayAppts());
 
 // Mi día: mis citas de hoy, por hora (solo en giros que se miden en citas).
 function myApptsToday() {
@@ -2176,14 +2178,25 @@ async function renderTeam() {
   // Avisos: contactos que llegaron de nuevo (se quedan con su asesor) y posibles duplicados por nombre.
   const notes = manages() ? await api('/api/notifications').catch(() => null) : null;
   const shown = notes ? notes.items.filter((n) => !n.seen_at || Date.now() - new Date(n.created_at) < 7 * 864e5).slice(0, 8) : [];
-  const notesCard = shown.length ? `<section class="card team-notes">${cardTitle('sparkles', 'var(--declinado)', `Avisos${notes.unseen ? ` · ${notes.unseen} sin ver` : ''}`, 'contactos repetidos: se quedan con quien ya los atendía')}
-    <ul class="notes-list">${shown.map((n) => `<li class="${n.seen_at ? '' : 'unseen'}"><span>${esc(n.text)}</span>
-      <span class="muted small">${timeAgo(n.created_at)}${n.lead_id ? ` · <button type="button" class="link" data-open="${n.lead_id}">Ver lead</button>` : ''}</span></li>`).join('')}</ul>
-    ${notes.unseen ? '<button type="button" class="ghost small" id="notes-seen">Marcar como vistos</button>' : ''}</section>` : '';
-  $('#view-team').innerHTML = `${obCard}${notesCard}${await teamApptsToday()}<div class="team">
+  const NOTE_ICON = { duplicado: 'chat', posible: 'target', cliente: 'check' };
+  const notesCard = shown.length ? `<section class="card team-notes compact-list" id="team-notes">${cardTitle('sparkles', 'var(--declinado)', 'Avisos', notes.unseen ? `${notes.unseen} sin ver · los repetidos se quedan con su asesor` : 'contactos repetidos')}
+    ${shown.map((n) => `<div class="note-line ${n.seen_at ? 'seen' : ''}"><span class="note-ico">${icon(NOTE_ICON[n.kind] || 'sparkles', 15)}</span>
+      <span class="note-text">${esc(n.text)}<small>${timeAgo(n.created_at)}</small></span>
+      ${n.lead_id ? `<button type="button" class="ghost small" data-open="${n.lead_id}">Ver</button>` : ''}</div>`).join('')}
+    ${notes.unseen ? '<button type="button" class="link small-link" id="notes-seen">Marcar todos como vistos</button>' : ''}</section>` : '';
+  const appts = await fetchTodayAppts();
+  // Vistazo rápido: lo que hay que atender hoy. Cada número lleva a lo suyo.
+  const vencidos = t.sellers.reduce((n, r) => n + r.vencidos + r.sin_primer_toque, 0);
+  const tile = (go, ico, title, value, sub, color) => `<button type="button" class="kpi-link" data-go="${go}">${textKpi(ico, title, String(value), sub, color)}</button>`;
+  const kpis = `<div class="kpis team-kpis" style="--cols:4">
+    ${appts ? tile('appts', 'calendar', 'Citas hoy', appts.length, appts.length ? (() => { const n = appts.filter((c) => c.appt_state === 'confirmada').length; return `${n} ${n === 1 ? 'confirmada' : 'confirmadas'}`; })() : 'sin citas', 'var(--cita)') : tile('today', 'calendar', 'Para hoy', t.sellers.reduce((n, r) => n + r.hoy, 0), 'pendientes del equipo', 'var(--f-contactados)')}
+    ${tile('table', 'phone', 'Vencidos', vencidos, vencidos ? 'pendientes o leads sin primer toque' : 'nadie va atrasado', vencidos ? 'var(--declinado)' : 'var(--cumple)')}
+    ${tile('assign', 'inbox', 'Sin asignar', t.unassigned, t.unassigned ? 'esperan vendedor' : 'todo asignado', t.unassigned ? 'var(--cotizando)' : 'var(--cumple)')}
+    ${tile('notes', 'sparkles', 'Avisos', notes?.unseen || 0, notes?.unseen ? 'contactos repetidos sin ver' : 'nada nuevo', notes?.unseen ? 'var(--declinado)' : 'var(--cumple)')}
+  </div>`;
+  const duo = notesCard || appts ? `<div class="team-duo">${apptsCard(appts)}${notesCard}</div>` : '';
+  $('#view-team').innerHTML = `${obCard}${kpis}${duo}<div class="team">
     <div class="today-summary">
-      ${t.unassigned ? (canAssign() ? `<button type="button" class="ghost small" id="team-assign">${t.unassigned} sin asignar · Asignar</button>`
-        : `<span class="alert-pill late">${t.unassigned} sin asignar (los reparte quien asigna leads)</span>`) : '<span class="alert-pill ok">Todo asignado</span>'}
       <span class="muted">Rojo: algo vencido, un lead sin primer toque después de ${t.first_touch_hours} h o un pedido tuyo con más de 24 h. Amarillo: cotizaciones frías o datos incompletos.</span>
       <span class="spacer"></span>
       <button type="button" class="ghost" id="weekly-report">Reporte de ventas</button>
@@ -2206,7 +2219,12 @@ async function renderTeam() {
     setView(b.dataset.obView);
   }));
   $('#notes-seen')?.addEventListener('click', async () => { await api('/api/notifications/seen', { method: 'POST' }); updateTeamBadge(); renderTeam(); });
-  $('#view-team').querySelectorAll('.team-notes [data-open], .appts-today [data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  view.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+    const go = b.dataset.go;
+    if (go === 'assign') return canAssign() ? setView('assign') : null;
+    const target = { appts: '#team-appts', notes: '#team-notes', table: '.team-table', today: '.team-table' }[go];
+    $(target, view)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }));
   $('#ob-hide')?.addEventListener('click', () => { try { localStorage.setItem('onboarding-hidden', '1'); } catch { /* sin almacenamiento */ } renderTeam(); });
   $('#weekly-report').addEventListener('click', () => openReport('ventas', '7'));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
