@@ -672,7 +672,7 @@ a.button-link.small { padding: 5px 10px; font-size: 12px; }
 
 .quick-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: -4px 0 10px; }
 .quick-dates button.on { background: var(--accent-soft); border-color: var(--accent); }
-.touch-form.flash { box-shadow: 0 0 0 3px var(--accent-soft); transition: box-shadow .3s; }
+.touch-form.flash, .quick-profile.flash { box-shadow: 0 0 0 3px var(--accent-soft); transition: box-shadow .3s; }
 .onboarding { margin-bottom: 14px; }
 .ob-list { list-style: none; padding: 0; margin: 8px 0 10px; display: grid; gap: 6px; }
 .ob-list li { display: flex; align-items: center; gap: 10px; }
@@ -776,3 +776,4 @@ button.outcome.credito_rechazado { background: linear-gradient(135deg, #d9304e, 
 .notes-list { list-style: none; margin: 6px 0 10px; padding: 0; display: grid; gap: 6px; }
 .notes-list li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); font-size: 13px; }
 .notes-list li.unseen { border-color: #f0a0b4; background: #fff5f8; }
+.small-note button.link { display: inline; font-size: inherit; font-weight: 600; color: var(--accent); padding: 0; margin: 0 0 0 4px; vertical-align: baseline; }

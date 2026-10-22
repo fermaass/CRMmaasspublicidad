@@ -767,6 +767,9 @@ function renderToday() {
 }
 
 // Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
+// La ficha sigue el orden de la llamada: primero se registra qué pasó; el perfil aparece hasta que el cliente contesta.
+const profileVisible = (l) => Boolean(l.contacted_at || l.appt_state || l.status !== 'nuevo'
+  || [...Object.keys(state.meta.quickProfile), ...(F.realEstate() ? Object.keys(F.RE_PROFILE) : [])].some((k) => l[k] != null && l[k] !== ''));
 // Perfil rápido en la ficha: tres preguntas, un toque cada una (otro toque en la misma respuesta la borra).
 function quickProfileStrip(l) {
   if (F.realEstate()) return reProfileStrip(l);
@@ -1805,7 +1808,8 @@ async function openLead(id) {
       <span class="muted">· se quita cuando el vendedor registre el toque</span></span>${can('admin', 'gerente', 'director') ? '<button type="button" class="ghost small" id="req-clear">Quitar</button>' : ''}</p>` : ''}
     ${can('admin', 'gerente', 'director') && l.assigned_to && !l.manager_request && !['declinado'].includes(l.status)
       ? `<button type="button" class="ghost small ask-followup" id="req-ask">${icon('sparkles', 14)} Pedir seguimiento a ${esc(l.assigned_name)}</button>` : ''}
-    ${quickProfileStrip(l)}
+    ${touchesPanel(l, touches)}
+    ${profileVisible(l) ? quickProfileStrip(l) : ''}
     ${apptNote(l)}
     ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
       ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
@@ -1813,7 +1817,6 @@ async function openLead(id) {
     ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
       ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
     ${milestones(l)}
-    ${touchesPanel(l, touches)}
     ${l.message ? `<p class="card message">${esc(l.message)}</p>` : ''}
 
     ${l.can_edit_origin ? `<form id="note-form" class="note-form"><textarea name="content" placeholder="Agregar nota (qué platicaron, acuerdos, siguiente paso)"></textarea>
@@ -1873,7 +1876,13 @@ async function openLead(id) {
 
   document.querySelectorAll('#drawer-body .outcome').forEach((b) => b.addEventListener('click', async () => {
     const ok = await registerTouch(l, $('#drawer-body input[name=touch-channel]:checked').value, b.dataset.outcome);
-    if (ok) openLead(l.id);
+    if (!ok) return;
+    await openLead(l.id);
+    // Contestó por primera vez: se abre el perfil para llenarlo mientras hablan.
+    const qp = $('#drawer-body .quick-profile');
+    if (qp && !l.contacted_at && !['sin_respuesta', 'rechazo', 'no_cumple', 'nutricion'].includes(b.dataset.outcome)) {
+      qp.scrollIntoView({ behavior: 'smooth', block: 'start' }); qp.classList.add('flash'); setTimeout(() => qp.classList.remove('flash'), 1600);
+    }
   }));
   $('#reactivate')?.addEventListener('click', async () => { await reactivate(l); openLead(l.id); });
   $('#take-lead')?.addEventListener('click', async () => {
