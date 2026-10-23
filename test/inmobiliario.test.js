@@ -160,3 +160,36 @@ test('agenda de citas: cada vendedor ve las suyas, el gerente las de todos, y el
   assert.equal(act.citas.length, 2); assert.equal(act.citas[0].state, 'agendada');
   s.close();
 });
+
+test('panel de la semana: números contra el periodo anterior, etapas, visitaron, probables, cerrados y descartados', async () => {
+  const db = openDb(':memory:');
+  const { s, url } = await listen(createApp({ db, config: { setupCode: 'PANL-1234', formApiKey: 'k' } }));
+  const call = async (method, path, body, cookie) => {
+    const r = await fetch(url + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json().catch(() => null), headers: r.headers };
+  };
+  const ck = (await call('POST', '/api/setup', { name: 'Fer', email: 'f@x.mx', password: 'clave12345', company: 'X', setup_code: 'PANL-1234', can_sell: '1', can_assign: '1' })).headers.get('set-cookie').split(';')[0];
+  await call('PATCH', '/api/company', { industry: 'bienes_raices' }, ck);
+  await call('POST', '/api/users', { name: 'Gus', email: 'g@x.mx', password: 'clave12345', role: 'director' }, ck);
+  await call('POST', '/api/users', { name: 'Ana', email: 'a@x.mx', password: 'clave12345', role: 'vendedor' }, ck);
+  const dir = (await call('POST', '/api/login', { email: 'g@x.mx', password: 'clave12345' })).headers.get('set-cookie').split(';')[0];
+  const ana = (await call('POST', '/api/login', { email: 'a@x.mx', password: 'clave12345' })).headers.get('set-cookie').split(';')[0];
+  const t = (id, outcome, x = {}) => call('POST', `/api/leads/${id}/touches`, { channel: 'llamada', outcome, ...x }, ck);
+  const lead = async (tel) => (await call('POST', '/webhooks/form?key=k', { nombre: 'Cliente', telefono: tel })).json.id;
+  const a = await lead('5590000001'); await t(a, 'conversacion'); await t(a, 'cita_agendada', { appt_at: new Date(Date.now() - 3600e3).toISOString() });
+  await t(a, 'asistio', { channel: 'visita' }); await t(a, 'cotizado', { quote_amount: '2000000' }); await t(a, 'aparto');
+  const b = await lead('5590000002'); await t(b, 'conversacion'); await t(b, 'cotizado', { quote_amount: '1500000' }); await t(b, 'vendido', { sale_amount: '1500000', sale_method: 'contado' });
+  const c = await lead('5590000003'); await t(c, 'conversacion'); await t(c, 'rechazo', { decline_reason: 'Precio' });
+  const q = `from=${encodeURIComponent(new Date(Date.now() - 864e5).toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 60e3).toISOString())}`;
+  assert.equal((await call('GET', `/api/panel?${q}`, null, ana)).status, 403, 'el vendedor no lo ve');
+  const p = (await call('GET', `/api/panel?${q}`, null, dir)).json;
+  assert.equal(p.now.nuevos, 3); assert.equal(p.now.visitaron, 1); assert.equal(p.now.apartados, 1);
+  assert.equal(p.now.vendidos, 1); assert.equal(p.now.vendido, 1500000); assert.equal(p.now.descartados, 1);
+  assert.deepEqual(p.visitaron.map((l) => l.id), [a]);
+  assert.deepEqual(p.probables.map((l) => l.id), [a]);
+  assert.deepEqual(p.cerrados.map((l) => l.id), [b]);
+  assert.deepEqual(p.descartados.map((l) => l.id), [c]);
+  assert.equal(p.rates.apartado.pct, null, 'con menos de 5 casos no se inventa una probabilidad');
+  assert.equal(p.stages.find((x) => x.key === 'apartado').n, 1);
+  s.close();
+});

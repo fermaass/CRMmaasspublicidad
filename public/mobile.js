@@ -7,11 +7,14 @@ const mobileOn = () => isSmallScreen() && pref.get('fullsite') !== '1';
 // Pestañas de la barra de abajo según lo que hace cada quien.
 function mobileTabs() {
   const tabs = [];
+  // El Director arranca en el panel de la semana; Administrador y Gerente lo tienen en lugar de "Números".
+  if (can('director')) tabs.push({ view: 'm-panel', label: 'Semana', ico: 'trend' });
   if (sells()) tabs.push({ view: 'today', label: 'Mi día', ico: 'phone' });
   if (canAssign()) tabs.push({ view: 'm-assign', label: 'Asignar', ico: 'inbox' });
   if (can('admin', 'gerente', 'director')) tabs.push({ view: 'm-team', label: 'Equipo', ico: 'users' });
   if (sells() || canAssign() || manages()) tabs.push({ action: 'new', label: 'Lead', ico: 'plus' });
-  tabs.push({ view: 'm-numbers', label: can('vendedor') ? 'Mi mes' : 'Números', ico: 'trend' });
+  if (can('admin', 'gerente')) tabs.push({ view: 'm-panel', label: 'Semana', ico: 'trend' });
+  else if (!can('director')) tabs.push({ view: 'm-numbers', label: can('vendedor') ? 'Mi mes' : 'Números', ico: 'trend' });
   return tabs;
 }
 const mobileHome = () => mobileTabs().find((t) => t.view)?.view || 'm-numbers';

@@ -121,7 +121,7 @@ const cardTitle = (ico, color, title, sub = '') => `<div class="card-title"><spa
 const ROLE_NAMES = { admin: 'Administrador', gerente: 'Gerente', director: 'Director', operador: 'Asignador', vendedor: 'Vendedor' };
 // Dirigen al equipo: corrigen cualquier lead, reasignan y piden seguimientos (igual que MANAGERS en el servidor).
 const manages = () => can('admin', 'gerente');
-const VIEW_TITLES = { 'm-assign': 'Asignar', 'm-team': 'Equipo', 'm-numbers': 'Números del mes', today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
+const VIEW_TITLES = { 'm-panel': 'La semana', 'm-assign': 'Asignar', 'm-team': 'Equipo', 'm-numbers': 'Números del mes', today: 'Mi día', board: 'Tablero', assign: 'Asignación de leads', team: 'Equipo hoy', seller: 'Ficha del vendedor', campaign: 'Ficha de campaña', stats: 'Resumen', users: 'Usuarios', settings: 'Configuración' };
 const shortDate = (d) => new Date(d).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 // Guardar preferencias del navegador (pestaña del Resumen, filtros abiertos) sin fallar si no hay almacenamiento.
 const pref = {
@@ -336,7 +336,7 @@ async function start() {
     }).catch(() => {});
   }
   // Cada rol arranca en lo suyo: vendedor en Mi día; Administrador, Gerente y Director en Equipo hoy; Asignador en Asignación.
-  const home = { vendedor: 'today', admin: 'team', gerente: 'team', director: 'team', operador: 'assign' };
+  const home = { vendedor: 'today', admin: 'team', gerente: 'team', director: 'stats', operador: 'assign' };
   // En el celular: solo las pantallas de la barra de abajo; en la computadora, las pantallas m- no existen.
   if (setupMobile()) {
     const ok = mobileTabs().some((t) => t.view === state.view);
@@ -524,6 +524,7 @@ async function refresh() {
   if (state.view === 'm-assign') return renderMAssign();
   if (state.view === 'm-team') return renderMTeam();
   if (state.view === 'm-numbers') return renderMNumbers();
+  if (state.view === 'm-panel') return renderPanel($('#view-m-panel'));
   if (state.view === 'users') return renderUsers();
   if (state.view === 'settings') return renderSettings();
   if (state.view === 'stats') return renderStats();
@@ -1167,6 +1168,10 @@ function delta(cur, old, text, { lowerIsBetter = false, points = false, neutral 
 }
 
 async function renderStats() {
+  // Pestaña Semana (Administrador, Gerente y Director): el panel de la junta, con su propio periodo.
+  const wantsPanel = can('admin', 'gerente', 'director') && (state.statsTab || pref.get('statsTab') || 'semana') === 'semana';
+  $('.toolbar').classList.toggle('hidden', wantsPanel);
+  if (wantsPanel) { state.statsTab = 'semana'; return renderPanel($('#view-stats'), true); }
   const prevQ = state.me.role === 'vendedor' ? null : prevPeriodQuery();
   const [s, prev] = await Promise.all([api(`/api/stats?${filterQuery()}`), prevQ ? api(`/api/stats?${prevQ.query}`) : null]);
   const n = (rows, key) => rows.find((r) => r.key === key)?.n || 0;
@@ -1184,10 +1189,13 @@ async function renderStats() {
   // El vendedor ve solo su Resumen de ventas; lo de marketing (inversión, costos) no le aplica.
   const seller = state.me.role === 'vendedor';
   // Vendedor: solo ventas. Administrador, Director y Asignador: ventas y marketing.
-  const tab = seller ? 'ventas' : state.statsTab || pref.get('statsTab') || 'ventas';
+  const panelOk = can('admin', 'gerente', 'director');
+  let tab = seller ? 'ventas' : state.statsTab || pref.get('statsTab') || (panelOk ? 'semana' : 'ventas');
+  if (tab === 'semana' && !panelOk) tab = 'ventas';
   state.statsTab = tab;
   const health = tab === 'marketing' ? await api('/api/campaign-health').catch(() => null) : null;
   const tabs = seller ? '' : `<div class="tabs" role="tablist">
+    ${panelOk ? `<button type="button" role="tab" data-tab="semana" class="${tab === 'semana' ? 'active' : ''}">Semana</button>` : ''}
     <button type="button" role="tab" data-tab="ventas" class="${tab === 'ventas' ? 'active' : ''}">Ventas</button>
     <button type="button" role="tab" data-tab="marketing" class="${tab === 'marketing' ? 'active' : ''}">Marketing</button></div>`;
 
@@ -1275,6 +1283,96 @@ async function renderStats() {
     state.statsTab = b.dataset.tab; pref.set('statsTab', b.dataset.tab); renderStats();
   }));
   animateIn($('#view-stats'));
+}
+
+// ---------- Panel de la semana (Resumen → Semana) ----------
+// Lo que el director revisa en la junta, en una sola pantalla: cuántos llegaron, dónde están, quién visitó, quién
+// está cerca de cerrar, qué se cerró y qué se perdió, y cada vendedor. Cada lead se abre con un clic.
+const PANEL_PERIODS = [['semana', 'Esta semana'], ['semana_pasada', 'Semana pasada'], ['mes', 'Este mes']];
+const CLOSED_STAGES = new Set(['vendido', 'nutricion', 'descartado', 'declinado_perfil', 'declinado_sin']);
+// Probabilidad de cierre de cada lead: el % histórico de los que, desde esa etapa, terminaron vendiendo.
+function closeChance(l, rates) {
+  const visited = Boolean(l.appt_done_at);
+  const key = l.apartado_at && l.status === 'cotizando' ? 'apartado' : l.status === 'cotizando' ? (visited ? 'cotizando_visita' : 'cotizando') : 'visita';
+  const order = { apartado: 0, cotizando_visita: 1, cotizando: 2, visita: 3 }[key];
+  return { key, order, pct: rates[key]?.pct ?? null };
+}
+async function renderPanel(el, withTabs = false, report = false) {
+  const key = state.panelPeriod || 'semana';
+  const range = periodRange(key);
+  const d = await api(`/api/panel?${rangeQuery(range)}`);
+  const body = panelHtml(d, key, report);
+  if (report) return body;
+  const tabs = withTabs ? `<div class="tabs" role="tablist"><button type="button" role="tab" data-tab="semana" class="active">Semana</button>
+    <button type="button" role="tab" data-tab="ventas">Ventas</button><button type="button" role="tab" data-tab="marketing">Marketing</button></div>` : '';
+  el.innerHTML = `<div class="dash panel">
+    <div class="stats-actions head-row">${tabs}<div class="seg-group panel-periods">${PANEL_PERIODS.map(([k, t]) => `<label class="seg"><input type="radio" name="panel-period" value="${k}" ${k === key ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
+      <span class="spacer"></span><button type="button" class="ghost small" id="panel-print">${icon('file', 14)} Descargar</button></div>
+    <p class="muted small-note panel-range">${rangeText(range)} · comparado con el periodo anterior del mismo largo</p>
+    ${body}</div>`;
+  el.querySelectorAll('[name=panel-period]').forEach((r) => r.addEventListener('change', () => { state.panelPeriod = r.value; renderPanel(el, withTabs); }));
+  el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { state.statsTab = b.dataset.tab; pref.set('statsTab', b.dataset.tab); renderStats(); }));
+  el.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openLead(b.dataset.open)));
+  $('#panel-print', el)?.addEventListener('click', async () => {
+    const w = window.open('', '_blank');
+    if (!w) { toast('Permite las ventanas emergentes para descargarlo', 'error'); return; }
+    writeReport(w, `Panel · ${PANEL_PERIODS.find(([k]) => k === key)[1]}`, rangeText(range), await renderPanel(el, false, true));
+  });
+  animateIn(el);
+}
+function panelHtml(d, key, report) {
+  const RE = F.realEstate(); const appt = F.appointments();
+  const vs = PANEL_PERIODS.find(([k]) => k === key)[0] === 'mes' ? 'vs el periodo anterior' : 'vs la semana anterior';
+  const tile = (ico, title, k, color, sub = '') => textKpi(ico, title, k === 'vendido' ? money(d.now[k]) : String(d.now[k]), sub, color, delta(d.now[k], d.prev[k], vs));
+  const tiles = [
+    tile('inbox', 'Nuevos', 'nuevos', 'var(--f-recibidos)'),
+    ...(appt ? [tile('calendar', 'Citas agendadas', 'citas', 'var(--cita)'), tile('userCheck', 'Visitaron', 'visitaron', 'var(--asistio)')]
+      : [tile('chat', 'Contestaron', 'contestaron', 'var(--f-contactados)'), tile('file', 'Cotizados', 'cotizados', 'var(--f-cotizados)')]),
+    ...(RE ? [tile('file', 'Apartados', 'apartados', 'var(--apartado)')] : []),
+    tile('check', 'Vendidos', 'vendidos', 'var(--f-cerrados)', d.now.vendido ? money(d.now.vendido) : ''),
+    tile('target', RE ? 'Descartados' : 'Declinados', 'descartados', 'var(--declinado)', RE && d.now.nutricion ? `${d.now.nutricion} más a nutrición` : ''),
+  ];
+  const n = (k) => d.stages.find((x) => x.key === k)?.n || 0;
+  const openStages = state.meta.stages.filter((k) => !CLOSED_STAGES.has(k)).map((k) => ({ key: k, n: n(k), label: label(k), color: `var(--${k})`, dark: DARK_TEXT.has(k) }));
+  const openTotal = openStages.reduce((t, x) => t + x.n, 0);
+  const who = (l) => (l.assigned_name ? `<span class="avatar small" title="${esc(l.assigned_name)}">${esc(initials(l.assigned_name))}</span>` : '');
+  const leadBtn = (l, extra) => (report ? `<div class="panel-line"><b>${esc(l.name || l.phone)}</b>${extra}</div>`
+    : `<button type="button" class="panel-line" data-open="${l.id}"><b>${esc(l.name || l.phone)}</b>${extra}${who(l)}</button>`);
+  const list = (items, render, empty) => {
+    if (!items.length) return `<p class="muted">${empty}</p>`;
+    const first = items.slice(0, 8).map(render).join('');
+    const rest = items.slice(8);
+    return rest.length ? `${first}<details class="panel-more"><summary>Ver ${rest.length} más</summary>${rest.map(render).join('')}</details>` : first;
+  };
+  const probables = d.probables.map((l) => ({ l, c: closeChance(l, d.rates) }))
+    .sort((a, b) => (b.c.pct ?? -1) - (a.c.pct ?? -1) || a.c.order - b.c.order || (b.l.quote_amount || 0) - (a.l.quote_amount || 0));
+  const chanceText = (c) => (c.pct != null ? `${c.pct}%` : { apartado: 'alta', cotizando_visita: 'media', cotizando: 'media-baja', visita: 'por cotizar' }[c.key]);
+  const tag = (t, cls = '') => `<span class="touch-badge ${cls}">${esc(t)}</span>`;
+  const rows = d.sellers.map((u) => {
+    const resp = d.respuestas.filter((x) => x.seller_id === u.id && x.first_touch_at).map((x) => respMinutes(x.assigned_at, x.first_touch_at));
+    const avg = resp.length ? resp.reduce((t, m) => t + m, 0) / resp.length : null;
+    return `<tr><td><b>${esc(u.name)}</b></td><td class="num">${u.asignados}</td>${appt ? `<td class="num">${u.citas}</td><td class="num">${u.visitaron}</td>` : ''}
+      ${RE ? `<td class="num">${u.apartados}</td>` : ''}<td class="num">${u.vendidos}</td><td class="num">${u.vendido ? money(u.vendido) : '—'}</td>
+      <td class="num">${avg == null ? '—' : `<span class="${avg > F.SLA_MINUTES ? 'resp-late' : 'resp-ok'}">${fmtMins(avg)}</span>`}</td></tr>`;
+  }).join('');
+  return `<div class="kpis panel-kpis" style="--cols:${tiles.length}">${tiles.join('')}</div>
+    <div class="card chart-card">${cardTitle('layers', 'var(--nuevo_perfil)', 'Dónde están hoy', `${openTotal} leads en proceso`)}
+      ${battery(openStages, openTotal, true)}${legend(openStages, openTotal)}</div>
+    <div class="team-duo">
+      <section class="card">${cardTitle('trend', 'var(--f-cerrados)', 'Más probables de cerrar', `${probables.length} en proceso avanzado`)}
+        ${list(probables, ({ l, c }) => leadBtn(l, `<span class="muted">${esc(label(stageOf(l)))}${l.tramite ? ` · ${esc(F.TRAMITE[l.tramite])}` : ''}</span>
+          <span class="num">${l.quote_amount ? money(l.quote_amount) : ''}</span>${tag(chanceText(c), c.order === 0 ? 'ok' : 'today')}`), 'Nadie en cotización o apartado.')}
+        <p class="muted small-note">Probabilidad: de los leads que llegaron a esa etapa y ya se resolvieron, cuántos se vendieron${d.rates.cotizando.pct == null ? '. Aún hay poco historial, así que se ordena por etapa' : ''}.</p></section>
+      ${appt ? `<section class="card">${cardTitle('userCheck', 'var(--asistio)', 'Ya visitaron', `${d.visitaron.length} en el periodo`)}
+        ${list(d.visitaron, (l) => leadBtn(l, `<span class="muted">${shortDate(l.appt_done_at)} · ${esc(label(stageOf(l)))}</span><span class="muted small">${esc(nextAction(l)?.label || '')}</span>`), 'Nadie visitó en este periodo.')}</section>` : ''}
+      <section class="card">${cardTitle('check', 'var(--vendido)', 'Cerrados', d.now.vendido ? money(d.now.vendido) : 'en el periodo')}
+        ${list(d.cerrados, (l) => leadBtn(l, `<span class="muted">${esc([l.unit, l.product_name].filter(Boolean).join(' · '))}</span><span class="num">${money(l.sale_amount)}</span>${l.sale_method ? tag(F.CREDIT_TYPES[l.sale_method], 'ok') : ''}`), 'Sin ventas en el periodo.')}</section>
+      <section class="card">${cardTitle('target', 'var(--declinado)', RE ? 'Descartados y en nutrición' : 'Declinados', 'en el periodo')}
+        ${list(d.descartados, (l) => leadBtn(l, `<span class="muted">${esc(l.decline_reason || 'sin motivo')}</span>${l.nurture_reason || l.decline_reason === state.meta.postponed ? tag(`Nutrición${l.recontact_at ? ` · ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}`, 'today') : ''}`), 'Ninguno en el periodo.')}</section>
+    </div>
+    <div class="card chart-card">${cardTitle('users', 'var(--f-contactados)', 'Cada vendedor', 'en el periodo')}
+      <div class="table-wrap"><table class="funnel-table"><thead><tr><th>Vendedor</th><th>Leads asignados</th>${appt ? '<th>Citas</th><th>Visitaron</th>' : ''}${RE ? '<th>Apartados</th>' : ''}
+        <th>Vendidos</th><th>Monto</th><th>Respuesta promedio</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="muted">Sin vendedores activos</td></tr>'}</tbody></table></div></div>`;
 }
 
 const AUDIENCES = [
@@ -3085,6 +3183,10 @@ function periodRange(key, fromStr, toStr) {
   const back = (days) => ({ from: new Date(y, m, d.getDate() + 1 - days), to: tomorrow });
   if (key === '7' || key === '30' || key === '90') return back(Number(key));
   if (key === 'mes') return { from: new Date(y, m, 1), to: tomorrow };
+  // Semana de lunes a domingo.
+  const monday = new Date(y, m, d.getDate() - ((d.getDay() + 6) % 7));
+  if (key === 'semana') return { from: monday, to: tomorrow };
+  if (key === 'semana_pasada') return { from: new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7), to: monday };
   if (key === 'mes_pasado') return { from: new Date(y, m - 1, 1), to: new Date(y, m, 1) };
   if (key === 'anio') return { from: new Date(y, 0, 1), to: tomorrow };
   if (key === 'custom') {

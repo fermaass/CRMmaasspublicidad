@@ -830,6 +830,51 @@ function createApp({ db, config }) {
     res.json({ ok: true });
   });
 
+  // Panel del director (Resumen → Semana): lo que se revisa en la junta, en una sola consulta.
+  // Números del periodo contra el anterior, dónde están hoy, quiénes visitaron, los más probables de cerrar (con su
+  // probabilidad sacada del historial real), cerrados, descartados y nutrición, y cada vendedor.
+  app.get('/api/panel', auth.requireRole(...MANAGERS, 'director'), (req, res) => {
+    const from = new Date(String(req.query.from || '')); const to = new Date(String(req.query.to || ''));
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) return res.status(400).json({ error: 'Periodo inválido' });
+    const F = from.toISOString(); const T = to.toISOString();
+    const P = new Date(from.getTime() - (to - from)).toISOString();
+    const count = (col, a, b, extra = '') => db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(sale_amount), 0) AS m FROM leads WHERE ${col} >= ? AND ${col} < ? ${extra}`).get(a, b);
+    const numbers = (a, b) => ({
+      nuevos: count('created_at', a, b).n, contestaron: count('contacted_at', a, b).n, citas: count('appt_set_at', a, b).n,
+      visitaron: count('appt_done_at', a, b).n, cotizados: count('quoted_at', a, b).n, apartados: count('apartado_at', a, b).n,
+      vendidos: count('won_at', a, b).n, vendido: count('won_at', a, b).m,
+      descartados: count('declined_at', a, b, `AND status = 'declinado' AND nurture_reason IS NULL AND COALESCE(decline_reason, '') != '${POSTPONED.replace(/'/g, "''")}'`).n,
+      nutricion: count('declined_at', a, b, `AND status = 'declinado' AND (nurture_reason IS NOT NULL OR decline_reason = '${POSTPONED.replace(/'/g, "''")}')`).n,
+    });
+    const leads = (where, ...params) => db.prepare(`${leadSelect} WHERE ${where}`).all(...params);
+    // Probabilidad de cierre por etapa: de los leads que llegaron ahí y ya se resolvieron (vendido o declinado), cuántos se vendieron.
+    const rate = (where) => {
+      const r = db.prepare(`SELECT COUNT(*) AS n, SUM(status = 'vendido') AS won FROM leads WHERE status IN ('vendido', 'declinado') AND ${where}`).get();
+      return r.n >= 5 ? { pct: Math.round((r.won / r.n) * 100), n: r.n } : { pct: null, n: r.n };
+    };
+    const rates = {
+      apartado: rate('apartado_at IS NOT NULL'), cotizando_visita: rate('quoted_at IS NOT NULL AND appt_done_at IS NOT NULL'),
+      cotizando: rate('quoted_at IS NOT NULL'), visita: rate('appt_done_at IS NOT NULL'),
+    };
+    const sellers = db.prepare(`SELECT u.id, u.name,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id AND assigned_at >= ? AND assigned_at < ?) AS asignados,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id AND appt_set_at >= ? AND appt_set_at < ?) AS citas,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id AND appt_done_at >= ? AND appt_done_at < ?) AS visitaron,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id AND apartado_at >= ? AND apartado_at < ?) AS apartados,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id AND won_at >= ? AND won_at < ?) AS vendidos,
+        (SELECT COALESCE(SUM(sale_amount), 0) FROM leads WHERE assigned_to = u.id AND won_at >= ? AND won_at < ?) AS vendido
+      FROM users u WHERE u.active = 1 AND (u.role = 'vendedor' OR u.can_sell = 1) ORDER BY u.name`).all(F, T, F, T, F, T, F, T, F, T, F, T);
+    res.json({
+      now: numbers(F, T), prev: numbers(P, F), rates, sellers,
+      stages: db.prepare(`SELECT ${stageSql()} AS key, COUNT(*) AS n FROM leads l GROUP BY 1`).all(),
+      visitaron: leads('l.appt_done_at >= ? AND l.appt_done_at < ? ORDER BY l.appt_done_at DESC', F, T),
+      probables: leads("l.status = 'cotizando' OR (l.status IN ('nuevo', 'nuevo_perfil') AND l.appt_state = 'asistio') ORDER BY l.updated_at DESC"),
+      cerrados: leads('l.won_at >= ? AND l.won_at < ? ORDER BY l.won_at DESC', F, T),
+      descartados: leads("l.status = 'declinado' AND l.declined_at >= ? AND l.declined_at < ? ORDER BY l.declined_at DESC", F, T),
+      respuestas: db.prepare(`SELECT assigned_to AS seller_id, assigned_at, first_touch_at FROM leads WHERE assigned_at >= ? AND assigned_at < ? AND assigned_to IS NOT NULL`).all(F, T),
+    });
+  });
+
   // Citas en un rango (agenda del día, Mi día, Equipo hoy y para no empalmar al agendar). El vendedor solo ve las suyas.
   app.get('/api/appointments', auth.requireUser, (req, res) => {
     const from = new Date(String(req.query.from || '')); const to = new Date(String(req.query.to || ''));
