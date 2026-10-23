@@ -69,6 +69,8 @@ function webhooksRouter(db) {
         utm_source: pick(body, 'utm_source'), utm_medium: pick(body, 'utm_medium'), utm_content: pick(body, 'utm_content', 'anuncio'),
       });
       autoAssign(db, result.id);
+      // Nadie lo tiene: se avisa a quienes asignan.
+      if (result.created && !db.prepare('SELECT assigned_to FROM leads WHERE id = ?').get(result.id).assigned_to) db.onUnassigned?.(result.id);
       const redirect = pick(body, 'redirect');
       if (redirect && /^https?:\/\//.test(redirect)) return res.redirect(303, redirect);
       res.status(result.created ? 201 : 200).json({ ok: true, ...result });

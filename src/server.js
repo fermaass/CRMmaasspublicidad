@@ -8,6 +8,7 @@ const {
 const auth = require('./auth');
 const { ingestLead, addEvent, resolveStatusProfile, now, campaignName, autoAssign, workload, suggestSeller, balanceUnassigned, releaseLeads } = require('./leads');
 const { webhooksRouter } = require('./webhooks');
+const { setupPush } = require('./push');
 const xlsx = require('./xlsx');
 const { offsiteConfig, uploadBackup } = require('./offsite');
 const STARTED_AT = new Date().toISOString();
@@ -190,6 +191,10 @@ function createApp({ db, config }) {
   app.use(express.json({ limit: '1mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
   app.use(express.urlencoded({ extended: false }));
 
+  // Notificaciones al celular: a quien le llega un lead (y, si llega sin vendedor, a quienes asignan).
+  const push = setupPush(db, config.pushSender ? { send: config.pushSender } : {});
+  db.onAssign = push.leadAssigned;
+  db.onUnassigned = push.leadUnassigned;
   app.use('/webhooks', webhooksRouter(db));
 
   app.use(auth.authMiddleware(db));
@@ -793,6 +798,7 @@ function createApp({ db, config }) {
     const prev = db.prepare('SELECT u.name FROM leads l JOIN users u ON u.id = l.assigned_to WHERE l.id = ?').get(id)?.name;
     db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(seller.id, ts, ts, id);
     addEvent(db, id, userId, 'asignacion', prev && prev !== seller.name ? `Cambió de asesor: ${prev} → ${seller.name}` : `Asignado a ${seller.name}`);
+    db.onAssign?.(id, seller.id, userId);
   }
 
   // Carga por vendedor y a quién le toca el siguiente lead.
@@ -885,6 +891,18 @@ function createApp({ db, config }) {
       FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
       WHERE l.appt_at >= ? AND l.appt_at < ? AND l.appt_state IS NOT NULL AND l.status != 'declinado' ${seller ? 'AND l.assigned_to = ?' : ''}
       ORDER BY l.appt_at`).all(from.toISOString(), to.toISOString(), ...(seller ? [seller] : [])));
+  });
+
+  // Notificaciones: la clave pública para suscribirse, alta y baja del celular o navegador, y una de prueba.
+  app.get('/api/push', auth.requireUser, (req, res) => res.json({ public_key: push.publicKey, devices: push.devices(req.user.id) }));
+  app.post('/api/push/subscribe', auth.requireUser, (req, res) => {
+    try { push.subscribe(req.user.id, req.body?.subscription); } catch (err) { return res.status(400).json({ error: err.message }); }
+    res.json({ ok: true, devices: push.devices(req.user.id) });
+  });
+  app.post('/api/push/unsubscribe', auth.requireUser, (req, res) => { push.unsubscribe(req.user.id, req.body?.endpoint); res.json({ ok: true }); });
+  app.post('/api/push/test', auth.requireUser, async (req, res) => {
+    const sent = await push.sendTo(req.user.id, { title: 'Notificaciones activadas', body: 'Así te avisaremos cuando te llegue un lead.', url: '/' });
+    res.json({ sent });
   });
 
   // Avisos para el gerente: contactos repetidos y posibles duplicados. Se marcan como vistos de una vez.

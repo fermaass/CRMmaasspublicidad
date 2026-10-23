@@ -897,3 +897,5 @@ button.panel-line:hover { background: var(--hover); filter: none; }
   .panel-kpis .value { font-size: 20px; }
   .panel-kpis .label { font-size: 10px; }
 }
+.push-bar { align-items: center; gap: 10px; }
+.push-bar .ico { flex: none; color: var(--accent); }

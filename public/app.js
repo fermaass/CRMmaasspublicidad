@@ -266,7 +266,14 @@ $('#login-form').addEventListener('submit', async (e) => {
   }
 });
 
-$('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); showLogin(); });
+$('#logout').addEventListener('click', async () => {
+  // Este celular deja de recibir los avisos de quien sale (por si lo usa alguien más).
+  try {
+    const sub = pushSupported() && await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
+    if (sub) await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+  } catch { /* no impide salir */ }
+  await api('/api/logout', { method: 'POST' }); showLogin();
+});
 
 // Link de invitación o de contraseña nueva: quien lo abre elige su contraseña y entra.
 async function showAccess(token) {
@@ -335,6 +342,10 @@ async function start() {
       showCarteraReminder(sys.cartera);
     }).catch(() => {});
   }
+  setupNotifications();
+  // Abrir la app desde una notificación: llega con ?lead=ID y se abre su ficha.
+  const fromPush = new URLSearchParams(location.search).get('lead');
+  if (fromPush) { history.replaceState(null, '', '/'); setTimeout(() => openLead(fromPush), 400); }
   // Cada rol arranca en lo suyo: vendedor en Mi día; Administrador, Gerente y Director en Equipo hoy; Asignador en Asignación.
   const home = { vendedor: 'today', admin: 'team', gerente: 'team', director: 'stats', operador: 'assign' };
   // En el celular: solo las pantallas de la barra de abajo; en la computadora, las pantallas m- no existen.
@@ -344,6 +355,55 @@ async function start() {
   }
   if (String(state.view || '').startsWith('m-')) state.view = null;
   setView(state.view || home[state.me.role] || 'board');
+}
+
+// ---------- Notificaciones al celular: solo cuando te llega un lead ----------
+// Las reciben quienes atienden leads (cuando se les asigna uno) y quienes asignan (cuando llega uno sin vendedor).
+// En iPhone solo funcionan con la app agregada a la pantalla de inicio. Se piden con un botón, nunca solas.
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function b64ToBytes(b64) {
+  const s = atob((b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+async function setupNotifications() {
+  $('#push-bar')?.remove();
+  if (!(sells() || canAssign())) return;
+  if (!pushSupported()) {
+    // iPhone en Safari (sin instalar): se explica cómo, una sola vez por semana.
+    if (isIOS() && !isStandalone()) pushBar('Para recibir un aviso cuando te llegue un lead, agrega la app a tu pantalla de inicio: botón Compartir → "Agregar a inicio". Luego ábrela desde ahí y activa las notificaciones.', null);
+    return;
+  }
+  let reg;
+  try { reg = await navigator.serviceWorker.register('/sw.js'); } catch { return; }
+  navigator.serviceWorker.addEventListener('message', (e) => { const u = e.data?.openUrl && new URL(e.data.openUrl); const id = u?.searchParams.get('lead'); if (id) openLead(id); });
+  const sub = await reg.pushManager.getSubscription();
+  // Ya activadas en este equipo: se confirma que sean de quien entró ahora (si alguien más usó este celular).
+  if (sub && Notification.permission === 'granted') { api('/api/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } }).catch(() => {}); return; }
+  if (Notification.permission === 'denied') return;
+  pushBar('Activa las notificaciones para que te llegue un aviso en cuanto te asignen un lead.', 'Activar');
+}
+function pushBar(text, action) {
+  let snoozed = 0;
+  try { snoozed = Number(localStorage.getItem('push-snooze')) || 0; } catch { /* sin almacenamiento */ }
+  if (snoozed > Date.now()) return;
+  $('.topbar').insertAdjacentHTML('afterend', `<div id="push-bar" class="cartera-reminder push-bar" role="status">${icon('sparkles', 16)}<span>${esc(text)}</span>
+    ${action ? `<button type="button" class="small" id="push-on">${action}</button>` : ''}<button type="button" class="ghost small" id="push-later">Más tarde</button></div>`);
+  $('#push-later').addEventListener('click', () => { try { localStorage.setItem('push-snooze', String(Date.now() + 7 * 864e5)); } catch { /* sin almacenamiento */ } $('#push-bar').remove(); });
+  $('#push-on')?.addEventListener('click', enablePush);
+}
+async function enablePush() {
+  try {
+    if (await Notification.requestPermission() !== 'granted') { toast('No se activaron: el celular no dio permiso. Se puede cambiar en los ajustes del navegador.', 'error'); $('#push-bar')?.remove(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const { public_key: key } = await api('/api/push');
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    await api('/api/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+    $('#push-bar')?.remove();
+    await api('/api/push/test', { method: 'POST' });
+    toast('Listo: te llegará un aviso cada vez que te asignen un lead', 'ok');
+  } catch (err) { toast(`No se pudieron activar: ${err.message}`, 'error'); }
 }
 
 // Recordatorio mensual: descargar la cartera en Excel. "Más tarde" lo pospone una semana en este navegador.

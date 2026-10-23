@@ -107,6 +107,7 @@ function ingestLead(db, data) {
     if (seller) {
       db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ? WHERE id = ?').run(seller.id, ts, id);
       addEvent(db, id, null, 'asignacion', `Asignado a ${seller.name} (ya era su cliente)`);
+      db.onAssign?.(id, seller.id, data.userId);
     }
     notify(db, id, 'cliente', `${repeatOf.name || lead.name || lead.phone} ya era cliente y volvió a escribir: oportunidad nueva${seller ? ` con ${seller.name}` : ''}.`);
   } else if (lead.name && lead.name.includes(' ')) {
@@ -150,6 +151,7 @@ function assignTo(db, leadId, seller, userId, how) {
   const ts = now();
   db.prepare('UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?').run(seller.id, ts, ts, leadId);
   addEvent(db, leadId, userId, 'asignacion', `${how} a ${seller.name}`);
+  db.onAssign?.(leadId, seller.id, userId); // notificación al celular de quien lo recibe
 }
 
 // Asignación automática al vendedor con menos carga. Está apagada salvo que se encienda en Asignación.
