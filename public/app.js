@@ -796,6 +796,16 @@ function myApptsToday() {
 }
 
 // Registra un toque (desde Mi día o la ficha) pidiendo lo que haga falta según el resultado.
+// En la ficha: cuánto tardó (o lleva) el asesor en dar el primer toque desde que se le asignó, en horario de atención.
+function responseNote(l) {
+  if (!l.assigned_at || !l.assigned_to || (!l.first_touch_at && ['vendido', 'declinado'].includes(l.status))) return '';
+  const m = respMinutes(l.assigned_at, l.first_touch_at);
+  const late = m > F.SLA_MINUTES;
+  return l.first_touch_at
+    ? ` · <span class="${late ? 'resp-late' : 'resp-ok'}">respondió en ${fmtMins(m)}</span>`
+    : ` · <span class="resp-late">lleva ${fmtMins(m)} sin primer toque</span>`;
+}
+
 // La ficha sigue el orden de la llamada: primero se registra qué pasó; el perfil aparece hasta que el cliente contesta.
 const profileVisible = (l) => Boolean(l.contacted_at || l.appt_state || l.status !== 'nuevo'
   || [...Object.keys(state.meta.quickProfile), ...(F.realEstate() ? Object.keys(F.RE_PROFILE) : [])].some((k) => l[k] != null && l[k] !== ''));
@@ -1877,7 +1887,7 @@ async function openLead(id) {
     ${apptNote(l)}
     ${l.next_step_at ? `<p class="agreed-note">${icon('calendar', 15)} <span><b>Próximo paso acordado:</b> ${esc(l.next_step || 'dar seguimiento')} ·
       ${new Date(l.next_step_at).toLocaleString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></p>` : ''}
-    <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${l.can_reassign ? ' <button type="button" class="link" id="owner-change">Cambiar</button>' : ''}${adLine ? ` · ${esc(adLine)}` : ''}</p>
+    <p class="muted small-note">Recibido ${fmtDate(l.created_at)} por ${esc(label(l.source))}${l.assigned_name ? ` · atiende ${esc(l.assigned_name)}` : ' · sin asignar'}${l.can_reassign ? ' <button type="button" class="link" id="owner-change">Cambiar</button>' : ''}${responseNote(l)}${adLine ? ` · ${esc(adLine)}` : ''}</p>
     ${l.status === 'declinado' ? `<p class="decline-note">${esc(l.decline_reason || 'Declinado')}${l.recontact_at ? ` · volver a contactar el ${shortDate(`${l.recontact_at}T12:00:00`)}` : ''}
       ${l.can_edit ? '<button type="button" class="ghost small" id="reactivate">Reactivar</button>' : ''}</p>` : ''}
     ${milestones(l)}
@@ -2359,6 +2369,40 @@ const rKpi = (label, value) => `<div class="k">${label}<b>${value}</b></div>`;
 const rDay = (iso) => new Date(iso).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
 
 // Ventas: lo que pasó en el periodo por fecha de cada hecho (venta el día que se cerró, cotización el día que se envió).
+// Tiempo de respuesta y cumplimiento de seguimiento. La respuesta se cuenta en horario de atención (un lead asignado
+// de noche no castiga al asesor) desde que se le asignó hasta su primer toque. Un seguimiento es "a tiempo" si se hizo
+// el día que tocaba o antes.
+const fmtMins = (m) => (m == null ? '—' : m < 60 ? `${Math.round(m)} min` : `${Math.floor(m / 60)} h${Math.round(m % 60) ? ` ${Math.round(m % 60)} min` : ''}`);
+const respMinutes = (assignedAt, firstTouchAt) => (assignedAt ? F.businessMinutes(assignedAt, new Date(firstTouchAt || Date.now()).getTime()) : null);
+function responseStats(a, sellerId) {
+  const resp = a.respuestas.filter((x) => x.seller_id === sellerId);
+  const done = resp.filter((x) => x.first_touch_at).map((x) => respMinutes(x.assigned_at, x.first_touch_at));
+  const fol = a.seguimientos.filter((x) => x.seller_id === sellerId).map((x) => F.dayDiff(x.due_at, new Date(x.created_at)));
+  const late = fol.filter((d) => d < 0);
+  return {
+    asignados: resp.length, sinTocar: resp.length - done.length,
+    promedio: done.length ? done.reduce((t, m) => t + m, 0) / done.length : null,
+    enMeta: done.length ? Math.round((done.filter((m) => m <= F.SLA_MINUTES).length / done.length) * 100) : null,
+    seguimientos: fol.length, aTiempo: fol.length ? Math.round(((fol.length - late.length) / fol.length) * 100) : null,
+    tarde: late.length ? -late.reduce((t, d) => t + d, 0) / late.length : null,
+  };
+}
+const pctText = (v) => (v == null ? '—' : `${v}%`);
+function responseSection(a, seller) {
+  const rows = a.sellers.map((r) => ({ r, x: responseStats(a, r.id) }));
+  const slow = a.respuestas.map((x) => ({ ...x, m: respMinutes(x.assigned_at, x.first_touch_at) })).sort((p, q) => q.m - p.m).slice(0, 30);
+  return `<h2>Respuesta y seguimiento</h2>
+    <p class="muted">Respuesta: de que se le asigna el lead a su primer toque, contando solo el horario de atención. Meta: ${F.SLA_MINUTES} minutos.
+      Seguimiento a tiempo: el toque se hizo el día que tocaba (según la cadencia o lo acordado con el cliente) o antes; se mide desde que existe esta medición.</p>
+    ${rTable([...(seller ? [] : ['Vendedor']), 'Leads asignados', 'Respuesta promedio', `Respondidos en ${F.SLA_MINUTES} min`, 'Aún sin primer toque', 'Seguimientos', 'A tiempo', 'Tarde (promedio)', 'Vencidos hoy'],
+      rows.map(({ r, x }) => `<tr>${seller ? '' : rCell(esc(r.name))}${rCell(x.asignados)}${rCell(fmtMins(x.promedio))}${rCell(pctText(x.enMeta))}${rCell(x.sinTocar)}
+        ${rCell(x.seguimientos)}${rCell(pctText(x.aTiempo))}${rCell(x.tarde == null ? '—' : `${x.tarde.toFixed(1)} días`)}${rCell(r.vencidos_hoy ?? 0)}</tr>`))}
+    <h3>Respuesta por lead</h3>${rTable(['Lead', ...(seller ? [] : ['Vendedor']), 'Asignado', 'Primer toque', 'Tiempo de respuesta'],
+      slow.map((x) => `<tr>${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(`${rDay(x.assigned_at)} ${hhmm(x.assigned_at)}`)}
+        ${rCell(x.first_touch_at ? `${rDay(x.first_touch_at)} ${hhmm(x.first_touch_at)}` : 'sin tocar aún')}${rCell(`${fmtMins(x.m)}${x.first_touch_at ? '' : ' y contando'}`)}</tr>`), 'Sin leads asignados en el periodo')}
+    <p class="muted small-note">Del más lento al más rápido (máximo 30).</p>`;
+}
+
 async function salesReport(range, kind) {
   const seller = kind === 'vendedor';
   const [a, p, st] = await Promise.all([api(`/api/activity?${rangeQuery(range)}`), api(`/api/activity?${rangeQuery(prevRange(range))}`), api(`/api/stats?${rangeQuery(range)}`)]);
@@ -2376,8 +2420,9 @@ async function salesReport(range, kind) {
       ${rKpi('Declinados', `${tot(a, 'declinados')}`)}
     </div>
     <p class="muted">Comparado con el periodo anterior del mismo largo. Cada venta cuenta el día que se cerró y cada cotización el día que se envió, sin importar cuándo llegó el lead.</p>
-    ${seller ? '' : `<h2>Por vendedor</h2>${rTable(['Vendedor', 'Leads asignados', 'Primer toque', 'Toques', 'Cotizaciones', 'Cotizado', 'Ventas', 'Vendido', ...(renewals() ? ['Renovado'] : []), 'Declinados'],
-      a.sellers.map((r) => `<tr>${rCell(esc(r.name))}${rCell(r.asignados)}${rCell(hours(r.horas_primer_toque))}${rCell(r.toques)}${rCell(r.cotizaciones)}${rCell(money(r.cotizado))}${rCell(r.ventas)}${rCell(money(r.vendido))}${renewals() ? rCell(money(r.renovado)) : ''}${rCell(r.declinados)}</tr>`))}`}
+    ${responseSection(a, seller)}
+    ${seller ? '' : `<h2>Por vendedor</h2>${rTable(['Vendedor', 'Leads asignados', 'Toques', 'Cotizaciones', 'Cotizado', 'Ventas', 'Vendido', ...(renewals() ? ['Renovado'] : []), 'Declinados'],
+      a.sellers.map((r) => `<tr>${rCell(esc(r.name))}${rCell(r.asignados)}${rCell(r.toques)}${rCell(r.cotizaciones)}${rCell(money(r.cotizado))}${rCell(r.ventas)}${rCell(money(r.vendido))}${renewals() ? rCell(money(r.renovado)) : ''}${rCell(r.declinados)}</tr>`))}`}
     ${F.appointments() && a.citas ? `<h2>Citas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Cómo va', 'Visitas', 'No vino', 'Reprogramó'],
       a.citas.map((x) => `<tr>${rCell(`${rDay(x.at)} ${hhmm(x.at)}`)}${rCell(esc(x.name))}${seller ? '' : rCell(esc(x.seller || '—'))}${rCell(STATE_TEXT[x.state] || '—')}${rCell(x.visitas || 0)}${rCell(x.no_vino || 0)}${rCell(x.reprogramo || 0)}</tr>`), 'Sin citas en el periodo')}` : ''}
     <h2>Ventas cerradas</h2>${rTable(['Fecha', 'Cliente', ...(seller ? [] : ['Vendedor']), 'Producto', 'Cantidad', 'Monto'],
@@ -2433,8 +2478,8 @@ async function assignReport(range) {
     </div>
     <p class="muted">Comparado con el periodo anterior del mismo largo.</p>
     <h2>De dónde llegaron</h2>${rTable(['Campaña o canal', 'Leads'], r.por_origen.map((x) => `<tr>${rCell(esc(x.key))}${rCell(x.n)}</tr>`))}
-    <h2>Cómo se repartieron</h2>${rTable(['Vendedor', 'Leads asignados', 'Primer toque (promedio)'],
-      a.sellers.map((x) => `<tr>${rCell(esc(x.name))}${rCell(x.asignados)}${rCell(hours(x.horas_primer_toque))}</tr>`))}`;
+    <h2>Cómo se repartieron</h2>${rTable(['Vendedor', 'Leads asignados', 'Respuesta promedio (horario de atención)', `Respondidos en ${F.SLA_MINUTES} min`],
+      a.sellers.map((x) => { const st = responseStats(a, x.id); return `<tr>${rCell(esc(x.name))}${rCell(x.asignados)}${rCell(fmtMins(st.promedio))}${rCell(pctText(st.enMeta))}</tr>`; }))}`;
   return { title: 'Reporte de asignación', body };
 }
 

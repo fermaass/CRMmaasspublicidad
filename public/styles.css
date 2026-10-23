@@ -866,3 +866,5 @@ button.link.small-link { font-size: 12px; font-weight: 600; color: var(--accent)
 .stats-actions button, .stats-actions .button-link, #assign-report { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .stats-actions .ico, #assign-report .ico { margin: 0; }
 .conv.nowrap { white-space: nowrap; }
+.resp-ok { color: var(--cumple); font-weight: 600; }
+.resp-late { color: #c21e56; font-weight: 600; }

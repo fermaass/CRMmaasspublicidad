@@ -1338,8 +1338,10 @@ function createApp({ db, config }) {
     }
 
     const ts = now();
-    db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(lead.id, n, req.user.id, channel, outcome, ts, requestId);
+    // Cuándo tocaba este toque, con el lead como estaba antes de registrarlo.
+    const dueAt = FOLLOWUP.nextAction(lead)?.due?.toISOString() || null;
+    db.prepare('INSERT INTO lead_touches (lead_id, n, user_id, channel, outcome, created_at, request_id, due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(lead.id, n, req.user.id, channel, outcome, ts, requestId, dueAt);
     db.prepare('UPDATE leads SET touch_count = ?, silent_streak = ?, last_touch_at = ?, first_touch_at = COALESCE(first_touch_at, ?), updated_at = ? WHERE id = ?')
       .run(n, streak, ts, ts, ts, lead.id);
     addEvent(db, lead.id, req.user.id, 'toque', `Toque ${n} por ${LABELS[channel]}: ${outcomeLabels()[outcome]}`);
@@ -1680,6 +1682,16 @@ function createApp({ db, config }) {
       WHERE t.outcome = 'renovo' AND t.created_at >= ? AND t.created_at < ? AND t.user_id ${inIds} ORDER BY t.created_at`).all(F, T, ...ids);
     out.motivos = db.prepare(`SELECT COALESCE(decline_reason, 'Sin motivo') AS key, COUNT(*) AS n FROM leads
       WHERE status = 'declinado' AND declined_at >= ? AND declined_at < ? AND assigned_to ${inIds} GROUP BY 1 ORDER BY n DESC`).all(F, T, ...ids);
+    // Respuesta: de cuando se le asignó cada lead a su primer toque (el navegador la cuenta en horario de atención).
+    out.respuestas = db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, l.assigned_to AS seller_id, u.name AS seller,
+        l.assigned_at, l.first_touch_at FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+      WHERE l.assigned_to ${inIds} AND l.assigned_at >= ? AND l.assigned_at < ? ORDER BY l.assigned_at`).all(...ids, F, T);
+    // Seguimiento: cada toque del periodo con la fecha en que tocaba (se guarda desde que existe esta medición).
+    out.seguimientos = db.prepare(`SELECT user_id AS seller_id, created_at, due_at FROM lead_touches
+      WHERE user_id ${inIds} AND created_at >= ? AND created_at < ? AND due_at IS NOT NULL`).all(...ids, F, T);
+    // Vencidos hoy de cada quien (lo que ya debió hacer y no ha hecho).
+    const open = db.prepare(`SELECT * FROM leads WHERE assigned_to ${inIds} AND status != 'vendido'`).all(...ids);
+    for (const r of rows) r.vencidos_hoy = open.filter((l) => l.assigned_to === r.id).filter((l) => { const a = FOLLOWUP.nextAction(l); return a && a.kind !== 'recontacto' && FOLLOWUP.dayDiff(a.due) < 0; }).length;
     // Citas del periodo (por la fecha de la cita) con su resultado.
     out.citas = db.prepare(`SELECT l.id, COALESCE(l.name, l.phone, l.email) AS name, u.name AS seller, l.appt_at AS at, l.appt_state AS state,
         l.appt_visits AS visitas, l.appt_noshows AS no_vino, l.appt_reschedules AS reprogramo FROM leads l LEFT JOIN users u ON u.id = l.assigned_to

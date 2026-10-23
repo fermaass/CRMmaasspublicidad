@@ -298,6 +298,8 @@ function openDb(dbPath) {
   if (!catCols2.includes('duration_months')) db.exec('ALTER TABLE catalog_items ADD COLUMN duration_months INTEGER');
   if (!db.prepare('PRAGMA table_info(leads)').all().some((c) => c.name === 'quantity')) db.exec('ALTER TABLE leads ADD COLUMN quantity REAL');
   if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'amount')) db.exec('ALTER TABLE lead_touches ADD COLUMN amount REAL');
+  // Cuándo tocaba cada toque (según la cadencia o lo acordado): para medir si el seguimiento se hizo a tiempo.
+  if (!db.prepare('PRAGMA table_info(lead_touches)').all().some((c) => c.name === 'due_at')) db.exec('ALTER TABLE lead_touches ADD COLUMN due_at TEXT');
 
   // Avisos para el gerente: contactos repetidos (se quedan con quien ya los atiende) y posibles duplicados por nombre.
   db.exec(`CREATE TABLE IF NOT EXISTS notifications (
